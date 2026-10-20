@@ -1,0 +1,50 @@
+{% extends "base.html" %}
+{% from "_macros.html" import sev, days, scanstatus %}
+{% block title %}Certificados{% endblock %}
+{% block content %}
+<h1>Certificados <small>{{ rows|length }}</small></h1>
+
+<form class="filters" method="get">
+  <input type="search" name="q" value="{{ q }}" placeholder="CN ou emissor">
+  <select name="dias">
+    <option value="">Qualquer prazo</option>
+    {% for v, l in [('-1','Expirados'),('7','≤ 7 dias'),('20','≤ 20 dias'),('30','≤ 30 dias'),('90','≤ 90 dias')] %}
+    <option value="{{ v }}" {{ 'selected' if dias == v }}>{{ l }}</option>
+    {% endfor %}
+  </select>
+  <select name="sev">
+    <option value="">Qualquer severidade</option>
+    {% for s in SEVERITIES|reverse %}<option value="{{ s }}" {{ 'selected' if sev == s }}>≥ {{ s }}</option>{% endfor %}
+  </select>
+  <select name="tipo">
+    <option value="">Todos os tipos</option>
+    {% for v, l in [('host','Host'),('wildcard','Wildcard'),('ip','IP'),('other','Outro (CA, utilizador...)')] %}
+    <option value="{{ v }}" {{ 'selected' if tipo == v }}>{{ l }}</option>
+    {% endfor %}
+  </select>
+  <button>Filtrar</button>
+  {% if q or dias or sev or tipo %}<a href="/certificados">limpar</a>{% endif %}
+</form>
+
+<table>
+  <thead>
+    <tr><th>Certificado</th><th>Tipo</th><th>Emissor (CMDB)</th><th>ValidTo CMDB</th><th>Live</th><th>Validade live</th><th>Prazo efetivo</th><th>Findings</th></tr>
+  </thead>
+  <tbody>
+  {% for r in rows %}
+    <tr>
+      <td><a href="/certificados/detalhe?cn={{ r.cn|urlencode }}">{{ r.common_name }}</a>{% if r.registos > 1 %} <span class="muted">({{ r.registos }} registos)</span>{% endif %}</td>
+      <td>{{ r.kind }}</td>
+      <td>{{ r.issuers|join(', ') or '—' }}</td>
+      <td>{{ r.cmdb_valid_to|dt }}</td>
+      <td>{{ scanstatus(r.live_status) }}</td>
+      <td>{{ r.live_not_after|dt }}{% if r.live_issuer and r.live_issuer not in r.issuers %} <span class="muted" title="Emissor servido">· {{ r.live_issuer }}</span>{% endif %}</td>
+      <td>{{ days(r.dias) }} <span class="muted">{{ r.fonte_data }}</span></td>
+      <td>{% if r.findings %}{{ sev(r.max_sev) }} {{ r.findings }}{% else %}<span class="muted">—</span>{% endif %}</td>
+    </tr>
+  {% else %}
+    <tr><td colspan="8" class="muted">Sem resultados.</td></tr>
+  {% endfor %}
+  </tbody>
+</table>
+{% endblock %}

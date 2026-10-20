@@ -1,0 +1,92 @@
+"""Ligação à base de dados, sessões e locks entre processos."""
+from __future__ import annotations
+
+from contextlib import contextmanager
+from datetime import datetime, timezone
+from functools import lru_cache
+from typing import Iterator
+
+from sqlalchemy import create_engine, text
+from sqlalchemy.engine import Engine
+from sqlalchemy.orm import DeclarativeBase, Session, sessionmaker
+
+from .config import get_settings
+
+
+class Base(DeclarativeBase):
+    pass
+
+
+class JobBusy(RuntimeError):
+    """Já existe um job em execução noutro processo."""
+
+
+def utcnow() -> datetime:
+    return datetime.now(timezone.utc)
+
+
+def as_utc(dt: datetime | None) -> datetime | None:
+    """Garante datetime com timezone UTC (SQLite devolve datetimes naive)."""
+    if dt is None:
+        return None
+    return dt.replace(tzinfo=timezone.utc) if dt.tzinfo is None else dt.astimezone(timezone.utc)
+
+
+@lru_cache(maxsize=1)
+def get_engine() -> Engine:
+    url = get_settings().database_url
+    kwargs = {"pool_pre_ping": True, "future": True}
+    if url.startswith("sqlite"):
+        kwargs["connect_args"] = {"check_same_thread": False}
+    return create_engine(url, **kwargs)
+
+
+@lru_cache(maxsize=1)
+def get_sessionmaker() -> sessionmaker[Session]:
+    return sessionmaker(bind=get_engine(), expire_on_commit=False)
+
+
+@contextmanager
+def session_scope() -> Iterator[Session]:
+    session = get_sessionmaker()()
+    try:
+        yield session
+        session.commit()
+    except Exception:
+        session.rollback()
+        raise
+    finally:
+        session.close()
+
+
+# Chaves de advisory lock (PostgreSQL)
+LOCK_INIT_DB = 7_100_001
+LOCK_PIPELINE = 7_100_002
+
+
+@contextmanager
+def advisory_lock(key: int, wait: bool = False) -> Iterator[None]:
+    """Lock entre processos. Usa uma ligação dedicada durante todo o bloco."""
+    engine = get_engine()
+    if engine.dialect.name != "postgresql":
+        yield
+        return
+    with engine.connect() as conn:
+        if wait:
+            conn.execute(text("SELECT pg_advisory_lock(:k)"), {"k": key})
+        else:
+            got = conn.execute(text("SELECT pg_try_advisory_lock(:k)"), {"k": key}).scalar()
+            if not got:
+                raise JobBusy("Já existe um job em execução")
+        try:
+            yield
+        finally:
+            conn.execute(text("SELECT pg_advisory_unlock(:k)"), {"k": key})
+            conn.commit()
+
+
+def init_db() -> None:
+    from . import models  # noqa: F401  (regista as tabelas)
+
+    with advisory_lock(LOCK_INIT_DB, wait=True):
+        Base.metadata.create_all(get_engine())

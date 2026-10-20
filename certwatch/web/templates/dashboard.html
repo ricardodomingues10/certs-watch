@@ -1,0 +1,64 @@
+{% extends "base.html" %}
+{% from "_macros.html" import sev, days, scanstatus %}
+{% block title %}Painel{% endblock %}
+{% block content %}
+<h1>Painel</h1>
+
+<section class="tiles">
+  <a class="tile" href="/certificados"><b>{{ total }}</b><span>certificados (CN distintos na CMDB)</span></a>
+  <a class="tile" href="/endpoints"><b>{{ live_ok }}</b><span>verificados live com sucesso de {{ n_endpoints }} endpoints</span></a>
+  <a class="tile t-exp" href="/certificados?dias=-1"><b>{{ buckets['expirados'] }}</b><span>expirados</span></a>
+  <a class="tile t-crit" href="/certificados?dias=7"><b>{{ buckets['7'] }}</b><span>expiram em ≤ 7 dias</span></a>
+  <a class="tile t-high" href="/certificados?dias=20"><b>{{ buckets['20'] }}</b><span>expiram em 8–20 dias</span></a>
+  <a class="tile t-med" href="/certificados?dias=90"><b>{{ buckets['30'] + buckets['90'] }}</b><span>expiram em 21–90 dias</span></a>
+</section>
+
+<div class="cols">
+  <section class="card">
+    <h2>Findings abertos por severidade</h2>
+    <table class="compact">
+      {% for s in SEVERITIES|reverse %}
+      <tr><td>{{ sev(s) }}</td><td class="num"><a href="/findings?sev={{ s }}">{{ sev_counts.get(s, 0) }}</a></td></tr>
+      {% endfor %}
+    </table>
+    <h2>Por tipo</h2>
+    <table class="compact">
+      {% for t, n in type_counts %}
+      <tr><td><a href="/findings?tipo={{ t }}">{{ FINDING_TYPES.get(t, t) }}</a></td><td class="num">{{ n }}</td></tr>
+      {% else %}
+      <tr><td class="muted">Sem findings abertos.</td></tr>
+      {% endfor %}
+    </table>
+  </section>
+
+  <section class="card wide">
+    <h2>Atenção imediata <small>(expirados nos últimos 30 dias ou a ≤ 20 dias)</small></h2>
+    <table>
+      <thead><tr><th>Certificado</th><th>Emissor</th><th>Prazo</th><th>Fonte</th><th>Live</th><th>Pior finding</th></tr></thead>
+      <tbody>
+      {% for r in urgent %}
+        <tr>
+          <td><a href="/certificados/detalhe?cn={{ r.cn|urlencode }}">{{ r.common_name }}</a></td>
+          <td>{{ r.live_issuer or r.issuers|join(', ') }}</td>
+          <td>{{ days(r.dias) }}</td>
+          <td>{{ r.fonte_data }}</td>
+          <td>{{ scanstatus(r.live_status) }}</td>
+          <td>{{ sev(r.max_sev) }}</td>
+        </tr>
+      {% else %}
+        <tr><td colspan="6" class="muted">Nada urgente.</td></tr>
+      {% endfor %}
+      </tbody>
+    </table>
+
+    <h2>Últimos jobs</h2>
+    <table class="compact">
+      {% for j in last_jobs %}
+      <tr><td>#{{ j.id }} {{ j.job }}</td><td>{{ j.requested_by }}</td><td><span class="st st-{{ 'ok' if j.status == 'ok' else ('err' if j.status == 'error' else 'run') }}">{{ j.status }}</span></td><td>{{ j.finished_at|dtt if j.finished_at else j.requested_at|dtt }}</td></tr>
+      {% else %}
+      <tr><td class="muted">Ainda não correu nenhum job. <a href="/jobs">Executar o pipeline</a>.</td></tr>
+      {% endfor %}
+    </table>
+  </section>
+</div>
+{% endblock %}

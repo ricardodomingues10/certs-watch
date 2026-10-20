@@ -1,0 +1,76 @@
+{% extends "base.html" %}
+{% from "_macros.html" import sev, scanstatus, next_field %}
+{% block title %}{{ cn }}{% endblock %}
+{% block content %}
+<p class="crumb"><a href="/certificados">Certificados</a> /</p>
+<h1 class="mono">{{ cn }}</h1>
+
+<section class="card">
+  <h2>Registos na CMDB <small>(só CN, ValidTo e emissor são usados)</small></h2>
+  <table>
+    <thead><tr><th>UCMDB ID</th><th>CommonName</th><th>Issuer / IssuerName</th><th>ValidTo</th><th>Ativo</th><th>Visto pela última vez</th></tr></thead>
+    <tbody>
+    {% for r in recs %}
+      <tr>
+        <td class="mono small">{{ r.ucmdb_id }}</td>
+        <td>{{ r.common_name }}</td>
+        <td>{{ r.issuer or '—' }}{% if r.issuer_name and r.issuer_name != r.issuer %} / {{ r.issuer_name }}{% endif %}</td>
+        <td>{{ r.valid_to|dt }}</td>
+        <td>{{ 'sim' if r.active else 'não' }}</td>
+        <td>{{ r.last_seen|dtt }}</td>
+      </tr>
+    {% else %}
+      <tr><td colspan="6" class="muted">Sem registos na CMDB (endpoint manual).</td></tr>
+    {% endfor %}
+    </tbody>
+  </table>
+</section>
+
+{% for e in eps %}
+<section class="card">
+  <h2>Endpoint <span class="mono">{{ e.ep.host }}:{{ e.ep.port }}</span> {{ scanstatus(e.scan.status if e.scan else None) }}
+    {% if not e.ep.enabled %}<span class="st st-off">desativado</span>{% endif %}
+    <small>origem: {{ e.ep.source }}</small></h2>
+  {% if e.scan %}
+    <p class="muted">Última verificação: {{ e.scan.scanned_at|dtt }} · {{ e.scan.tls_version or '—' }} · {{ e.scan.cipher or '—' }} · {{ e.scan.duration_ms|round|int }} ms</p>
+    {% if e.scan.error %}<p class="warn">{{ e.scan.error }}</p>{% endif %}
+    <p>Validação da cadeia:
+      {% if e.scan.verify_ok %}<span class="st st-ok">válida</span>
+      {% elif e.scan.verify_ok is sameas false %}<span class="st st-err">inválida</span> <span class="mono small">[{{ e.scan.verify_code }}] {{ e.scan.verify_message }}</span>
+      {% else %}<span class="muted">não determinada</span>{% endif %}
+    </p>
+  {% endif %}
+  {% if e.leaf %}
+  <dl class="kv">
+    <dt>Subject</dt><dd class="mono small">{{ e.leaf.subject_dn }}</dd>
+    <dt>Emissor</dt><dd class="mono small">{{ e.leaf.issuer_dn }}</dd>
+    <dt>Validade</dt><dd>{{ e.leaf.not_before|dt }} → <b>{{ e.leaf.not_after|dt }}</b></dd>
+    <dt>Serial</dt><dd class="mono small">{{ e.leaf.serial_hex }}</dd>
+    <dt>SHA-256</dt><dd class="mono small">{{ e.leaf.sha256 }}</dd>
+    <dt>Chave / assinatura</dt><dd>{{ e.leaf.key_type }} {{ e.leaf.key_bits }} · {{ e.leaf.sig_hash|upper }}</dd>
+    <dt>SANs</dt><dd class="small">{{ (e.leaf.sans_dns + e.leaf.sans_ip)|join(', ') or '—' }}</dd>
+  </dl>
+  <h3>Cadeia apresentada</h3>
+  <ol class="chain">
+    {% for c in e.scan.chain %}
+    <li><b>{{ c.subject_cn or '(sem CN)' }}</b> <span class="muted">emitido por</span> {{ c.issuer_cn }} · expira {{ c.not_after|dt }} · {{ c.sig_hash|upper }} · {{ c.key_type }} {{ c.key_bits }}{% if c.self_issued %} · <i>autoassinado</i>{% endif %}</li>
+    {% endfor %}
+  </ol>
+  {% endif %}
+  {% if e.history|length > 1 %}
+  <details><summary>Histórico ({{ e.history|length }})</summary>
+    <table class="compact">
+      {% for h in e.history %}<tr><td>{{ h.scanned_at|dtt }}</td><td>{{ scanstatus(h.status) }}</td><td class="mono small">{{ (h.leaf_sha256 or '')[:16] }}</td><td class="small">{{ h.error }}</td></tr>{% endfor %}
+    </table>
+  </details>
+  {% endif %}
+</section>
+{% else %}
+<section class="card"><p class="muted">Sem endpoints associados. {% if cn.startswith('*.') %}Para um wildcard, adicione em <a href="/endpoints">Endpoints</a> os hosts que o servem, com CN esperado <span class="mono">{{ cn }}</span>.{% endif %}</p></section>
+{% endfor %}
+
+<section class="card">
+  <h2>Findings</h2>
+  {% include "_findings_table.html" %}
+</section>
+{% endblock %}

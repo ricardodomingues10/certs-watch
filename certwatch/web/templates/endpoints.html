@@ -1,0 +1,47 @@
+{% extends "base.html" %}
+{% from "_macros.html" import scanstatus, next_field %}
+{% block title %}Endpoints{% endblock %}
+{% block content %}
+<h1>Endpoints <small>{{ eps|length }}</small></h1>
+
+<section class="card">
+  <h2>Adicionar endpoint manual</h2>
+  <p class="muted small">Útil para wildcards (ex.: host <span class="mono">portal.exemplo.pt</span> com CN esperado <span class="mono">*.exemplo.pt</span>) ou serviços TLS fora da porta 443.</p>
+  <form method="post" action="/endpoints" class="inline">
+    <input type="hidden" name="csrf" value="{{ csrf }}">
+    <input name="host" required placeholder="host ou IP">
+    <select name="port">{% for p in allowed_ports %}<option {{ 'selected' if p == default_port }}>{{ p }}</option>{% endfor %}</select>
+    <input name="expected_cn" placeholder="CN esperado (opcional)">
+    <input name="note" placeholder="nota (opcional)">
+    <button>Adicionar</button>
+  </form>
+</section>
+
+<form class="filters" method="get"><input type="search" name="q" value="{{ q }}" placeholder="host ou CN"><button>Filtrar</button></form>
+
+<table>
+  <thead><tr><th>Endpoint</th><th>CN esperado</th><th>Origem</th><th>Estado</th><th>Última verificação</th><th>Falhas seguidas</th><th>Nota</th><th></th></tr></thead>
+  <tbody>
+  {% for e in eps %}
+    {% set sr = scans.get(e.last_scan_id) %}
+    <tr class="{{ 'faded' if not e.enabled }}">
+      <td class="mono">{{ e.host }}:{{ e.port }}</td>
+      <td><a href="/certificados/detalhe?cn={{ e.expected_cn_norm|urlencode }}">{{ e.expected_cn_norm }}</a></td>
+      <td>{{ e.source }}</td>
+      <td>{% if e.enabled %}{{ scanstatus(sr.status if sr else None) }}{% else %}<span class="st st-off">desativado</span>{% endif %}</td>
+      <td>{{ sr.scanned_at|dtt if sr else '—' }}</td>
+      <td class="num">{{ e.consecutive_failures }}</td>
+      <td class="small">{{ e.note }}{% if sr and sr.error %}<div class="muted">{{ sr.error[:160] }}</div>{% endif %}</td>
+      <td>
+        <form method="post" action="/endpoints/{{ e.id }}/alternar">
+          <input type="hidden" name="csrf" value="{{ csrf }}">{{ next_field(request) }}
+          <button class="link">{{ 'Desativar' if e.enabled else 'Ativar' }}</button>
+        </form>
+      </td>
+    </tr>
+  {% else %}
+    <tr><td colspan="8" class="muted">Sem endpoints. Corra a ingestão da CMDB em <a href="/jobs">Jobs</a>.</td></tr>
+  {% endfor %}
+  </tbody>
+</table>
+{% endblock %}

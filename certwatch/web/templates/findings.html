@@ -1,0 +1,26 @@
+{% extends "base.html" %}
+{% block title %}Findings{% endblock %}
+{% block content %}
+<h1>Findings <small>{{ items|length }}</small></h1>
+
+<form class="filters" method="get">
+  <select name="status">
+    {% for v, l in [('aberto','Abertos'),('aceite','Aceites'),('resolvido','Resolvidos'),('todos','Todos')] %}
+    <option value="{{ v }}" {{ 'selected' if status == v }}>{{ l }}</option>
+    {% endfor %}
+  </select>
+  <select name="sev">
+    <option value="">Qualquer severidade</option>
+    {% for s in SEVERITIES|reverse %}<option value="{{ s }}" {{ 'selected' if sev == s }}>{{ s }}</option>{% endfor %}
+  </select>
+  <select name="tipo">
+    <option value="">Todos os tipos</option>
+    {% for k, l in FINDING_TYPES.items() %}<option value="{{ k }}" {{ 'selected' if tipo == k }}>{{ l }}</option>{% endfor %}
+  </select>
+  <input type="search" name="q" value="{{ q }}" placeholder="alvo ou CN">
+  <button>Filtrar</button>
+</form>
+
+{% set findings = items %}
+{% include "_findings_table.html" %}
+{% endblock %}

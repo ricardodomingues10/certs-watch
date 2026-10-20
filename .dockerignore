@@ -1,0 +1,8 @@
+.venv
+tests
+secrets
+.env
+trust
+*.pyc
+__pycache__
+.pytest_cache

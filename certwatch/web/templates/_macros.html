@@ -1,0 +1,24 @@
+{% macro sev(s) -%}
+{% if s %}<span class="sev sev-{{ s }}">{{ s }}</span>{% else %}<span class="muted">—</span>{% endif %}
+{%- endmacro %}
+
+{% macro days(d) -%}
+{% if d is none %}<span class="muted">—</span>
+{% elif d < 0 %}<span class="days d-exp">expirado há {{ -d }} d</span>
+{% elif d <= 7 %}<span class="days d-crit">{{ d }} d</span>
+{% elif d <= 20 %}<span class="days d-high">{{ d }} d</span>
+{% elif d <= 90 %}<span class="days d-med">{{ d }} d</span>
+{% else %}<span class="days">{{ d }} d</span>{% endif %}
+{%- endmacro %}
+
+{% macro scanstatus(s) -%}
+{% if not s %}<span class="muted">por verificar</span>
+{% elif s == 'ok' %}<span class="st st-ok">ok</span>
+{% elif s == 'dns_error' %}<span class="st st-err">DNS</span>
+{% elif s == 'unreachable' %}<span class="st st-err">inalcançável</span>
+{% else %}<span class="st st-err">{{ s }}</span>{% endif %}
+{%- endmacro %}
+
+{% macro next_field(request) -%}
+<input type="hidden" name="next" value="{{ request.url.path }}{% if request.url.query %}?{{ request.url.query }}{% endif %}">
+{%- endmacro %}

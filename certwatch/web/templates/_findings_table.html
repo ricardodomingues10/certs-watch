@@ -1,0 +1,41 @@
+{% from "_macros.html" import sev, next_field %}
+<table>
+  <thead><tr><th>Severidade</th><th>Tipo</th><th>Alvo</th><th>Detalhes</th><th>Estado</th><th>Desde</th><th></th></tr></thead>
+  <tbody>
+  {% for f in findings %}
+    <tr class="{{ 'faded' if f.status == 'resolvido' }}">
+      <td>{{ sev(f.severity) }}</td>
+      <td title="{{ f.type }}">{{ FINDING_TYPES.get(f.type, f.type) }}</td>
+      <td>{% if f.cn_norm %}<a href="/certificados/detalhe?cn={{ f.cn_norm|urlencode }}">{{ f.subject }}</a>{% else %}{{ f.subject }}{% endif %}</td>
+      <td class="small">
+        {% for k, v in f.details.items() %}<div><span class="muted">{{ k }}:</span> {% if v is iterable and v is not string %}{{ v|join('; ') }}{% else %}{{ v }}{% endif %}</div>{% endfor %}
+      </td>
+      <td>
+        {{ f.status }}
+        {% if f.status == 'aceite' %}<div class="small muted">até {{ f.accepted_until|dt }} · {{ f.accepted_by }}<br>{{ f.accept_reason }}</div>{% endif %}
+        {% if f.status == 'resolvido' %}<div class="small muted">{{ f.resolved_at|dtt }}</div>{% endif %}
+      </td>
+      <td class="small">{{ f.first_seen|dt }}</td>
+      <td class="actions">
+        {% if f.status == 'aberto' %}
+        <details><summary>Aceitar risco</summary>
+          <form method="post" action="/findings/{{ f.id }}/aceitar" class="stack">
+            <input type="hidden" name="csrf" value="{{ csrf }}">{{ next_field(request) }}
+            <textarea name="reason" required minlength="10" placeholder="Justificação (obrigatória)"></textarea>
+            <label>Válido até <input type="date" name="until" required max="{{ max_until }}"></label>
+            <button>Aceitar</button>
+          </form>
+        </details>
+        {% elif f.status == 'aceite' %}
+        <form method="post" action="/findings/{{ f.id }}/reabrir">
+          <input type="hidden" name="csrf" value="{{ csrf }}">{{ next_field(request) }}
+          <button class="link">Reabrir</button>
+        </form>
+        {% endif %}
+      </td>
+    </tr>
+  {% else %}
+    <tr><td colspan="7" class="muted">Sem findings.</td></tr>
+  {% endfor %}
+  </tbody>
+</table>
