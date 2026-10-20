@@ -26,7 +26,7 @@
       {% for label, prefix in prefixes.items() %}<span class="mono">{{ prefix }}*</span> = {{ label }}{{ ', ' if not loop.last else '.' }}{% endfor %}
       Em cada fonte é usado o ficheiro mais recente. Um ficheiro igual ao anterior não é lido de novo.</p>
     <p class="small muted">São reconhecidas as colunas das exportações do certutil (Issued Common Name, Certificate Expiration Date, Serial Number, Request Disposition) e do AVI (Subject_CommonName, Validity_NotAfter, Issuer_CommonName). Pedidos revogados ou não emitidos são ignorados. Datas DD/MM/AAAA nunca são trocadas.</p>
-    <p class="small muted">Exportações do Azure AD (colunas AppRegistration, CredentialType, KeyId, EndDate) são comparadas com a <a href="/apis">lista de APIs e segredos</a> da CMDB, pelo nome da App Registration e pela data de fim.</p>
+    <p class="small muted">Exportações do Azure AD (colunas AppRegistration, CredentialType, KeyId, EndDate) têm segredos e certificados: cada linha é procurada nas duas listas da CMDB, a <a href="/apis">lista de APIs e segredos</a> e os <a href="/certificados">certificados</a>, pelo nome da App Registration (ou da Enterprise Application) e pela data de fim.</p>
   </section>
 </div>
 
@@ -78,7 +78,7 @@
         <div class="small muted">{{ r.file }}{{ ', linha ' ~ r.row_no if r.row_no }}</div></td>
       <td><span class="tag {{ 'tag-err' if r.state in ('novo', 'data_anterior') else ('tag-run' if r.state in ('data_posterior', 'so_na_cmdb') else 'tag-ok' if r.state == 'igual' else 'tag-off') }}" title="{{ REC_HELP[r.state] }}">{{ REC_STATES[r.state] }}</span></td>
       <td>{{ r.valid_to|dt }}</td>
-      <td>{{ r.cmdb_valid_to|dt }}</td>
+      <td>{{ r.cmdb_valid_to|dt }}{% if r.azure and r.onde %}<div class="small muted">em: {{ r.onde|join(' e ') }}</div>{% endif %}</td>
       <td>{{ r.live_valid_to|dt }}{% if r.live_confirma %} <span class="tag tag-ok" title="O servidor apresenta a mesma data que a fonte">confirma</span>{% endif %}</td>
       <td class="small">{% if r.azure %}{{ r.issuer or '—' }}{% if r.serial %}<div class="mono muted" title="KeyId">{{ r.serial }}</div>{% endif %}{% else %}<span class="mono">{{ r.serial or '—' }}</span><div class="muted">{{ r.issuer }}</div>{% endif %}</td>
     </tr>

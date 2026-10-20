@@ -58,7 +58,7 @@ REC_STATES = {
 REC_TABS = {"novo": "Novos", "data_posterior": "Data mais recente", "data_anterior": "Data mais antiga",
             "igual": "Iguais", "so_na_cmdb": "Só na CMDB", "expirado": "Expirados"}
 REC_HELP = {
-    "novo": "O certificado existe na fonte mas não na CMDB. Normalmente deve ser registado.",
+    "novo": "Existe na fonte mas não na CMDB (no Azure: nem na lista de APIs nem nos certificados). Normalmente deve ser registado.",
     "data_posterior": "A fonte tem um certificado mais recente: foi renovado e a CMDB não foi atualizada.",
     "data_anterior": "A fonte tem um certificado mais antigo do que o registado. Confirmar no servidor qual está em uso antes de mexer na CMDB.",
     "igual": "Nome e data coincidem com a CMDB.",
@@ -336,9 +336,13 @@ def reconcile(session: Session, settings: Settings, now: datetime | None = None)
     file_by_id = {f.id: f for f in files}
     recs = list(session.scalars(select(ImportRecord).where(ImportRecord.file_id.in_(list(file_by_id) or [-1]))))
 
+    # O Azure tem segredos e certificados: cada credencial é procurada nas duas listas da CMDB
     api_by_label: dict[str, list] = defaultdict(list)
     for a in snap.apis:
         api_by_label[norm_label(a.name)].append(a)
+    cert_by_label: dict[str, list] = defaultdict(list)
+    for c in snap.records:
+        cert_by_label[norm_label(c.common_name)].append(c)
 
     rows, seen = [], set()
     present: dict[str, set[str]] = defaultdict(set)
@@ -352,11 +356,17 @@ def reconcile(session: Session, settings: Settings, now: datetime | None = None)
         seen.add(key)
         if is_azure:
             azure_sources.add(r.source)
-            cmdb_dates = sorted((as_utc(a.expiry) for a in api_by_label.get(r.cn_norm, []) if a.expiry), reverse=True)
-            cmdb = api_by_label.get(r.cn_norm, [])
+            labels = {r.cn_norm, norm_label((r.extra or {}).get("enterprise_app"))} - {""}
+            apis = {a.ucmdb_id: a for lb in labels for a in api_by_label.get(lb, [])}.values()
+            certs = {c.ucmdb_id: c for lb in labels for c in cert_by_label.get(lb, [])}.values()
+            cmdb = [*apis, *certs]
+            cmdb_dates = sorted([as_utc(a.expiry) for a in apis if a.expiry] +
+                                [as_utc(c.valid_to) for c in certs if c.valid_to], reverse=True)
+            where = [x for x, ok in (("Lista de APIs", apis), ("Certificados", certs)) if ok]
         else:
             cmdb = snap.by_cn.get(r.cn_norm, [])
             cmdb_dates = sorted((as_utc(c.valid_to) for c in cmdb if c.valid_to), reverse=True)
+            where = ["Certificados"] if cmdb else []
         vt = as_utc(r.valid_to)
         if vt < now:
             state = "expirado"
@@ -378,7 +388,7 @@ def reconcile(session: Session, settings: Settings, now: datetime | None = None)
             "live_confirma": bool(lv and abs((as_utc(lv).date() - vt.date()).days) <= 1),
             "serial": r.serial, "issuer": r.issuer, "san": r.san, "state": state,
             "file": file_by_id[r.file_id].name, "row_no": r.row_no, "azure": is_azure,
-            "app": (r.extra or {}).get("enterprise_app", ""),
+            "app": (r.extra or {}).get("enterprise_app", ""), "onde": where,
         })
 
     # CMDB com o emissor de uma CA importada, mas ausente da exportação dessa CA
@@ -393,7 +403,7 @@ def reconcile(session: Session, settings: Settings, now: datetime | None = None)
                     "source": f.source, "cn": c.common_name, "cn_norm": c.cn_norm, "valid_to": None,
                     "cmdb_valid_to": as_utc(c.valid_to), "live_valid_to": live.get(c.cn_norm), "live_confirma": False,
                     "serial": "", "issuer": c.issuer_name or c.issuer, "san": "", "state": "so_na_cmdb",
-                    "file": f.name, "row_no": None, "azure": False, "app": "",
+                    "file": f.name, "row_no": None, "azure": False, "app": "", "onde": ["Certificados"],
                 })
 
     # Segredos do Azure registados na CMDB que não aparecem na exportação do Azure
@@ -408,7 +418,7 @@ def reconcile(session: Session, settings: Settings, now: datetime | None = None)
                     "source": f.source, "cn": a.name, "cn_norm": label, "valid_to": None,
                     "cmdb_valid_to": as_utc(a.expiry), "live_valid_to": None, "live_confirma": False,
                     "serial": "", "issuer": a.location, "san": "", "state": "so_na_cmdb",
-                    "file": f.name, "row_no": None, "azure": True, "app": a.application,
+                    "file": f.name, "row_no": None, "azure": True, "app": a.application, "onde": ["Lista de APIs"],
                 })
 
     order = {"novo": 0, "data_posterior": 1, "data_anterior": 2, "so_na_cmdb": 3, "igual": 4, "expirado": 5}

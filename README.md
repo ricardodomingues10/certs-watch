@@ -159,7 +159,7 @@ Copie os ficheiros exportados para a diretoria `import/` da aplicação. O iníc
 - Pedidos revogados ou não emitidos são ignorados; linhas com problemas aparecem na página com o número da linha.
 - Em cada fonte é usado o ficheiro mais recente; um ficheiro igual ao anterior não é lido de novo.
 
-**Azure AD** (`azure*.csv`, colunas `EnterpriseApplication;AppRegistration;AppId;CredentialType;KeyId;StartDate;EndDate;DaysRemaining;Status`): cada credencial (Secret ou Certificate) é comparada com a lista de APIs da CMDB pelo nome da App Registration (sem o sufixo de identificador que a CMDB às vezes acrescenta) e pela data de fim. Segredos da CMDB com localização "AzureAD…" que não aparecem na exportação ficam como **só na CMDB**.
+**Azure AD** (`azure*.csv`, colunas `EnterpriseApplication;AppRegistration;AppId;CredentialType;KeyId;StartDate;EndDate;DaysRemaining;Status`): cada credencial (Secret ou Certificate) é procurada **nas duas listas da CMDB**, a lista de APIs e os certificados, pelo nome da App Registration ou da Enterprise Application (sem o sufixo de identificador que a CMDB às vezes acrescenta) e pela data de fim. A página e o CSV indicam em que lista foi encontrada. Segredos da CMDB com localização "AzureAD…" que não aparecem na exportação ficam como **só na CMDB**.
 
 Resultados: **novo** (não existe na CMDB), **data mais recente** (renovado; atualizar a CMDB), **data mais antiga** (confirmar no servidor), **só na CMDB** (quando `CERTWATCH_IMPORT_ISSUERS` diz qual é o emissor de cada CA) e **igual**. Quando o servidor foi verificado, a data que ele apresenta é mostrada ao lado para desempatar.
 
@@ -261,7 +261,7 @@ Os testes levantam servidores TLS reais em localhost com uma PKI de teste (chain
 Fazer o build numa máquina com acesso e transferir a imagem:
 
 ```bash
-docker compose build && docker save certwatch:0.4.2 postgres:16-alpine | gzip > certwatch-images.tar.gz
+docker compose build && docker save certwatch:0.4.3 postgres:16-alpine | gzip > certwatch-images.tar.gz
 # no servidor:
 gunzip -c certwatch-images.tar.gz | docker load && docker compose up -d --no-build
 ```

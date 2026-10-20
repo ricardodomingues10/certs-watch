@@ -147,21 +147,30 @@ def test_azure_credentials_against_api_list(env, tmp_path):
     with session_scope() as db:
         ingest_apis(db, s, records, fields)
 
+    # Certificado de uma App Registration registado na lista de certificados (não na de APIs)
+    with session_scope() as db:
+        ingest_cmdb(db, replace(s, ucmdb_min_cis=1), [
+            {"ucmdb_id": "c1", "global_id": "c1", "common_name": "Automacao Exemplo",
+             "valid_to": "2036-06-21T22:00:00+00:00", "issuer": "Automacao Exemplo", "issuer_name": ""}])
     csv_text = "\n".join([
         '"EnterpriseApplication";"AppRegistration";"AppId";"CredentialType";"KeyId";"StartDate";"EndDate";"DaysRemaining";"Status"',
         '"App_TST";"App_TST";"x";"Secret";"k1";"20/10/2024 14:59:29";"20/10/2025 14:59:29";"0";"Expired"',
         '"Automacao Exemplo";"Novo App";"x";"Certificate";"k2";"21/06/2026 23:00:00";"21/06/2036 23:00:00";"3532";"Valid"',
+        '"Automacao Exemplo";"Automacao Exemplo";"x";"Certificate";"k5";"21/06/2026 23:00:00";"21/06/2036 23:00:00";"3532";"Valid"',
         '"CRM";"CRM Testes";"x";"Secret";"k3";"24/01/2025 10:00:00";"24/01/2027 14:59:29";"460";"Valid"',
         f'"Radar";"Radar";"x";"Secret";"k4";"01/01/2026 10:00:00";"{d(400)}";"400";"Valid"',
     ])
     (imp / "azure.csv").write_text(csv_text, encoding="utf-8")
     with session_scope() as db:
         out = ingest_imports(db, s)
-        assert out["AZURE"]["registos"] == 4
+        assert out["AZURE"]["registos"] == 5
         res = reconcile(db, s)
     by = {(r["source"], r["cn"]): r for r in res["rows"]}
     assert by[("AZURE", "App_TST")]["state"] == "expirado"
-    assert by[("AZURE", "Novo App")]["state"] == "novo" and by[("AZURE", "Novo App")]["issuer"] == "Certificate"
+    # "Novo App" não existe com esse nome, mas a Enterprise Application tem certificado registado na CMDB
+    assert by[("AZURE", "Novo App")]["state"] == "igual" and by[("AZURE", "Novo App")]["onde"] == ["Certificados"]
+    assert by[("AZURE", "Automacao Exemplo")]["state"] == "igual" and by[("AZURE", "Automacao Exemplo")]["issuer"] == "Certificate"
+    assert by[("AZURE", "CRM Testes")]["onde"] == ["Lista de APIs"]
     assert by[("AZURE", "CRM Testes")]["state"] == "igual"                 # mesma data, horas diferentes
     assert by[("AZURE", "Radar")]["state"] == "data_posterior"            # segredo novo não registado
     assert by[("AZURE", "Removida do Azure")]["state"] == "so_na_cmdb"

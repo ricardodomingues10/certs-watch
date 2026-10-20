@@ -689,10 +689,11 @@ def reconciliacao_exportar(estado: str = "diferencas", user: str = Depends(curre
         rows = [r for r in rows if r["state"] == estado]
     return csv_response(f"reconciliacao-{estado}.csv",
                         ["Fonte", "Nome (CommonName ou App Registration)", "Situação", "Validade na fonte", "Validade na CMDB", "Validade no servidor",
-                         "Servidor confirma a fonte", "Serial ou KeyId", "Emissor ou tipo de credencial", "SAN", "Ficheiro", "Linha"],
+                         "Servidor confirma a fonte", "Serial ou KeyId", "Emissor ou tipo de credencial", "SAN", "Encontrado na CMDB em",
+                         "Ficheiro", "Linha"],
                         [[r["source"], r["cn"], REC_STATES[r["state"]], fmt_dt(r["valid_to"]), fmt_dt(r["cmdb_valid_to"]),
                           fmt_dt(r["live_valid_to"]), "sim" if r["live_confirma"] else "", r["serial"], r["issuer"],
-                          r["san"], r["file"], r["row_no"] or ""] for r in rows])
+                          r["san"], " e ".join(r.get("onde") or []), r["file"], r["row_no"] or ""] for r in rows])
 
 
 # ------------------------------------------------------------------ API (só leitura)
