@@ -1,0 +1,39 @@
+{% extends "base.html" %}
+{% from "_macros.html" import days, state, scope_chip %}
+{% block title %}APIs{% endblock %}
+{% block content %}
+<h1>APIs <small>{{ apis|length }}</small></h1>
+<p class="sub">APIs da lista da CMDB{% if tql %} (<span class="mono">{{ tql }}</span>){% endif %}. Para cada uma, o certwatch verifica o certificado do servidor onde está publicada
+e vigia a data de validade registada na lista. Segredos e palavras-passe da CMDB nunca são importados.</p>
+
+{% if not configured %}
+<div class="note warn">A lista de APIs não está configurada. Defina <span class="mono">CERTWATCH_UCMDB_TQL_APIS</span> no ficheiro .env com o nome do TQL
+(ex.: <span class="mono">Lista_de_APIs</span>) e reinicie (<span class="mono">docker compose up -d</span>).</div>
+{% elif campos %}
+<div class="note">Campos usados da CMDB: nome = <span class="mono">{{ campos.get('nome') or '—' }}</span>,
+URL = <span class="mono">{{ campos.get('url') or '—' }}</span>, validade = <span class="mono">{{ campos.get('validade') or '—' }}</span>.
+Se algum estiver errado, defina-o no .env (<span class="mono">CERTWATCH_APIS_FIELD_NAME / _URL / _EXPIRY</span>).</div>
+{% endif %}
+
+<div class="card scroll">
+<table>
+  <thead><tr><th>API</th><th>Servidor</th><th>Âmbito</th><th>Certificado do servidor</th><th>Validade na lista</th><th>Outros dados</th></tr></thead>
+  <tbody>
+  {% for a in apis %}
+    {% set r = inv.get(a.host) %}
+    <tr>
+      <td><b>{{ a.name or '(sem nome)' }}</b><div class="mono small muted">{{ a.url or 'sem URL' }}</div>
+        {% if a.scheme == 'http' %}<span class="tag tag-err">sem TLS</span>{% endif %}</td>
+      <td class="mono small">{% if a.host %}<a href="/certificados/detalhe?cn={{ a.host|urlencode }}">{{ a.host }}{{ ':' ~ a.port if a.port }}</a>{% else %}—{% endif %}</td>
+      <td>{% if r %}{{ scope_chip(r.scope) }}{% endif %}</td>
+      <td>{% if r %}{{ state(r.state) }}<div class="small">{{ r.summary }}</div>{% else %}<span class="muted">por verificar</span>{% endif %}</td>
+      <td>{% if a.expiry %}{{ days(days_left(a.expiry, now)) }}<div class="small muted">{{ a.expiry|dt }}</div>{% else %}<span class="muted">—</span>{% endif %}</td>
+      <td class="small">{% for k, v in a.extra.items() %}<div><span class="muted">{{ k }}:</span> {{ v }}</div>{% endfor %}</td>
+    </tr>
+  {% else %}
+    <tr><td colspan="6" class="muted">{{ 'Ainda não foi importada nenhuma API. Corra "Importar lista de APIs" em Jobs.' if configured else 'Sem dados.' }}</td></tr>
+  {% endfor %}
+  </tbody>
+</table>
+</div>
+{% endblock %}

@@ -33,6 +33,7 @@ class ScanOutcome:
     error: str = ""
     tls_version: str = ""
     cipher: str = ""
+    resolved_ip: str = ""
     verify_ok: bool | None = None
     verify_code: int | None = None
     verify_message: str = ""
@@ -63,9 +64,13 @@ def _context(cafile: str | None) -> ssl.SSLContext:
     return ctx
 
 
-def _handshake(host: str, port: int, ctx: ssl.SSLContext, timeout: float):
+def _handshake(host: str, port: int, ctx: ssl.SSLContext, timeout: float, out: "ScanOutcome"):
     with socket.create_connection((host, port), timeout=timeout) as sock:
         sock.settimeout(timeout)
+        try:
+            out.resolved_ip = sock.getpeername()[0]
+        except OSError:
+            pass
         with ctx.wrap_socket(sock, server_hostname=host) as ss:
             chain = list(ss.get_unverified_chain() or [])
             cipher = ss.cipher()
@@ -77,7 +82,7 @@ def scan_endpoint(host: str, port: int, cafile: str, timeout: float = 8.0) -> Sc
     t0 = time.monotonic()
     try:
         try:
-            out.chain_der, out.tls_version, out.cipher = _handshake(host, port, _context(cafile), timeout)
+            out.chain_der, out.tls_version, out.cipher = _handshake(host, port, _context(cafile), timeout, out)
             out.verify_ok = True
         except ssl.SSLCertVerificationError as exc:
             out.verify_ok = False
@@ -89,7 +94,7 @@ def scan_endpoint(host: str, port: int, cafile: str, timeout: float = 8.0) -> Sc
 
         if not out.chain_der:
             try:
-                out.chain_der, out.tls_version, out.cipher = _handshake(host, port, _context(None), timeout)
+                out.chain_der, out.tls_version, out.cipher = _handshake(host, port, _context(None), timeout, out)
             except ssl.SSLError as exc:
                 out.status = "tls_error"
                 out.error = f"{out.error}; handshake permissivo falhou: {exc.reason or exc}".strip("; ")
@@ -149,6 +154,15 @@ def summarize(der: bytes) -> dict:
         is_ca = False
 
     spki = pk.public_bytes(Encoding.DER, PublicFormat.SubjectPublicKeyInfo)
+    try:
+        ski = c.extensions.get_extension_for_class(x509.SubjectKeyIdentifier).value.digest.hex()
+    except x509.ExtensionNotFound:
+        ski = ""
+    try:
+        aki_raw = c.extensions.get_extension_for_class(x509.AuthorityKeyIdentifier).value.key_identifier
+        aki = aki_raw.hex() if aki_raw else ""
+    except x509.ExtensionNotFound:
+        aki = ""
     return {
         "sha256": c.fingerprint(hashes.SHA256()).hex(),
         "subject_cn": _cn(c.subject),
@@ -164,6 +178,8 @@ def summarize(der: bytes) -> dict:
         "key_type": key_type,
         "key_bits": key_bits,
         "spki_sha256": hashlib.sha256(spki).hexdigest(),
+        "ski": ski,
+        "aki": aki,
         "is_ca": bool(is_ca),
         "self_issued": c.issuer == c.subject,
         "pem": c.public_bytes(Encoding.PEM).decode("ascii"),

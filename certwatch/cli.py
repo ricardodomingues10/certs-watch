@@ -3,6 +3,7 @@
   python -m certwatch.cli init-db
   python -m certwatch.cli run {pipeline,ingest_cmdb,scan,evaluate}
   python -m certwatch.cli trust-fetch HOST[:PORTA]
+  python -m certwatch.cli inspect-tql NOME_DO_TQL     (atributos de um TQL, sem valores sensíveis)
 """
 from __future__ import annotations
 
@@ -45,10 +46,16 @@ def main(argv: list[str] | None = None) -> int:
     r.add_argument("job", choices=JOBS)
     t = sub.add_parser("trust-fetch")
     t.add_argument("target", help="host[:porta]")
+    i = sub.add_parser("inspect-tql")
+    i.add_argument("tql")
     a = p.parse_args(argv)
 
     if a.cmd == "trust-fetch":
         return _trust_fetch(a.target)
+    if a.cmd == "inspect-tql":
+        from .collectors.ucmdb import describe_tql
+        print(json.dumps(describe_tql(get_settings(), a.tql), ensure_ascii=False, indent=2, default=str))
+        return 0
 
     init_db()
     if a.cmd == "init-db":

@@ -32,6 +32,10 @@ def _secret(name: str, env_var: str) -> str | None:
     return _env(env_var)
 
 
+def _str_list(value: str | None) -> list[str]:
+    return [x.strip().lower() for x in (value or "").split(",") if x.strip()]
+
+
 def _int_list(value: str) -> list[int]:
     return sorted({int(x) for x in value.split(",") if x.strip()})
 
@@ -49,6 +53,17 @@ class Settings:
     ucmdb_client_context: int
     ucmdb_min_cis: int
     ucmdb_verify_tls: bool
+
+    # Lista de APIs na UCMDB (opcional)
+    ucmdb_tql_apis: str
+    apis_min: int
+    apis_field_name: str
+    apis_field_url: str
+    apis_field_expiry: str
+
+    # Classificação interno / externo
+    internal_suffixes: list[str]
+    internal_issuer_patterns: list[str]
 
     # Confiança TLS
     trust_dir: Path
@@ -94,6 +109,13 @@ class Settings:
             ucmdb_client_context=int(_env("CERTWATCH_UCMDB_CLIENT_CONTEXT", "1")),
             ucmdb_min_cis=int(_env("CERTWATCH_UCMDB_MIN_CIS", "300")),
             ucmdb_verify_tls=_env("CERTWATCH_UCMDB_VERIFY_TLS", "true").lower() != "false",
+            ucmdb_tql_apis=_env("CERTWATCH_UCMDB_TQL_APIS", ""),
+            apis_min=int(_env("CERTWATCH_APIS_MIN", "1")),
+            apis_field_name=_env("CERTWATCH_APIS_FIELD_NAME", ""),
+            apis_field_url=_env("CERTWATCH_APIS_FIELD_URL", ""),
+            apis_field_expiry=_env("CERTWATCH_APIS_FIELD_EXPIRY", ""),
+            internal_suffixes=_str_list(_env("CERTWATCH_INTERNAL_SUFFIXES", ".local,.lan,.internal,.intranet,.corp")),
+            internal_issuer_patterns=_str_list(_env("CERTWATCH_INTERNAL_ISSUER_PATTERNS", "internal,interna")),
             trust_dir=Path(_env("CERTWATCH_TRUST_DIR", "/app/trust")),
             system_ca_bundle=Path(_env("CERTWATCH_SYSTEM_CA_BUNDLE", "/etc/ssl/certs/ca-certificates.crt")),
             scan_default_port=int(_env("CERTWATCH_SCAN_DEFAULT_PORT", "443")),

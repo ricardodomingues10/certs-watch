@@ -1,64 +1,143 @@
 {% extends "base.html" %}
-{% from "_macros.html" import sev, days, scanstatus %}
+{% from "_macros.html" import sev, days, type_chip, scope_chip, state, stackbar, hbar %}
 {% block title %}Painel{% endblock %}
 {% block content %}
 <h1>Painel</h1>
+<p class="sub">Estado de todos os certificados conhecidos: os registados na CMDB, os da lista de APIs e os endpoints adicionados à mão. Os números são clicáveis.</p>
 
-<section class="tiles">
-  <a class="tile" href="/certificados"><b>{{ total }}</b><span>certificados (CN distintos na CMDB)</span></a>
-  <a class="tile" href="/endpoints"><b>{{ live_ok }}</b><span>verificados live com sucesso de {{ n_endpoints }} endpoints</span></a>
-  <a class="tile t-exp" href="/certificados?dias=-1"><b>{{ buckets['expirados'] }}</b><span>expirados</span></a>
-  <a class="tile t-crit" href="/certificados?dias=7"><b>{{ buckets['7'] }}</b><span>expiram em ≤ 7 dias</span></a>
-  <a class="tile t-high" href="/certificados?dias=20"><b>{{ buckets['20'] }}</b><span>expiram em 8–20 dias</span></a>
-  <a class="tile t-med" href="/certificados?dias=90"><b>{{ buckets['30'] + buckets['90'] }}</b><span>expiram em 21–90 dias</span></a>
+{% set bs = s.by_state %}
+<section class="kpis">
+  <a class="kpi k-acc" href="/certificados"><b>{{ s.total }}</b><span>certificados</span></a>
+  <a class="kpi k-bad" href="/certificados?estado=falha"><b>{{ bs.get('falha', 0) }}</b><span>com falha (alertas altos ou críticos)</span></a>
+  <a class="kpi k-warn" href="/certificados?estado=aviso"><b>{{ bs.get('aviso', 0) }}</b><span>a precisar de atenção</span></a>
+  <a class="kpi k-ok" href="/certificados?estado=ok"><b>{{ bs.get('ok', 0) }}</b><span>verificados sem problemas</span></a>
+  <a class="kpi" href="/testes"><b>{{ s.ep_tls_ok }}<small class="muted">/{{ s.ep_total }}</small></b><span>servidores verificados por TLS</span></a>
+  <a class="kpi" href="/apis"><b>{{ n_apis }}</b><span>APIs na lista da CMDB</span></a>
 </section>
 
-<div class="cols">
+<section class="card">
+  <h2>Estado geral</h2>
+  {{ stackbar([('falha', bs.get('falha',0), 'Falha'), ('aviso', bs.get('aviso',0), 'Atenção'), ('ok', bs.get('ok',0), 'OK'),
+               ('pendente', bs.get('pendente',0), 'Por verificar'), ('cmdb', bs.get('cmdb',0), 'Só CMDB')], s.total) }}
+  <div class="legend">
+    <span><i class="lg lg-falha"></i>Falha {{ bs.get('falha',0) }}</span>
+    <span><i class="lg lg-aviso"></i>Atenção {{ bs.get('aviso',0) }}</span>
+    <span><i class="lg lg-ok"></i>OK {{ bs.get('ok',0) }}</span>
+    <span><i class="lg lg-pendente"></i>Por verificar {{ bs.get('pendente',0) }}</span>
+    <span><i class="lg lg-cmdb"></i>Só na CMDB (sem servidor para testar: CAs, utilizadores…) {{ bs.get('cmdb',0) }}</span>
+  </div>
+</section>
+
+<div class="grid g2">
   <section class="card">
-    <h2>Findings abertos por severidade</h2>
-    <table class="compact">
-      {% for s in SEVERITIES|reverse %}
-      <tr><td>{{ sev(s) }}</td><td class="num"><a href="/findings?sev={{ s }}">{{ sev_counts.get(s, 0) }}</a></td></tr>
-      {% endfor %}
-    </table>
     <h2>Por tipo</h2>
     <table class="compact">
-      {% for t, n in type_counts %}
-      <tr><td><a href="/findings?tipo={{ t }}">{{ FINDING_TYPES.get(t, t) }}</a></td><td class="num">{{ n }}</td></tr>
-      {% else %}
-      <tr><td class="muted">Sem findings abertos.</td></tr>
-      {% endfor %}
+      <thead><tr><th>Tipo</th><th class="num">Total</th><th>Estado</th></tr></thead>
+      <tbody>
+      {% for t, n in s.by_type.most_common() %}
+        {% set ts = s.type_state[t] %}
+        <tr>
+          <td><a href="/certificados?tipo={{ t }}">{{ type_chip(t) }}</a></td>
+          <td class="num">{{ n }}</td>
+          <td>{{ stackbar([('falha', ts.get('falha',0), 'Falha'), ('aviso', ts.get('aviso',0), 'Atenção'), ('ok', ts.get('ok',0), 'OK'),
+                           ('pendente', ts.get('pendente',0), 'Por verificar'), ('cmdb', ts.get('cmdb',0), 'Só CMDB')], n) }}</td>
+        </tr>
+      {% else %}<tr><td colspan="3" class="muted">Sem dados. Corra o pipeline em Jobs.</td></tr>{% endfor %}
+      </tbody>
     </table>
+    <h2 class="layer-title">Âmbito</h2>
+    <div class="bars">
+      {% set maxs = (s.by_scope.values()|max) if s.by_scope else 0 %}
+      {% for sc, n in s.by_scope.most_common() %}
+      <div class="bar-row"><a href="/certificados?ambito={{ sc }}">{{ scope_chip(sc) }}</a>{{ hbar(n, maxs) }}<span class="num">{{ n }}</span></div>
+      {% endfor %}
+    </div>
   </section>
 
-  <section class="card wide">
-    <h2>Atenção imediata <small>(expirados nos últimos 30 dias ou a ≤ 20 dias)</small></h2>
-    <table>
-      <thead><tr><th>Certificado</th><th>Emissor</th><th>Prazo</th><th>Fonte</th><th>Live</th><th>Pior finding</th></tr></thead>
+  <section class="card">
+    <h2>Expirações nos próximos 12 meses</h2>
+    {% set maxm = (s.timeline|map(attribute='total')|max) if s.timeline else 0 %}
+    <svg class="months" viewBox="0 0 720 190" role="img" aria-label="Número de certificados que expiram em cada um dos próximos 12 meses">
+      <line x1="0" y1="160" x2="720" y2="160"/>
+      {% for m in s.timeline %}
+        {% set h = ((m.total / maxm) * 130) if maxm else 0 %}
+        {% set x = loop.index0 * 60 + 10 %}
+        <rect class="m-bar {{ 'soon' if loop.index0 < 3 }}" x="{{ x }}" y="{{ (160 - h)|round(1) }}" width="40" height="{{ h|round(1) }}" rx="3"><title>{{ MONTHS[m.mes - 1] }} {{ m.ano }}: {{ m.total }}</title></rect>
+        <text class="v" x="{{ x + 20 }}" y="{{ (152 - h)|round(1) }}" text-anchor="middle">{{ m.total if m.total else '' }}</text>
+        <text x="{{ x + 20 }}" y="178" text-anchor="middle">{{ MONTHS[m.mes - 1] }}{% if m.mes == 1 or loop.first %} {{ m.ano % 100 }}{% endif %}</text>
+      {% endfor %}
+    </svg>
+    <div class="legend">
+      <a href="/certificados?dias=-1">Já expirados: <b>{{ s.buckets['expirados'] }}</b></a>
+      <a href="/certificados?dias=7">≤ 7 dias: <b>{{ s.buckets['7'] }}</b></a>
+      <a href="/certificados?dias=20">8–20 dias: <b>{{ s.buckets['20'] }}</b></a>
+      <a href="/certificados?dias=90">21–90 dias: <b>{{ s.buckets['30'] + s.buckets['90'] }}</b></a>
+    </div>
+  </section>
+</div>
+
+<div class="split">
+  <section class="card">
+    <h2>Precisam de ação <small>(estado Falha)</small></h2>
+    <div class="scroll"><table>
+      <thead><tr><th>Certificado</th><th>Tipo</th><th>Âmbito</th><th>Problema</th><th>Prazo</th><th></th></tr></thead>
       <tbody>
       {% for r in urgent %}
         <tr>
           <td><a href="/certificados/detalhe?cn={{ r.cn|urlencode }}">{{ r.common_name }}</a></td>
-          <td>{{ r.live_issuer or r.issuers|join(', ') }}</td>
+          <td>{{ type_chip(r.type) }}</td>
+          <td>{{ scope_chip(r.scope) }}</td>
+          <td>{{ r.summary }}</td>
           <td>{{ days(r.dias) }}</td>
-          <td>{{ r.fonte_data }}</td>
-          <td>{{ scanstatus(r.live_status) }}</td>
           <td>{{ sev(r.max_sev) }}</td>
         </tr>
       {% else %}
-        <tr><td colspan="6" class="muted">Nada urgente.</td></tr>
+        <tr><td colspan="6" class="muted">Nenhum certificado em estado de falha.</td></tr>
       {% endfor %}
       </tbody>
-    </table>
-
-    <h2>Últimos jobs</h2>
-    <table class="compact">
-      {% for j in last_jobs %}
-      <tr><td>#{{ j.id }} {{ j.job }}</td><td>{{ j.requested_by }}</td><td><span class="st st-{{ 'ok' if j.status == 'ok' else ('err' if j.status == 'error' else 'run') }}">{{ j.status }}</span></td><td>{{ j.finished_at|dtt if j.finished_at else j.requested_at|dtt }}</td></tr>
-      {% else %}
-      <tr><td class="muted">Ainda não correu nenhum job. <a href="/jobs">Executar o pipeline</a>.</td></tr>
-      {% endfor %}
-    </table>
+    </table></div>
   </section>
+
+  <div>
+    <section class="card">
+      <h2>Testes com falhas</h2>
+      {% for c in CHECKS %}{% set t = s.check_totals[c.id] %}{% if t.get('falha',0) or t.get('aviso',0) %}
+      <div class="check-row">
+        <a href="/testes?teste={{ c.id }}">{{ c.title }}</a>
+        {{ stackbar([('falha', t.get('falha',0), 'Falhou'), ('aviso', t.get('aviso',0), 'Atenção'), ('ok', t.get('ok',0), 'Passou')],
+                    t.get('falha',0) + t.get('aviso',0) + t.get('ok',0)) }}
+        <span class="counts"><b>{{ t.get('falha',0) }}</b> · <em>{{ t.get('aviso',0) }}</em></span>
+      </div>
+      {% endif %}{% else %}{% endfor %}
+      {% if not s.ep_verified %}<p class="muted">Ainda não há servidores verificados.</p>{% endif %}
+    </section>
+
+    <section class="card">
+      <h2>Emissores mais frequentes</h2>
+      {% set maxi = (s.issuers|map(attribute=1)|max) if s.issuers else 0 %}
+      <div class="bars">
+        {% for name, n in s.issuers %}
+        <div class="bar-row"><a href="/certificados?q={{ name|urlencode }}" class="small">{{ name }}</a>{{ hbar(n, maxi) }}<span class="num">{{ n }}</span></div>
+        {% endfor %}
+      </div>
+    </section>
+
+    <section class="card">
+      <h2>Alertas abertos <small>{{ n_open }}</small></h2>
+      <table class="compact">
+        {% for sv in SEVERITIES|reverse %}
+        <tr><td>{{ sev(sv) }}</td><td class="num"><a href="/findings?sev={{ sv }}">{{ sev_counts.get(sv, 0) }}</a></td></tr>
+        {% endfor %}
+      </table>
+      <h2 class="layer-title">Últimos jobs</h2>
+      <table class="compact">
+        {% for j in last_jobs %}
+        <tr><td>{{ JOB_LABELS.get(j.job, j.job) }}</td><td><span class="tag tag-{{ 'ok' if j.status == 'ok' else ('err' if j.status == 'error' else 'run') }}">{{ j.status }}</span></td><td class="small">{{ j.finished_at|dtt if j.finished_at else j.requested_at|dtt }}</td></tr>
+        {% else %}
+        <tr><td class="muted">Ainda não correu nenhum job. <a href="/jobs">Executar o pipeline</a>.</td></tr>
+        {% endfor %}
+      </table>
+    </section>
+  </div>
 </div>
 {% endblock %}

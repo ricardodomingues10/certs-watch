@@ -137,3 +137,44 @@ def test_end_to_end(env, pki):
         assert "evaluate" in jobs and "teste" in jobs
         assert len(c.get("/api/findings", auth=auth).json()) >= 8
         assert c.get("/certificados", params={"dias": "7"}, auth=auth).status_code == 200
+
+
+    # Matriz de testes: cada camada com o resultado esperado
+    from certwatch.insights import ancestry, build_tree, check_matrix
+    with session_scope() as s:
+        rows = {r.ep.expected_cn_norm: r for r in check_matrix(s, env, utcnow())}
+        assert rows["app-ok.exemplo.pt"].worst == "ok"
+        assert rows["app-chain.exemplo.pt"].results["cadeia.confianca"].status == "falha"
+        assert rows["app-exp.exemplo.pt"].results["validade.prazo"].status == "falha"
+        assert rows["app-weak.exemplo.pt"].results["cripto.assinatura"].status == "falha"
+        assert rows["app-weak.exemplo.pt"].results["cripto.chave"].status == "falha"
+        assert rows["app-weak.exemplo.pt"].results["identidade.nome"].status == "falha"
+        assert rows["app-issuer.exemplo.pt"].results["inventario.emissor"].status == "aviso"
+        assert rows["app-ok.exemplo.pt"].scope == "interno"       # resolve para 127.0.0.1
+        assert rows["app-ok.exemplo.pt"].type == "hostname"
+
+        # Árvore: raiz (do trust store) → intermédia (vista nas cadeias) → certificados finais
+        roots = build_tree(s, env)
+        root = next(r for r in roots if r.subject_cn == "Exemplo Teste Root CA")
+        assert root.origin == "trust"
+        inter = next(c for c in root.children if c.subject_cn == "Exemplo Teste Issuing CA")
+        leaf_names = {c.subject_cn for c in inter.children}
+        assert {"app-ok.exemplo.pt", "app-chain.exemplo.pt", "app-weak.exemplo.pt"} <= leaf_names
+        ok_sha = next(c.key for c in inter.children if c.subject_cn == "app-ok.exemplo.pt")
+        up, node = ancestry(s, env, ok_sha)
+        assert [n.subject_cn for n in up] == ["Exemplo Teste Root CA", "Exemplo Teste Issuing CA"]
+        assert node.endpoints and node.endpoints[0].startswith("127.0.0.1:")
+
+    with TestClient(app) as c:
+        assert "Cadeia completa e confiável" in c.get("/testes", auth=auth).text
+        t1 = c.get("/testes", params={"teste": "cadeia.confianca"}, auth=auth).text
+        assert "app-chain.exemplo.pt" in t1 and "Como corrigir" in t1 and "app-ok.exemplo.pt" not in t1
+        assert "Exemplo Teste Issuing CA" in c.get("/arvore", auth=auth).text
+        cert_page = c.get(f"/cert/{ok_sha}", auth=auth).text
+        assert "Exemplo Teste Root CA" in cert_page and "127.0.0.1" in cert_page
+        det = c.get("/certificados/detalhe", params={"cn": "app-weak.exemplo.pt"}, auth=auth).text
+        assert "Como corrigir" in det and "SHA1" in det
+        assert c.get("/testes/como-funciona", auth=auth).status_code == 200
+        assert c.get("/apis", auth=auth).status_code == 200
+        assert c.get("/certificados", params={"estado": "falha", "tipo": "hostname", "ambito": "interno"}, auth=auth).status_code == 200
+        assert len(c.get("/api/testes", auth=auth).json()) == 6

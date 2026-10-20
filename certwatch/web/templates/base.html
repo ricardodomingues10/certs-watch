@@ -12,16 +12,19 @@
   <nav>
     {% set p = request.url.path %}
     <a href="/" class="{{ 'on' if p == '/' }}">Painel</a>
-    <a href="/certificados" class="{{ 'on' if p.startswith('/certificados') }}">Certificados</a>
-    <a href="/findings" class="{{ 'on' if p.startswith('/findings') }}">Findings</a>
+    <a href="/certificados" class="{{ 'on' if p.startswith('/certificados') or p.startswith('/cert/') }}">Certificados</a>
+    <a href="/testes" class="{{ 'on' if p.startswith('/testes') }}">Testes</a>
+    <a href="/arvore" class="{{ 'on' if p.startswith('/arvore') }}">Árvore</a>
+    <a href="/apis" class="{{ 'on' if p.startswith('/apis') }}">APIs</a>
+    <a href="/findings" class="{{ 'on' if p.startswith('/findings') }}">Alertas</a>
     <a href="/endpoints" class="{{ 'on' if p.startswith('/endpoints') }}">Endpoints</a>
-    <a href="/jobs" class="{{ 'on' if p.startswith('/jobs') }}">Jobs e auditoria</a>
+    <a href="/jobs" class="{{ 'on' if p.startswith('/jobs') }}">Jobs</a>
   </nav>
   <span class="who">{{ user }}</span>
 </header>
 <main>
 {% block content %}{% endblock %}
 </main>
-<footer>certwatch {{ version }} · datas em hora de Lisboa</footer>
+<footer>certwatch {{ version }} · datas em hora de Lisboa · <a href="/testes/como-funciona">Como testamos</a></footer>
 </body>
 </html>

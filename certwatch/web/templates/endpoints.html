@@ -28,7 +28,7 @@
       <td class="mono">{{ e.host }}:{{ e.port }}</td>
       <td><a href="/certificados/detalhe?cn={{ e.expected_cn_norm|urlencode }}">{{ e.expected_cn_norm }}</a></td>
       <td>{{ e.source }}</td>
-      <td>{% if e.enabled %}{{ scanstatus(sr.status if sr else None) }}{% else %}<span class="st st-off">desativado</span>{% endif %}</td>
+      <td>{% if e.enabled %}{{ scanstatus(sr.status if sr else None) }}{% else %}<span class="tag tag-off">desativado</span>{% endif %}</td>
       <td>{{ sr.scanned_at|dtt if sr else '—' }}</td>
       <td class="num">{{ e.consecutive_failures }}</td>
       <td class="small">{{ e.note }}{% if sr and sr.error %}<div class="muted">{{ sr.error[:160] }}</div>{% endif %}</td>

@@ -9,18 +9,18 @@ from datetime import timedelta
 from sqlalchemy import delete, select
 from sqlalchemy.orm import Session
 
-from .collectors.ucmdb import fetch_certificates
+from .collectors.ucmdb import fetch_apis, fetch_certificates
 from .config import Settings
 from .db import LOCK_PIPELINE, JobBusy, advisory_lock, session_scope, utcnow
 from .evaluator import evaluate
-from .models import Certificate, CmdbRecord, Endpoint, JobRun, ScanResult
+from .models import ApiRecord, Certificate, CmdbRecord, Endpoint, JobRun, ScanResult
 from .normalize import classify, is_ip, is_valid_hostname, norm_host, norm_issuer, parse_iso
 from .scanner import ScanOutcome, scan_endpoint, summarize
 from .trust import build_bundle
 
 log = logging.getLogger(__name__)
 
-JOBS = ("pipeline", "ingest_cmdb", "scan", "evaluate")
+JOBS = ("pipeline", "ingest_cmdb", "ingest_apis", "scan", "evaluate")
 SCAN_RETENTION_DAYS = 90
 
 
@@ -105,6 +105,64 @@ def ingest_cmdb(session: Session, settings: Settings, records: list[dict] | None
     }
 
 
+# ---------------------------------------------------------------- ingestão de APIs
+def ingest_apis(session: Session, settings: Settings, records: list[dict] | None = None,
+                fields: dict | None = None) -> dict:
+    if records is None:
+        records, fields = fetch_apis(settings)
+    valid = [r for r in records if r.get("ucmdb_id")]
+    if len(valid) < settings.apis_min:
+        raise IngestAborted(f"A lista de APIs devolveu {len(valid)} registos (mínimo: {settings.apis_min}).")
+
+    now = utcnow()
+    existing = {a.ucmdb_id: a for a in session.scalars(select(ApiRecord))}
+    seen: set[str] = set()
+    created = sem_url = 0
+    for r in valid:
+        api = existing.get(r["ucmdb_id"])
+        if api is None:
+            api = ApiRecord(ucmdb_id=r["ucmdb_id"], first_seen=now)
+            session.add(api)
+            existing[r["ucmdb_id"]] = api
+            created += 1
+        for k in ("name", "url", "scheme", "host", "port", "expiry", "extra"):
+            setattr(api, k, r.get(k))
+        api.active, api.last_seen = True, now
+        if not api.host:
+            sem_url += 1
+        seen.add(r["ucmdb_id"])
+    for uid, api in existing.items():
+        if uid not in seen:
+            api.active = False
+    session.flush()
+
+    # Endpoints: um por host:porta das APIs com TLS
+    targets: dict[tuple[str, int], str] = {}
+    for api in existing.values():
+        if not api.active or not api.host or api.scheme == "http":
+            continue
+        if not (is_valid_hostname(api.host) or is_ip(api.host)):
+            continue
+        targets[(api.host, api.port or settings.scan_default_port)] = api.host
+    endpoints = {(e.host, e.port): e for e in session.scalars(select(Endpoint))}
+    ep_created = 0
+    for (host, port), cn in targets.items():
+        ep = endpoints.get((host, port))
+        note = "" if port in settings.scan_allowed_ports else \
+            f"porta {port} não está em CERTWATCH_SCAN_ALLOWED_PORTS"
+        if ep is None:
+            session.add(Endpoint(host=host, port=port, expected_cn_norm=cn, source="api", note=note))
+            ep_created += 1
+        elif not ep.enabled and ep.source == "api":
+            ep.enabled, ep.note = True, note
+    for (host, port), ep in endpoints.items():
+        if ep.source == "api" and ep.enabled and (host, port) not in targets:
+            ep.enabled, ep.note = False, "desativado: API já não está na lista"
+
+    return {"recebidos": len(records), "novos": created, "sem_url": sem_url,
+            "endpoints_criados": ep_created, "campos": fields or {}}
+
+
 # ---------------------------------------------------------------- scan
 def _valid_target(ep: Endpoint, settings: Settings) -> bool:
     return (is_valid_hostname(ep.host) or is_ip(ep.host)) and ep.port in settings.scan_allowed_ports
@@ -140,6 +198,7 @@ def _store_outcome(session: Session, ep: Endpoint, out: ScanOutcome) -> ScanResu
         error=out.error,
         tls_version=out.tls_version,
         cipher=out.cipher,
+        resolved_ip=out.resolved_ip,
         verify_ok=out.verify_ok,
         verify_code=out.verify_code,
         verify_message=out.verify_message,
@@ -196,6 +255,9 @@ def _run(job: str, settings: Settings) -> dict:
     if job == "ingest_cmdb":
         with session_scope() as s:
             return {"ingest_cmdb": ingest_cmdb(s, settings)}
+    if job == "ingest_apis":
+        with session_scope() as s:
+            return {"ingest_apis": ingest_apis(s, settings)}
     if job == "scan":
         with session_scope() as s:
             return {"scan": run_scan(s, settings)}
@@ -210,6 +272,13 @@ def _run(job: str, settings: Settings) -> dict:
         except Exception as exc:  # continua com os dados que já existem
             log.exception("Ingestão CMDB falhou")
             summary["ingest_cmdb"] = {"erro": str(exc)}
+        if settings.ucmdb_tql_apis:
+            try:
+                with session_scope() as s:
+                    summary["ingest_apis"] = ingest_apis(s, settings)
+            except Exception as exc:
+                log.exception("Ingestão de APIs falhou")
+                summary["ingest_apis"] = {"erro": str(exc)}
         with session_scope() as s:
             summary["scan"] = run_scan(s, settings)
         with session_scope() as s:

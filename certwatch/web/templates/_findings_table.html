@@ -5,7 +5,8 @@
   {% for f in findings %}
     <tr class="{{ 'faded' if f.status == 'resolvido' }}">
       <td>{{ sev(f.severity) }}</td>
-      <td title="{{ f.type }}">{{ FINDING_TYPES.get(f.type, f.type) }}</td>
+      <td title="{{ f.type }}">{{ FINDING_TYPES.get(f.type, f.type) }}
+        {% if FINDING_CHECK.get(f.type) %}<div class="small"><a href="/testes/como-funciona#{{ FINDING_CHECK[f.type] }}">como corrigir</a></div>{% endif %}</td>
       <td>{% if f.cn_norm %}<a href="/certificados/detalhe?cn={{ f.cn_norm|urlencode }}">{{ f.subject }}</a>{% else %}{{ f.subject }}{% endif %}</td>
       <td class="small">
         {% for k, v in f.details.items() %}<div><span class="muted">{{ k }}:</span> {% if v is iterable and v is not string %}{{ v|join('; ') }}{% else %}{{ v }}{% endif %}</div>{% endfor %}

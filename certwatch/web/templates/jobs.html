@@ -5,12 +5,12 @@
 
 <section class="card">
   <h2>Executar agora</h2>
-  <p class="muted small">O pipeline completo (CMDB → scan → avaliação) corre automaticamente todos os dias às {{ daily_at }}. Os pedidos ficam em fila e são executados pelo worker em segundos.</p>
+  <p class="muted small">O pipeline completo (CMDB → lista de APIs → verificação dos servidores → avaliação) corre automaticamente todos os dias às {{ daily_at }}. Os pedidos ficam em fila e são executados pelo worker em segundos.</p>
   <div class="inline">
-    {% for j, label in [('pipeline','Pipeline completo'),('ingest_cmdb','Só importar CMDB'),('scan','Só verificar endpoints'),('evaluate','Só reavaliar regras')] %}
+    {% for j in jobs %}
     <form method="post" action="/jobs/{{ j }}">
       <input type="hidden" name="csrf" value="{{ csrf }}">
-      <button class="{{ 'primary' if j == 'pipeline' }}">{{ label }}</button>
+      <button class="{{ 'primary' if j == 'pipeline' }}">{{ JOB_LABELS.get(j, j) }}</button>
     </form>
     {% endfor %}
   </div>
@@ -23,8 +23,8 @@
     <tbody>
     {% for r in runs %}
       <tr>
-        <td>{{ r.id }}</td><td>{{ r.job }}</td><td>{{ r.requested_by }}</td>
-        <td><span class="st st-{{ 'ok' if r.status == 'ok' else ('err' if r.status == 'error' else 'run') }}">{{ r.status }}</span></td>
+        <td>{{ r.id }}</td><td>{{ JOB_LABELS.get(r.job, r.job) }}</td><td>{{ r.requested_by }}</td>
+        <td><span class="tag tag-{{ 'ok' if r.status == 'ok' else ('err' if r.status == 'error' else 'run') }}">{{ r.status }}</span></td>
         <td>{{ r.requested_at|dtt }}</td><td>{{ r.finished_at|dtt if r.finished_at else '—' }}</td>
         <td class="small">
           {% for k, v in r.summary.items() if k != 'trace' %}<div><span class="muted">{{ k }}:</span> {% if v is mapping %}{% for k2, v2 in v.items() %}{{ k2 }}={{ v2 }} {% endfor %}{% else %}{{ v }}{% endif %}</div>{% endfor %}

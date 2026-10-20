@@ -1,0 +1,37 @@
+{% extends "base.html" %}
+{% block title %}Como testamos{% endblock %}
+{% block content %}
+<p class="crumb"><a href="/testes">Testes</a> /</p>
+<h1>Como testamos</h1>
+<p class="sub">Para cada servidor, o certwatch faz o mesmo que um browser: liga-se, recebe o certificado e a cadeia, e confirma que tudo está em ordem.
+Não envia dados nem credenciais. Os testes estão em camadas: se a rede falha, não há ligação para testar o resto.</p>
+
+{% for lid, ltitle, lq in LAYERS %}
+<section class="card" id="camada-{{ lid }}">
+  <h2>{{ ltitle }} <small>{{ lq }}</small></h2>
+  {% for c in CHECKS if c.layer == lid %}
+  <div class="test" id="{{ c.id }}">
+    <span class="cell cell-ok">✓</span>
+    <div>
+      <div class="t-title">{{ c.title }}</div>
+      <div>{{ c.question }}</div>
+      <div class="t-detail"><b>Como é testado:</b> {{ c.how }}</div>
+      <div class="t-detail"><b>Se falhar:</b> {{ c.meaning }}</div>
+      <details><summary>Como corrigir</summary><ol>{% for s in c.fix %}<li>{{ s }}</li>{% endfor %}</ol></details>
+      <div class="small"><a href="/testes?teste={{ c.id }}">Ver servidores com problemas neste teste</a></div>
+    </div>
+  </div>
+  {% endfor %}
+</section>
+{% endfor %}
+
+<section class="card">
+  <h2>Alertas que não vêm de um servidor</h2>
+  <ul>
+    <li><b>Expiração pela CMDB</b>: quando nenhum servidor confirma o certificado, a data da CMDB é usada para avisar a tempo.</li>
+    <li><b>Registo expirado na CMDB</b>: certificados expirados há mais de 30 dias que continuam ativos na CMDB (limpeza do inventário).</li>
+    <li><b>Wildcard sem servidores</b>: um wildcard só pode ser testado se soubermos onde está instalado. Adicione os servidores em Endpoints.</li>
+    <li><b>APIs</b>: validade registada na lista de APIs a terminar, e APIs publicadas sem TLS (http://).</li>
+  </ul>
+</section>
+{% endblock %}

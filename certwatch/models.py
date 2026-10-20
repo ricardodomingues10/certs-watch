@@ -70,6 +70,8 @@ class Certificate(Base):
     key_type: Mapped[str] = mapped_column(String(16), default="")
     key_bits: Mapped[int | None] = mapped_column(Integer, nullable=True)
     spki_sha256: Mapped[str] = mapped_column(String(64), default="", index=True)
+    ski: Mapped[str] = mapped_column(String(64), default="", index=True)   # Subject Key Identifier
+    aki: Mapped[str] = mapped_column(String(64), default="", index=True)   # Authority Key Identifier
     is_ca: Mapped[bool] = mapped_column(Boolean, default=False)
     self_issued: Mapped[bool] = mapped_column(Boolean, default=False)
     pem: Mapped[str] = mapped_column(Text, default="")
@@ -87,12 +89,32 @@ class ScanResult(Base):
     error: Mapped[str] = mapped_column(Text, default="")
     tls_version: Mapped[str] = mapped_column(String(16), default="")
     cipher: Mapped[str] = mapped_column(String(128), default="")
+    resolved_ip: Mapped[str] = mapped_column(String(64), default="")
     verify_ok: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
     verify_code: Mapped[int | None] = mapped_column(Integer, nullable=True)
     verify_message: Mapped[str] = mapped_column(Text, default="")
     leaf_sha256: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
     chain: Mapped[list] = mapped_column(JSON, default=list)
     duration_ms: Mapped[float] = mapped_column(Float, default=0.0)
+
+
+class ApiRecord(Base):
+    """Uma API da lista da UCMDB. Só se guardam campos não sensíveis."""
+
+    __tablename__ = "api_records"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    ucmdb_id: Mapped[str] = mapped_column(String(64), unique=True, index=True)
+    name: Mapped[str] = mapped_column(String(512), default="")
+    url: Mapped[str] = mapped_column(String(1024), default="")
+    scheme: Mapped[str] = mapped_column(String(16), default="")
+    host: Mapped[str] = mapped_column(String(253), default="", index=True)
+    port: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    expiry: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    extra: Mapped[dict] = mapped_column(JSON, default=dict)
+    active: Mapped[bool] = mapped_column(Boolean, default=True, index=True)
+    first_seen: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    last_seen: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 
 
 class Finding(Base):

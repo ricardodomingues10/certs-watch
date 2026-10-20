@@ -1,23 +1,25 @@
-# certwatch 0.1
+# certwatch 0.2
 
 Aplicação autónoma de gestão de certificados X.509 de uma organização. Não depende do n8n.
 
 **O que faz:**
 1. Importa os certificados da UCMDB por REST API (TQL configurável). Da CMDB usa **apenas** CommonName, ValidTo e Issuer/IssuerName.
 2. Liga-se por TLS a cada endpoint e observa o certificado **realmente servido**: chain completa, validação contra as CAs confiáveis (públicas e raízes internas), hostname, algoritmos, chave e protocolo.
-3. Cruza a CMDB com a realidade e gera *findings* com ciclo de vida (aberto → aceite com prazo → resolvido automaticamente).
-4. Disponibiliza uma interface web (inventário, findings, endpoints, jobs, auditoria) e uma API JSON só de leitura.
+3. Cruza a CMDB com a realidade e gera alertas com ciclo de vida (aberto → aceite com prazo → resolvido automaticamente).
+4. Importa a lista de APIs da UCMDB (opcional) e verifica o certificado do servidor de cada API, sem nunca importar segredos.
+5. Classifica cada certificado por tipo (Hostname, Wildcard, IP, API, CA, outro) e âmbito (interno/externo).
+6. Mostra a árvore de certificados (raiz → intermédias → certificados finais) e uma aba de testes por camada, com o que significa cada falha e como corrigir.
 
-Fora desta versão: tickets ITSM, escrita `certs_update.csv`/UCMDB, CT, AVI, ADCS, email.
+Fora desta versão: tickets ITSM, escrita na UCMDB, Certificate Transparency, AVI, ADCS, email.
 
 ---
 
 ## 1. Instalação no servidor de testes
 
-Requisitos: Docker com o plugin `compose`, e acesso a `docker.io` e PyPI para o build. Se o servidor não tiver acesso, ver a secção 7.
+Requisitos: Docker com o plugin `compose`, e acesso a `docker.io` e PyPI para o build. Se o servidor não tiver acesso, ver a secção 9.
 
 ```bash
-sudo unzip ~/certwatch-0.1.0.zip -d /opt     # cria /opt/certwatch
+sudo git clone https://github.com/ricardodomingues10/certs-watch.git /opt/certwatch
 sudo chown -R "$USER" /opt/certwatch
 cd /opt/certwatch
 cp .env.example .env                         # definir os valores reais (URL e TQL da UCMDB, etc.)
@@ -31,8 +33,8 @@ openssl rand -base64 32 | tr -d '\n' > secrets/db_password
 printf '%s' 'conta-servico-ucmdb'      > secrets/ucmdb_user
 printf '%s' 'PASSWORD_DA_CONTA'        > secrets/ucmdb_password
 openssl rand -base64 18 | tr -d '\n' > secrets/admin_password   # login da interface (utilizador: admin)
-sudo chown 10001:10001 secrets/*       # o contentor corre como UID 10001
-sudo chmod 400 secrets/*
+S='secrets/db_password secrets/ucmdb_user secrets/ucmdb_password secrets/admin_password'
+sudo chown 10001:10001 $S && sudo chmod 400 $S     # o contentor corre como UID 10001
 ```
 
 Use uma **conta de serviço UCMDB só de leitura**, não uma conta pessoal nem `sysadmin`. Para fazer `printf` de uma password com plicas, use `read -rs P; printf '%s' "$P" > secrets/ucmdb_password; unset P`.
@@ -82,18 +84,39 @@ Abrir `http://localhost:8088`. O utilizador é `admin` e a palavra-passe é o co
 
 | Página | Para que serve |
 |---|---|
-| Painel | Contagens por prazo e severidade, o que precisa de atenção imediata, últimos jobs |
-| Certificados | Inventário por CN: data CMDB vs. data live, prazo efetivo, pior finding. Filtros por prazo, severidade e tipo |
-| Detalhe | Registos CMDB, endpoints, chain apresentada, validação, histórico de verificações, findings |
-| Findings | Lista filtrável; **aceitar risco** (com justificação obrigatória e data de expiração até 1 ano) ou reabrir |
-| Endpoints | Alvos de verificação; adicionar endpoints manuais (ex.: hosts que servem um wildcard) |
-| Jobs e auditoria | Executar jobs, histórico de execuções, registo de quem fez o quê |
+| Painel | Quantos certificados há, quantos falham, por tipo e âmbito, expirações dos próximos 12 meses, testes com mais falhas |
+| Certificados | Inventário com estado, tipo, âmbito, situação em linguagem simples e prazo. Filtros por tudo isto |
+| Detalhe | Todos os testes do servidor por camada, com **o que significa e como corrigir** cada falha; cadeia; registos CMDB; alertas |
+| Testes | Resumo de cada teste e matriz servidor × teste; clicar num teste mostra os servidores com problemas e a correção |
+| Como testamos | Explicação de cada teste, de como é feito e de como se corrige |
+| Árvore | Raízes → intermédias → certificados finais, com onde cada um está instalado e quantos registos CMDB indicam cada CA |
+| APIs | Lista de APIs da CMDB, certificado do servidor de cada uma e validade registada na lista |
+| Alertas | Lista filtrável; **aceitar risco** (justificação obrigatória e prazo até 1 ano) ou reabrir |
+| Endpoints | Alvos de verificação; adicionar endpoints manuais (ex.: servidores que usam um wildcard) |
+| Jobs | Executar jobs, histórico de execuções e auditoria |
 
-API só de leitura (mesma autenticação): `GET /api/inventario`, `GET /api/findings?status=aberto|aceite|resolvido`.
+API só de leitura (mesma autenticação): `GET /api/inventario`, `GET /api/testes`, `GET /api/findings?status=aberto|aceite|resolvido`.
 
 ---
 
-## 3. Regras (findings)
+## 3. Lista de APIs (opcional)
+
+1. Ver os atributos do TQL, sem valores sensíveis:
+   ```bash
+   docker compose exec worker python -m certwatch.cli inspect-tql NOME_DO_TQL
+   ```
+2. Definir `CERTWATCH_UCMDB_TQL_APIS=NOME_DO_TQL` no `.env`. Os campos de nome, URL e validade são detetados sozinhos; se a deteção errar, defina `CERTWATCH_APIS_FIELD_NAME`, `_URL` e `_EXPIRY`.
+3. `docker compose up -d`, e depois em **Jobs → Importar lista de APIs**.
+
+Atributos com nomes como *secret*, *password*, *token* ou *key* nunca são guardados (exceto se forem datas, como `secret_expiration_date`). Textos longos também são descartados.
+
+## 4. Classificação
+
+- **Tipo**: API (está na lista de APIs) · Wildcard · Endereço IP · Hostname · Autoridade (CA) · Outro.
+- **Âmbito**: interno se o nome termina num sufixo de `CERTWATCH_INTERNAL_SUFFIXES`, se o IP (ou o IP para onde o nome resolve) é privado, ou se o emissor contém um padrão de `CERTWATCH_INTERNAL_ISSUER_PATTERNS`. Os restantes nomes são externos.
+- **Estado**: Falha (alerta alto ou crítico) · Atenção (alerta médio ou baixo) · OK (verificado sem alertas) · Por verificar · Só CMDB (sem servidor para testar, ex.: CAs).
+
+## 5. Regras (alertas)
 
 | Tipo | Severidade | Quando |
 |---|---|---|
@@ -102,6 +125,9 @@ API só de leitura (mesma autenticação): `GET /api/inventario`, `GET /api/find
 | `RENOVACAO_NAO_INSTALADA` | alta | A CMDB tem uma data posterior à do certificado servido: renovou-se mas não foi instalado |
 | `RENOVADO_NAO_REFLETIDO` | baixa | O endpoint serve um certificado mais recente do que o da CMDB |
 | `ISSUER_DIVERGENTE` | média | O emissor servido não corresponde a nenhum emissor registado na CMDB para esse CN |
+| `NAO_REGISTADO_CMDB` | baixa | Um servidor (API ou manual) usa um certificado que não está na CMDB |
+| `API_EXPIRACAO` | como `EXPIRACAO` | A validade registada na lista de APIs está a terminar |
+| `API_SEM_TLS` | alta | A API está publicada em `http://` |
 | `CHAIN_INVALIDA` | média | Intermédia em falta, raiz desconhecida, intermédia expirada… (código e motivo OpenSSL) |
 | `VALIDACAO_INCOMPLETA` | baixa | O handshake com validação falhou por outro motivo (protocolo, cifra) |
 | `HOSTNAME_MISMATCH` | média | O certificado não cobre o nome do endpoint (RFC 6125: wildcard só cobre um nível) |
@@ -117,7 +143,7 @@ API só de leitura (mesma autenticação): `GET /api/inventario`, `GET /api/find
 
 ---
 
-## 4. Segurança da própria aplicação
+## 6. Segurança da própria aplicação
 
 - A interface escuta só em localhost; o acesso é por túnel SSH. Autenticação HTTP Basic, proteção CSRF (cookie `SameSite=Strict` + token), CSP restritiva, `X-Frame-Options: DENY` e redirecionamentos apenas para caminhos locais.
 - Os segredos ficam em ficheiros montados (`/run/secrets`), nunca em variáveis de ambiente nem no código.
@@ -130,7 +156,7 @@ API só de leitura (mesma autenticação): `GET /api/inventario`, `GET /api/find
 
 ---
 
-## 5. Operação
+## 7. Operação
 
 ```bash
 docker compose logs --tail 100 worker                     # o que o worker está a fazer
@@ -139,11 +165,11 @@ docker compose exec db pg_dump -U certwatch certwatch | gzip > backup-$(date +%F
 docker compose down          # parar (os dados ficam no volume pgdata)
 ```
 
-Atualizar: substituir o código, depois `docker compose build && docker compose up -d`.
+Atualizar: `git pull && docker compose up -d --build`. O esquema da base de dados é atualizado sozinho no arranque.
 
 ---
 
-## 6. Desenvolvimento e testes
+## 8. Desenvolvimento e testes
 
 ```bash
 python -m venv .venv && . .venv/bin/activate
@@ -156,12 +182,12 @@ Os testes levantam servidores TLS reais em localhost com uma PKI de teste (chain
 
 ---
 
-## 7. Servidor sem acesso à internet
+## 9. Servidor sem acesso à internet
 
 Fazer o build numa máquina com acesso e transferir a imagem:
 
 ```bash
-docker compose build && docker save certwatch:0.1.0 postgres:16-alpine | gzip > certwatch-images.tar.gz
+docker compose build && docker save certwatch:0.2.0 postgres:16-alpine | gzip > certwatch-images.tar.gz
 # no servidor:
 gunzip -c certwatch-images.tar.gz | docker load && docker compose up -d --no-build
 ```

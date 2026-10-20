@@ -1,0 +1,86 @@
+{% extends "base.html" %}
+{% from "_macros.html" import cell, state, type_chip, scope_chip, stackbar, fixbox %}
+{% block title %}Testes{% endblock %}
+{% block content %}
+<h1>Testes</h1>
+<p class="sub">Todos os servidores conhecidos passam pelos mesmos {{ CHECKS|length }} testes, organizados por camadas, da rede até ao inventário.
+Uma falha numa camada impede os testes das camadas seguintes (ficam "não testado"). <a href="/testes/como-funciona">Como funciona cada teste</a>.</p>
+
+<section class="card">
+  <h2>Resumo por teste <small>{{ matrix|length }} servidores</small></h2>
+  {% for lid, ltitle, lq in LAYERS %}
+    <div class="layer-title">{{ ltitle }} · <span class="muted">{{ lq }}</span></div>
+    {% for c in CHECKS if c.layer == lid %}{% set t = totals[c.id] %}
+    {% set tested = t.get('falha',0) + t.get('aviso',0) + t.get('ok',0) %}
+    <div class="check-row">
+      <a href="/testes?teste={{ c.id }}" title="{{ c.question }}">{{ c.title }}</a>
+      {{ stackbar([('falha', t.get('falha',0), 'Falhou'), ('aviso', t.get('aviso',0), 'Atenção'), ('ok', t.get('ok',0), 'Passou'),
+                   ('na', t.get('na',0) + t.get('nt',0), 'Não testado / não se aplica')], tested + t.get('na',0) + t.get('nt',0)) }}
+      <span class="counts">{% if t.get('falha',0) %}<b>{{ t.get('falha',0) }} falharam</b>{% endif %}{% if t.get('aviso',0) %}{{ ' · ' if t.get('falha',0) }}<em>{{ t.get('aviso',0) }} atenção</em>{% endif %}{% if not t.get('falha',0) and not t.get('aviso',0) %}{{ t.get('ok',0) }} passaram{% endif %}</span>
+    </div>
+    {% endfor %}
+  {% endfor %}
+  <div class="legend">
+    <span><i class="lg lg-falha"></i>Falhou</span><span><i class="lg lg-aviso"></i>Atenção</span>
+    <span><i class="lg lg-ok"></i>Passou</span><span><i class="lg lg-na"></i>Não testado / não se aplica</span>
+  </div>
+</section>
+
+{% if teste %}
+<section class="card">
+  {% set c = CHECK_BY_ID[teste] %}
+  <h2>{{ c.title }} <small>{{ n_rows }} servidor(es) {{ 'com problemas' if not estado else 'com estado ' + STATUS_LABELS.get(estado, estado) }}</small></h2>
+  <p>{{ c.question }} <span class="muted">{{ c.how }}</span></p>
+  {{ fixbox(c.id, 'falha') }}
+  <p class="small"><a href="/testes">← voltar à matriz completa</a></p>
+</section>
+{% endif %}
+
+<form class="filters" method="get">
+  {% if teste %}<input type="hidden" name="teste" value="{{ teste }}">{% endif %}
+  <input type="search" id="t-q" name="q" value="{{ q }}" placeholder="servidor ou nome" aria-label="Pesquisar">
+  <select id="t-estado" name="estado" aria-label="Resultado">
+    <option value="">{{ 'Falhas e avisos' if teste else 'Qualquer resultado' }}</option>
+    {% for k in ('falha', 'aviso', 'ok', 'nt') %}<option value="{{ k }}" {{ 'selected' if estado == k }}>{{ 'Pior resultado: ' if not teste }}{{ STATUS_LABELS[k] }}</option>{% endfor %}
+  </select>
+  <select id="t-tipo" name="tipo" aria-label="Tipo">
+    <option value="">Qualquer tipo</option>
+    {% for k, l in TYPE_LABELS.items() %}<option value="{{ k }}" {{ 'selected' if tipo == k }}>{{ l }}</option>{% endfor %}
+  </select>
+  <select id="t-ambito" name="ambito" aria-label="Âmbito">
+    <option value="">Interno e externo</option>
+    {% for k, l in SCOPE_LABELS.items() %}<option value="{{ k }}" {{ 'selected' if ambito == k }}>{{ l }}</option>{% endfor %}
+  </select>
+  <button>Filtrar</button>
+  {% if q or estado or tipo or ambito or teste %}<a href="/testes">limpar</a>{% endif %}
+</form>
+
+<div class="card scroll">
+  <table class="matrix">
+    <thead>
+      <tr class="layer-head"><th colspan="3"></th>
+        {% for lid, ltitle, lq in LAYERS %}<th colspan="{{ CHECKS|selectattr('layer','equalto',lid)|list|length }}">{{ ltitle }}</th>{% endfor %}
+      </tr>
+      <tr>
+        <th>Servidor</th><th>Tipo</th><th>Resultado</th>
+        {% for c in CHECKS %}<th class="rot" title="{{ c.question }}"><a href="/testes?teste={{ c.id }}">{{ c.title }}</a></th>{% endfor %}
+      </tr>
+    </thead>
+    <tbody>
+    {% for r in rows %}
+      <tr>
+        <td><a href="/certificados/detalhe?cn={{ r.ep.expected_cn_norm|urlencode }}" class="mono">{{ r.ep.host }}:{{ r.ep.port }}</a>
+          {% if r.ep.expected_cn_norm != r.ep.host %}<div class="small muted">espera {{ r.ep.expected_cn_norm }}</div>{% endif %}</td>
+        <td>{{ type_chip(r.type) }} {{ scope_chip(r.scope) }}</td>
+        <td>{{ state(r.worst) }}</td>
+        {% for c in CHECKS %}<td class="c">{{ cell(r.results.get(c.id), c.id) }}</td>{% endfor %}
+      </tr>
+    {% else %}
+      <tr><td colspan="{{ 3 + CHECKS|length }}" class="muted">Nenhum servidor corresponde aos filtros{% if not matrix %}. Corra o pipeline em <a href="/jobs">Jobs</a>{% endif %}.</td></tr>
+    {% endfor %}
+    </tbody>
+  </table>
+  {% if n_rows > rows|length %}<p class="muted small">A mostrar {{ rows|length }} de {{ n_rows }}. Use os filtros para reduzir.</p>{% endif %}
+</div>
+<p class="muted small">Passe o rato sobre um quadrado para ver o detalhe. Abra o servidor para ver cada teste com a explicação e os passos de correção.</p>
+{% endblock %}

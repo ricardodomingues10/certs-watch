@@ -6,7 +6,7 @@ from datetime import datetime, timezone
 from functools import lru_cache
 from typing import Iterator
 
-from sqlalchemy import create_engine, text
+from sqlalchemy import create_engine, inspect, text
 from sqlalchemy.engine import Engine
 from sqlalchemy.orm import DeclarativeBase, Session, sessionmaker
 
@@ -85,8 +85,34 @@ def advisory_lock(key: int, wait: bool = False) -> Iterator[None]:
             conn.commit()
 
 
+# Colunas acrescentadas depois da v0.1 (bases de dados já existentes não as têm)
+_ADDED_COLUMNS = [
+    ("certificates", "ski", "VARCHAR(64) NOT NULL DEFAULT ''"),
+    ("certificates", "aki", "VARCHAR(64) NOT NULL DEFAULT ''"),
+    ("scan_results", "resolved_ip", "VARCHAR(64) NOT NULL DEFAULT ''"),
+]
+
+
+_ADDED_INDEXES = [
+    "CREATE INDEX IF NOT EXISTS ix_certificates_ski ON certificates (ski)",
+    "CREATE INDEX IF NOT EXISTS ix_certificates_aki ON certificates (aki)",
+]
+
+
+def _migrate(engine: Engine) -> None:
+    insp = inspect(engine)
+    with engine.begin() as conn:
+        for table, column, ddl in _ADDED_COLUMNS:
+            if table in insp.get_table_names() and column not in {c["name"] for c in insp.get_columns(table)}:
+                conn.execute(text(f"ALTER TABLE {table} ADD COLUMN {column} {ddl}"))
+        for ddl in _ADDED_INDEXES:
+            conn.execute(text(ddl))
+
+
 def init_db() -> None:
     from . import models  # noqa: F401  (regista as tabelas)
 
     with advisory_lock(LOCK_INIT_DB, wait=True):
-        Base.metadata.create_all(get_engine())
+        engine = get_engine()
+        Base.metadata.create_all(engine)
+        _migrate(engine)

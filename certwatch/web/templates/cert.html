@@ -1,0 +1,76 @@
+{% extends "base.html" %}
+{% from "_macros.html" import days %}
+{% block title %}{{ node.subject_cn or 'Certificado' }}{% endblock %}
+{% block content %}
+<p class="crumb"><a href="/arvore">Árvore</a> /</p>
+<div class="head">
+  <h1>{{ node.subject_cn or '(sem CN)' }}</h1>
+  <span class="chip">{{ 'Autoridade (CA)' if node.is_ca else 'Certificado final' }}</span>
+  {% if node.subject_dn == node.issuer_dn %}<span class="chip">Raiz</span>{% endif %}
+  {% if node.origin == 'trust' %}<span class="chip">no trust store</span>{% endif %}
+</div>
+<p class="sub">{% if node.subject_dn == node.issuer_dn %}Uma raiz assina-se a si própria e está no topo da cadeia: tudo abaixo dela depende dela.
+{% elif node.is_ca %}Uma autoridade intermédia: foi assinada pela entidade acima e assina os certificados abaixo.
+{% else %}Certificado final, instalado num servidor. Foi assinado pela entidade acima.{% endif %}</p>
+
+<section class="card">
+  <h2>Posição na cadeia</h2>
+  <ul class="tree">
+    {% for a in up %}
+    <li><span class="node {{ 'root' if loop.first }} {{ 'virtual' if a.origin == 'virtual' }}">
+      {% if a.origin == 'virtual' %}{{ a.subject_cn }} <span class="meta">emissor não observado</span>
+      {% else %}<a href="/cert/{{ a.key }}">{{ a.subject_cn }}</a> <span class="meta">expira {{ a.not_after|dt }}</span>{% endif %}
+    </span><ul>
+    {% endfor %}
+    <li><span class="node root"><b>{{ node.subject_cn }}</b> <span class="meta">este certificado</span></span>
+      {% if node.children %}<ul>
+        {% for c in node.children[:300] %}
+        <li><span class="node"><a href="/cert/{{ c.key }}">{{ c.subject_cn or c.key[:12] }}</a>
+          <span class="meta">{{ 'CA' if c.is_ca else 'final' }} · expira {{ c.not_after|dt }}{% if c.endpoints %} · {{ c.endpoints|length }} servidor(es){% endif %}</span></span></li>
+        {% endfor %}
+        {% if node.children|length > 300 %}<li class="muted">… e mais {{ node.children|length - 300 }}</li>{% endif %}
+      </ul>{% endif %}
+    </li>
+    {% for a in up %}</ul></li>{% endfor %}
+  </ul>
+</section>
+
+<div class="grid g2">
+  <section class="card">
+    <h2>Detalhes</h2>
+    {% if cert %}
+    <dl class="kv">
+      <dt>Subject</dt><dd class="mono small">{{ cert.subject_dn }}</dd>
+      <dt>Emissor</dt><dd class="mono small">{{ cert.issuer_dn }}</dd>
+      <dt>Validade</dt><dd>{{ cert.not_before|dt }} → <b>{{ cert.not_after|dt }}</b> {{ days(days_left(cert.not_after, now)) }}</dd>
+      <dt>Serial</dt><dd class="mono small">{{ cert.serial_hex }}</dd>
+      <dt>SHA-256</dt><dd class="mono small">{{ cert.sha256 }}</dd>
+      <dt>Chave / assinatura</dt><dd>{{ cert.key_type }} {{ cert.key_bits }} · {{ cert.sig_hash|upper }}</dd>
+      <dt>Key ID (SKI / AKI)</dt><dd class="mono small">{{ cert.ski or '—' }} / {{ cert.aki or '—' }}</dd>
+      {% if cert.sans_dns or cert.sans_ip %}<dt>SANs</dt><dd class="small">{{ (cert.sans_dns + cert.sans_ip)|join(', ') }}</dd>{% endif %}
+      <dt>Visto pela primeira vez</dt><dd>{{ cert.first_seen|dtt }}</dd>
+    </dl>
+    {% else %}
+    <p class="muted">Certificado conhecido apenas pelo trust store (não foi apresentado por nenhum servidor).</p>
+    {% endif %}
+  </section>
+
+  <section class="card">
+    <h2>Onde está instalado</h2>
+    {% if node.endpoints %}
+    <ul>{% for e in node.endpoints %}<li class="mono">{{ e }}</li>{% endfor %}</ul>
+    {% else %}<p class="muted">{{ 'As autoridades não costumam estar instaladas diretamente; aparecem na cadeia enviada pelos servidores.' if node.is_ca else 'Nenhum servidor apresentou este certificado na última verificação.' }}</p>{% endif %}
+    {% if node.is_ca %}
+      <h2 class="layer-title">Na CMDB</h2>
+      <p>{{ node.cmdb_count }} registo(s) ativos indicam este emissor.</p>
+      {% if cmdb_refs %}
+      <details><summary>Ver registos (por data de expiração)</summary>
+        <table class="compact">
+          {% for r in cmdb_refs %}<tr><td><a href="/certificados/detalhe?cn={{ r.cn_norm|urlencode }}">{{ r.common_name }}</a></td><td>{{ r.valid_to|dt }}</td></tr>{% endfor %}
+        </table>
+      </details>
+      {% endif %}
+    {% endif %}
+  </section>
+</div>
+{% endblock %}

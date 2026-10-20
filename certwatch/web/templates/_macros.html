@@ -4,21 +4,64 @@
 
 {% macro days(d) -%}
 {% if d is none %}<span class="muted">—</span>
-{% elif d < 0 %}<span class="days d-exp">expirado há {{ -d }} d</span>
+{% elif d < 0 %}<span class="days d-exp">expirou há {{ -d }} d</span>
 {% elif d <= 7 %}<span class="days d-crit">{{ d }} d</span>
 {% elif d <= 20 %}<span class="days d-high">{{ d }} d</span>
 {% elif d <= 90 %}<span class="days d-med">{{ d }} d</span>
 {% else %}<span class="days">{{ d }} d</span>{% endif %}
 {%- endmacro %}
 
+{% macro type_chip(t) -%}
+<span class="chip t-{{ t }}" title="{{ TYPE_HELP.get(t, '') }}">{{ TYPE_LABELS.get(t, t) }}</span>
+{%- endmacro %}
+
+{% macro scope_chip(s) -%}
+<span class="chip sc-{{ s }}" title="{{ SCOPE_HELP.get(s, '') }}">{{ SCOPE_LABELS.get(s, s) }}</span>
+{%- endmacro %}
+
+{% macro state(s) -%}
+<span class="state st-{{ s }}">{{ STATE_LABELS.get(s, STATUS_LABELS.get(s, s)) }}</span>
+{%- endmacro %}
+
+{% macro cell(res, check_id) -%}
+{% set st = res.status if res else 'nt' %}
+<span class="cell cell-{{ st }}" title="{{ CHECK_BY_ID[check_id].title }}: {{ STATUS_LABELS[st] }}{% if res and res.detail %} — {{ res.detail }}{% endif %}">{% if st == 'ok' %}✓{% elif st == 'falha' %}✕{% elif st == 'aviso' %}!{% else %}·{% endif %}</span>
+{%- endmacro %}
+
 {% macro scanstatus(s) -%}
 {% if not s %}<span class="muted">por verificar</span>
-{% elif s == 'ok' %}<span class="st st-ok">ok</span>
-{% elif s == 'dns_error' %}<span class="st st-err">DNS</span>
-{% elif s == 'unreachable' %}<span class="st st-err">inalcançável</span>
-{% else %}<span class="st st-err">{{ s }}</span>{% endif %}
+{% elif s == 'ok' %}<span class="tag tag-ok">ok</span>
+{% elif s == 'dns_error' %}<span class="tag tag-err">DNS</span>
+{% elif s == 'unreachable' %}<span class="tag tag-err">sem resposta</span>
+{% else %}<span class="tag tag-err">{{ s }}</span>{% endif %}
 {%- endmacro %}
 
 {% macro next_field(request) -%}
 <input type="hidden" name="next" value="{{ request.url.path }}{% if request.url.query %}?{{ request.url.query }}{% endif %}">
+{%- endmacro %}
+
+{% macro fixbox(check_id, status) -%}
+{% set c = CHECK_BY_ID[check_id] %}
+<div class="fix {{ 'warn' if status == 'aviso' }}">
+  <b>O que significa</b>
+  <div>{{ c.meaning }}</div>
+  <b class="fix-h">Como corrigir</b>
+  <ol>{% for step in c.fix %}<li>{{ step }}</li>{% endfor %}</ol>
+</div>
+{%- endmacro %}
+
+{# Barras em SVG: a CSP não permite atributos style, por isso as larguras vão em atributos SVG #}
+{% macro stackbar(parts, total) -%}
+<svg class="stackbar" viewBox="0 0 1000 14" preserveAspectRatio="none" role="img" aria-label="{% for cls, v, label in parts %}{{ label }}: {{ v }}{{ '; ' if not loop.last }}{% endfor %}">
+  <rect class="sb-bg" x="0" y="0" width="1000" height="14"/>
+  {% set ns = namespace(x=0) %}
+  {% for cls, v, label in parts %}{% if v and total %}{% set w = (v / total * 1000) %}<rect class="s-{{ cls }}" x="{{ ns.x|round(2) }}" y="0" width="{{ w|round(2) }}" height="14"><title>{{ label }}: {{ v }}</title></rect>{% set ns.x = ns.x + w %}{% endif %}{% endfor %}
+</svg>
+{%- endmacro %}
+
+{% macro hbar(v, maxv) -%}
+<svg class="hbar" viewBox="0 0 1000 10" preserveAspectRatio="none" aria-hidden="true">
+  <rect class="sb-bg" x="0" y="0" width="1000" height="10" rx="5"/>
+  {% if v and maxv %}<rect class="hb-fill" x="0" y="0" width="{{ (v / maxv * 1000)|round(2) }}" height="10" rx="5"/>{% endif %}
+</svg>
 {%- endmacro %}

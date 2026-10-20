@@ -1,7 +1,8 @@
 {% extends "base.html" %}
-{% block title %}Findings{% endblock %}
+{% block title %}Alertas{% endblock %}
 {% block content %}
-<h1>Findings <small>{{ items|length }}</small></h1>
+<h1>Alertas <small>{{ items|length }}</small></h1>
+<p class="sub">Cada alerta tem uma identificação fixa: se o problema continua é o mesmo alerta, se desaparece fecha sozinho. Aceitar um risco exige justificação e prazo.</p>
 
 <form class="filters" method="get">
   <select name="status">

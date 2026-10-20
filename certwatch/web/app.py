@@ -1,9 +1,8 @@
 """Interface web e API de leitura."""
 from __future__ import annotations
 
-from collections import defaultdict
 from contextlib import asynccontextmanager
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timedelta
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
@@ -11,18 +10,24 @@ from fastapi import Depends, FastAPI, Form, HTTPException, Request
 from fastapi.responses import JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
-from sqlalchemy import func, select
+from sqlalchemy import select
 
 from .. import __version__
+from ..checks import CHECK_BY_ID, CHECKS, LAYERS, STATUS_LABELS, evaluate_endpoint
+from ..classify import SCOPE_HELP, SCOPE_LABELS, TYPE_HELP, TYPE_LABELS, cert_type, scope_of
 from ..config import get_settings
 from ..db import as_utc, init_db, session_scope, utcnow
-from ..evaluator import FINDING_TYPES, SEV_RANK, SEVERITIES, days_left
+from ..evaluator import FINDING_CHECK, FINDING_TYPES, SEV_RANK, SEVERITIES, days_left, load_snapshot
+from ..insights import STATE_LABELS, ancestry, build_inventory, build_tree, check_matrix, check_totals, dashboard_stats
 from ..jobs import JOBS, enqueue
-from ..models import AuditLog, Certificate, CmdbRecord, Endpoint, Finding, JobRun, ScanResult
-from ..normalize import is_ip, is_valid_hostname, norm_host
+from ..models import ApiRecord, AuditLog, Certificate, CmdbRecord, Endpoint, Finding, JobRun, ScanResult
+from ..normalize import is_ip, is_valid_hostname, norm_host, norm_issuer
 from .security import check_csrf, current_user, security_middleware
 
 BASE = Path(__file__).parent
+MONTHS = ["jan", "fev", "mar", "abr", "mai", "jun", "jul", "ago", "set", "out", "nov", "dez"]
+JOB_LABELS = {"pipeline": "Pipeline completo", "ingest_cmdb": "Importar certificados da CMDB",
+              "ingest_apis": "Importar lista de APIs", "scan": "Verificar servidores", "evaluate": "Reavaliar regras"}
 
 
 @asynccontextmanager
@@ -57,7 +62,12 @@ def fmt_dt(value, with_time: bool = False) -> str:
 
 templates.env.filters["dt"] = fmt_dt
 templates.env.filters["dtt"] = lambda v: fmt_dt(v, True)
-templates.env.globals.update(FINDING_TYPES=FINDING_TYPES, SEVERITIES=SEVERITIES, version=__version__)
+templates.env.globals.update(
+    FINDING_TYPES=FINDING_TYPES, FINDING_CHECK=FINDING_CHECK, SEVERITIES=SEVERITIES, version=__version__,
+    TYPE_LABELS=TYPE_LABELS, TYPE_HELP=TYPE_HELP, SCOPE_LABELS=SCOPE_LABELS, SCOPE_HELP=SCOPE_HELP,
+    STATE_LABELS=STATE_LABELS, STATUS_LABELS=STATUS_LABELS, CHECKS=CHECKS, CHECK_BY_ID=CHECK_BY_ID,
+    LAYERS=LAYERS, MONTHS=MONTHS, JOB_LABELS=JOB_LABELS,
+)
 
 
 def render(request: Request, name: str, user: str, **ctx):
@@ -75,61 +85,6 @@ def audit(s, actor: str, action: str, target: str = "", **details) -> None:
     s.add(AuditLog(actor=actor, action=action, target=target[:600], details=details))
 
 
-# ------------------------------------------------------------------ dados agregados
-def build_inventory(s, now: datetime) -> list[dict]:
-    records = list(s.scalars(select(CmdbRecord).where(CmdbRecord.active.is_(True))))
-    by_cn: dict[str, list[CmdbRecord]] = defaultdict(list)
-    for r in records:
-        by_cn[r.cn_norm].append(r)
-
-    endpoints = list(s.scalars(select(Endpoint).where(Endpoint.enabled.is_(True))))
-    ep_by_cn: dict[str, list[Endpoint]] = defaultdict(list)
-    for e in endpoints:
-        ep_by_cn[e.expected_cn_norm].append(e)
-    scan_ids = [e.last_scan_id for e in endpoints if e.last_scan_id]
-    scans = {x.id: x for x in s.scalars(select(ScanResult).where(ScanResult.id.in_(scan_ids)))} if scan_ids else {}
-    leafs = {x.leaf_sha256 for x in scans.values() if x.leaf_sha256}
-    certs = {c.sha256: c for c in s.scalars(select(Certificate).where(Certificate.sha256.in_(leafs)))} if leafs else {}
-
-    open_f: dict[str, list[Finding]] = defaultdict(list)
-    for f in s.scalars(select(Finding).where(Finding.status == "aberto")):
-        open_f[f.cn_norm].append(f)
-
-    rows = []
-    for cn, recs in by_cn.items():
-        latest = max(recs, key=lambda r: as_utc(r.valid_to) or datetime.min.replace(tzinfo=timezone.utc))
-        live_cert, statuses = None, []
-        for ep in ep_by_cn.get(cn, []):
-            sr = scans.get(ep.last_scan_id) if ep.last_scan_id else None
-            if sr is None:
-                continue
-            statuses.append(sr.status)
-            if sr.status == "ok" and sr.leaf_sha256 in certs:
-                live_cert = certs[sr.leaf_sha256]
-                break
-        live_status = "ok" if live_cert else (statuses[0] if statuses else None)
-        effective = live_cert.not_after if live_cert else latest.valid_to
-        fl = open_f.get(cn, [])
-        max_sev = max((f.severity for f in fl), key=lambda x: SEV_RANK[x], default=None)
-        rows.append({
-            "cn": cn,
-            "common_name": latest.common_name,
-            "kind": latest.kind,
-            "issuers": sorted({r.issuer_name or r.issuer for r in recs if (r.issuer_name or r.issuer)}),
-            "registos": len(recs),
-            "cmdb_valid_to": latest.valid_to,
-            "live_status": live_status,
-            "live_not_after": live_cert.not_after if live_cert else None,
-            "live_issuer": live_cert.issuer_cn if live_cert else None,
-            "dias": days_left(effective, now) if effective else None,
-            "fonte_data": "live" if live_cert else "cmdb",
-            "findings": len(fl),
-            "max_sev": max_sev,
-        })
-    rows.sort(key=lambda r: (r["dias"] is None, r["dias"] if r["dias"] is not None else 0, r["cn"]))
-    return rows
-
-
 # ------------------------------------------------------------------ páginas
 @app.get("/healthz", include_in_schema=False)
 def healthz():
@@ -140,71 +95,139 @@ def healthz():
 def dashboard(request: Request, user: str = Depends(current_user)):
     now = utcnow()
     with session_scope() as s:
-        inv = build_inventory(s, now)
-        sev_counts = dict(s.execute(
-            select(Finding.severity, func.count()).where(Finding.status == "aberto").group_by(Finding.severity)
-        ).all())
-        type_counts = s.execute(
-            select(Finding.type, func.count()).where(Finding.status == "aberto").group_by(Finding.type)
-            .order_by(func.count().desc())
-        ).all()
+        snap = load_snapshot(s)
+        inv = build_inventory(s, get_settings(), now, snap)
+        matrix = check_matrix(s, get_settings(), now, snap)
+        stats = dashboard_stats(inv, matrix, now)
+        open_findings = list(s.scalars(select(Finding).where(Finding.status == "aberto")))
         last_jobs = list(s.scalars(select(JobRun).order_by(JobRun.id.desc()).limit(5)))
-        n_endpoints = s.scalar(select(func.count()).select_from(Endpoint).where(Endpoint.enabled.is_(True)))
-    buckets = {"expirados": 0, "7": 0, "20": 0, "30": 0, "90": 0}
-    for r in inv:
-        d = r["dias"]
-        if d is None:
-            continue
-        if d < 0:
-            buckets["expirados"] += 1
-        elif d <= 7:
-            buckets["7"] += 1
-        elif d <= 20:
-            buckets["20"] += 1
-        elif d <= 30:
-            buckets["30"] += 1
-        elif d <= 90:
-            buckets["90"] += 1
-    urgent = [r for r in inv if r["dias"] is not None and -30 <= r["dias"] <= 20][:15]
-    return render(request, "dashboard.html", user, total=len(inv), buckets=buckets, sev_counts=sev_counts,
-                  type_counts=type_counts, last_jobs=last_jobs, n_endpoints=n_endpoints,
-                  live_ok=sum(1 for r in inv if r["live_status"] == "ok"), urgent=urgent)
+        n_apis = len(snap.apis)
+    sev_counts = {sv: sum(1 for f in open_findings if f.severity == sv) for sv in SEVERITIES}
+    urgent = [r for r in inv if r["state"] == "falha"][:12]
+    return render(request, "dashboard.html", user, s=stats, sev_counts=sev_counts, urgent=urgent,
+                  last_jobs=last_jobs, n_apis=n_apis, n_open=len(open_findings))
 
 
 @app.get("/certificados")
-def certificados(request: Request, q: str = "", dias: str = "", sev: str = "", tipo: str = "",
+def certificados(request: Request, q: str = "", dias: str = "", estado: str = "", tipo: str = "", ambito: str = "",
                  user: str = Depends(current_user)):
     with session_scope() as s:
-        rows = build_inventory(s, utcnow())
+        rows = build_inventory(s, get_settings(), utcnow())
+    total = len(rows)
     if q:
         ql = q.lower()
-        rows = [r for r in rows if ql in r["cn"] or any(ql in i.lower() for i in r["issuers"])]
+        rows = [r for r in rows if ql in r["cn"] or any(ql in i.lower() for i in r["issuers"])
+                or ql in (r["live_issuer"] or "").lower() or any(ql in a.lower() for a in r["apis"])]
     if dias.lstrip("-").isdigit():
         lim = int(dias)
         rows = [r for r in rows if r["dias"] is not None and r["dias"] <= lim]
-    if sev in SEV_RANK:
-        rows = [r for r in rows if r["max_sev"] and SEV_RANK[r["max_sev"]] >= SEV_RANK[sev]]
-    if tipo in ("host", "wildcard", "ip", "other"):
-        rows = [r for r in rows if r["kind"] == tipo]
-    return render(request, "certificados.html", user, rows=rows, q=q, dias=dias, sev=sev, tipo=tipo)
+    if estado in STATE_LABELS:
+        rows = [r for r in rows if r["state"] == estado]
+    if tipo in TYPE_LABELS:
+        rows = [r for r in rows if r["type"] == tipo]
+    if ambito in SCOPE_LABELS:
+        rows = [r for r in rows if r["scope"] == ambito]
+    return render(request, "certificados.html", user, rows=rows, total=total, q=q, dias=dias,
+                  estado=estado, tipo=tipo, ambito=ambito)
 
 
 @app.get("/certificados/detalhe")
 def certificado_detalhe(request: Request, cn: str, user: str = Depends(current_user)):
+    settings, now = get_settings(), utcnow()
     with session_scope() as s:
-        recs = list(s.scalars(select(CmdbRecord).where(CmdbRecord.cn_norm == cn).order_by(CmdbRecord.valid_to.desc())))
-        eps = list(s.scalars(select(Endpoint).where(Endpoint.expected_cn_norm == cn)))
-        if not recs and not eps:
+        snap = load_snapshot(s, include_disabled=True)
+        recs = sorted(snap.by_cn.get(cn, []), key=lambda r: as_utc(r.valid_to) or now, reverse=True)
+        inactive = list(s.scalars(select(CmdbRecord).where(CmdbRecord.cn_norm == cn, CmdbRecord.active.is_(False))))
+        eps = [e for e in snap.endpoints if e.expected_cn_norm == cn]
+        apis = [a for a in snap.apis if a.host == cn]
+        if not recs and not eps and not inactive:
             raise HTTPException(404, "Certificado não encontrado")
+        latest = snap.latest_by_issuer(cn)
         ep_data = []
         for ep in eps:
-            sr = s.get(ScanResult, ep.last_scan_id) if ep.last_scan_id else None
-            leaf = s.get(Certificate, sr.leaf_sha256) if sr and sr.leaf_sha256 else None
+            sr = snap.scan_for(ep)
+            leaf = snap.leaf_for(sr)
+            ev = evaluate_endpoint(ep, sr, leaf, latest, settings, now)
             history = list(s.scalars(select(ScanResult).where(ScanResult.endpoint_id == ep.id)
                                      .order_by(ScanResult.id.desc()).limit(10)))
-            ep_data.append({"ep": ep, "scan": sr, "leaf": leaf, "history": history})
+            chain_up = ancestry(s, settings, leaf.sha256)[0] if leaf else []
+            ep_data.append({"ep": ep, "scan": sr, "leaf": leaf, "ev": ev, "history": history, "chain_up": chain_up})
         findings = list(s.scalars(select(Finding).where(Finding.cn_norm == cn).order_by(Finding.status, Finding.last_seen.desc())))
-    return render(request, "certificado.html", user, cn=cn, recs=recs, eps=ep_data, findings=findings, now=utcnow())
+        kind = recs[0].kind if recs else (inactive[0].kind if inactive else "host")
+        leaf0 = next((d["leaf"] for d in ep_data if d["leaf"]), None)
+        sr0 = next((d["scan"] for d in ep_data if d["leaf"]), None)
+        issuer_norm = norm_issuer(leaf0.issuer_cn) if leaf0 else (recs[0].issuer_norm if recs else "")
+        ctype = cert_type(cn, kind, is_api=bool(apis), issuer_norm=issuer_norm,
+                          common_name=recs[0].common_name if recs else cn)
+        scope = scope_of(cn, kind, settings, issuer_norm=issuer_norm, resolved_ip=sr0.resolved_ip if sr0 else "")
+    return render(request, "certificado.html", user, cn=cn, recs=recs, inactive=inactive, eps=ep_data, apis=apis,
+                  findings=findings, ctype=ctype, scope=scope, now=now,
+                  max_until=(now + timedelta(days=365)).astimezone(_tz()).strftime("%Y-%m-%d"))
+
+
+@app.get("/cert/{sha256}")
+def cert_page(request: Request, sha256: str, user: str = Depends(current_user)):
+    settings = get_settings()
+    with session_scope() as s:
+        up, node = ancestry(s, settings, sha256)
+        if node is None:
+            raise HTTPException(404, "Certificado não encontrado")
+        cert = s.get(Certificate, sha256)
+        cmdb_refs = []
+        if node.is_ca:
+            cmdb_refs = list(s.scalars(select(CmdbRecord).where(
+                CmdbRecord.active.is_(True), CmdbRecord.issuer_norm == norm_issuer(node.subject_cn)
+            ).order_by(CmdbRecord.valid_to).limit(300)))
+    return render(request, "cert.html", user, node=node, up=up, cert=cert, cmdb_refs=cmdb_refs, now=utcnow(),
+                  days_left=days_left)
+
+
+@app.get("/arvore")
+def arvore(request: Request, user: str = Depends(current_user)):
+    with session_scope() as s:
+        roots = build_tree(s, get_settings())
+        n_cmdb = len(load_snapshot(s).records)
+    return render(request, "arvore.html", user, roots=roots, now=utcnow(), days_left=days_left, n_cmdb=n_cmdb)
+
+
+@app.get("/testes")
+def testes(request: Request, teste: str = "", estado: str = "", tipo: str = "", ambito: str = "", q: str = "",
+           user: str = Depends(current_user)):
+    with session_scope() as s:
+        matrix = check_matrix(s, get_settings(), utcnow())
+    totals = check_totals(matrix)
+    rows = matrix
+    if teste in CHECK_BY_ID:
+        rows = [r for r in rows if r.results.get(teste) and r.results[teste].status in (("falha", "aviso") if not estado else (estado,))]
+    elif estado in STATUS_LABELS:
+        rows = [r for r in rows if r.worst == estado]
+    if tipo in TYPE_LABELS:
+        rows = [r for r in rows if r.type == tipo]
+    if ambito in SCOPE_LABELS:
+        rows = [r for r in rows if r.scope == ambito]
+    if q:
+        rows = [r for r in rows if q.lower() in r.ep.host or q.lower() in r.ep.expected_cn_norm]
+    return render(request, "testes.html", user, matrix=matrix, rows=rows[:500], n_rows=len(rows), totals=totals,
+                  teste=teste, estado=estado, tipo=tipo, ambito=ambito, q=q)
+
+
+@app.get("/testes/como-funciona")
+def catalogo(request: Request, user: str = Depends(current_user)):
+    return render(request, "catalogo.html", user)
+
+
+@app.get("/apis")
+def apis_page(request: Request, user: str = Depends(current_user)):
+    settings, now = get_settings(), utcnow()
+    with session_scope() as s:
+        snap = load_snapshot(s)
+        inv = {r["cn"]: r for r in build_inventory(s, settings, now, snap)}
+        apis = sorted(snap.apis, key=lambda a: (as_utc(a.expiry) or now + timedelta(days=99999), a.name))
+        last = s.scalar(select(JobRun).where(JobRun.job.in_(("ingest_apis", "pipeline")), JobRun.status != "pending")
+                        .order_by(JobRun.id.desc()).limit(1))
+    campos = (last.summary or {}).get("ingest_apis", {}).get("campos") if last else None
+    return render(request, "apis.html", user, apis=apis, inv=inv, now=now, days_left=days_left,
+                  configured=bool(settings.ucmdb_tql_apis), tql=settings.ucmdb_tql_apis, campos=campos)
 
 
 @app.get("/findings")
@@ -313,8 +336,9 @@ def jobs_page(request: Request, user: str = Depends(current_user)):
     with session_scope() as s:
         runs = list(s.scalars(select(JobRun).order_by(JobRun.id.desc()).limit(50)))
         audits = list(s.scalars(select(AuditLog).order_by(AuditLog.id.desc()).limit(50)))
-    return render(request, "jobs.html", user, runs=runs, audits=audits, jobs=JOBS,
-                  daily_at=get_settings().pipeline_daily_at)
+    st = get_settings()
+    jobs = [j for j in JOBS if j != "ingest_apis" or st.ucmdb_tql_apis]
+    return render(request, "jobs.html", user, runs=runs, audits=audits, jobs=jobs, daily_at=st.pipeline_daily_at)
 
 
 @app.post("/jobs/{job}")
@@ -329,11 +353,26 @@ def job_enqueue(request: Request, job: str, csrf: str = Form(""), user: str = De
 
 
 # ------------------------------------------------------------------ API (só leitura)
+def _jsonable(v):
+    return v.isoformat() if isinstance(v, datetime) else v
+
+
 @app.get("/api/inventario")
 def api_inventory(user: str = Depends(current_user)):
     with session_scope() as s:
-        rows = build_inventory(s, utcnow())
-    return JSONResponse([{k: (v.isoformat() if isinstance(v, datetime) else v) for k, v in r.items()} for r in rows])
+        rows = build_inventory(s, get_settings(), utcnow())
+    return JSONResponse([{k: _jsonable(v) for k, v in r.items()} for r in rows])
+
+
+@app.get("/api/testes")
+def api_testes(user: str = Depends(current_user)):
+    with session_scope() as s:
+        matrix = check_matrix(s, get_settings(), utcnow())
+    return JSONResponse([
+        {"endpoint": f"{r.ep.host}:{r.ep.port}", "cn": r.ep.expected_cn_norm, "tipo": r.type, "ambito": r.scope,
+         "pior": r.worst, "testes": {cid: {"estado": res.status, "detalhe": res.detail} for cid, res in r.results.items()}}
+        for r in matrix
+    ])
 
 
 @app.get("/api/findings")
