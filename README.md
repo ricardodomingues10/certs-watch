@@ -114,11 +114,17 @@ API só de leitura (mesma autenticação): `GET /api/inventario`, `GET /api/test
 A lista "API secrets" da CMDB descreve sobretudo segredos de aplicações (client secrets de App Registrations do Azure AD). Campos usados: **Display Label, Aplicação, Data de expiração, Expirado?, Localização, Data de registo na CMDB** e, se existir, um URL.
 
 1. Definir `CERTWATCH_UCMDB_TQL_APIS=NOME_DO_TQL` no `.env`, `docker compose up -d`, e **Importar lista agora** na página APIs.
-2. A página mostra que atributo foi usado para cada campo e quantas datas foram reconhecidas. As datas podem vir em ISO, DD-MM-AAAA HH:MM:SS ou epoch.
-3. Se algum campo estiver errado, ver os nomes internos dos atributos e defini-los no `.env` (`CERTWATCH_APIS_FIELD_NAME`, `_APP`, `_EXPIRY`, `_EXPIRED`, `_LOCATION`, `_REGISTERED`, `_URL`):
+2. **Se o layout do TQL só trouxer o nome** (caso comum: as colunas da vista não passam para a REST API), a aplicação vai buscar os atributos sozinha, sem ser preciso mexer no TQL (`CERTWATCH_APIS_ENRICH=auto`):
+   - lê um CI com `GET /rest-api/dataModel/ci/{id}` para saber que atributos existem;
+   - pede esses atributos para todos os CIs numa consulta ad-hoc, `POST /rest-api/topologyQuery` (exige a permissão "executar consultas por definição");
+   - se essa consulta não for permitida, lê CI a CI com `GET /rest-api/dataModel/ci/{id}`.
+   Os atributos sensíveis são descartados em memória e nunca são guardados.
+3. **Alternativa sem REST:** exportar a lista da CMDB (CSV, TSV ou Excel, com os cabeçalhos `[API secrets] : Display Label`, `Aplicação`, `Data de expiração`, `Expirado?`, `Localização`, `Data de registo na CMDB`) e gravá-la em `import/api-cmdb.csv`. O ficheiro é usado quando a REST falha ou não traz datas de expiração (prefixo configurável em `CERTWATCH_APIS_FILE`).
+4. A página mostra a origem dos dados, que atributo foi usado para cada campo e quantas datas foram reconhecidas. As datas podem vir em ISO, DD-MM-AAAA HH:MM:SS ou epoch. Para ver tudo o que a REST devolve (sem valores sensíveis):
    ```bash
    docker compose exec worker python -m certwatch.cli inspect-tql NOME_DO_TQL
    ```
+   Se algum campo ficar errado, defina-o no `.env` (`CERTWATCH_APIS_FIELD_NAME`, `_APP`, `_EXPIRY`, `_EXPIRED`, `_LOCATION`, `_REGISTERED`, `_URL`).
 
 Atributos com nomes como *secret*, *password*, *token* ou *key* só são guardados quando o nome descreve o segredo (data, tipo, localização, estado) e o valor é uma data, um sim/não ou um texto curto legível. Segredos expirados há mais de 30 dias dão um alerta de limpeza de gravidade baixa; os que estão a expirar seguem os prazos normais.
 
@@ -255,7 +261,7 @@ Os testes levantam servidores TLS reais em localhost com uma PKI de teste (chain
 Fazer o build numa máquina com acesso e transferir a imagem:
 
 ```bash
-docker compose build && docker save certwatch:0.4.0 postgres:16-alpine | gzip > certwatch-images.tar.gz
+docker compose build && docker save certwatch:0.4.1 postgres:16-alpine | gzip > certwatch-images.tar.gz
 # no servidor:
 gunzip -c certwatch-images.tar.gz | docker load && docker compose up -d --no-build
 ```

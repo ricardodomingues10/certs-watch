@@ -24,48 +24,111 @@ class UcmdbError(RuntimeError):
     pass
 
 
-def fetch_topology(settings: Settings, tql: str, client: httpx.Client | None = None) -> list[dict]:
-    """Autentica e executa um TQL pelo nome. Devolve a lista de CIs."""
-    if not settings.ucmdb_url or not tql:
-        raise UcmdbError("Defina CERTWATCH_UCMDB_URL e o nome do TQL no ficheiro .env")
-    if not settings.ucmdb_user or not settings.ucmdb_password:
-        raise UcmdbError("Credenciais UCMDB em falta (segredos ucmdb_user / ucmdb_password)")
+class UcmdbSession:
+    """Sessão autenticada na REST API da UCMDB (um token para várias chamadas)."""
 
-    own_client = client is None
-    if own_client:
-        client = httpx.Client(
+    def __init__(self, settings: Settings, client: httpx.Client | None = None):
+        if not settings.ucmdb_url:
+            raise UcmdbError("Defina CERTWATCH_UCMDB_URL no ficheiro .env")
+        if not settings.ucmdb_user or not settings.ucmdb_password:
+            raise UcmdbError("Credenciais UCMDB em falta (segredos ucmdb_user / ucmdb_password)")
+        self.settings = settings
+        self.own = client is None
+        self.client = client or httpx.Client(
             base_url=settings.ucmdb_url.rstrip("/") + "/rest-api",
             verify=ssl_context_for_api(settings),
             timeout=httpx.Timeout(30.0, read=180.0),
         )
-    try:
-        r = client.post("/authenticate", json={
-            "username": settings.ucmdb_user,
-            "password": settings.ucmdb_password,
-            "clientContext": settings.ucmdb_client_context,
-        })
+        self.headers: dict[str, str] = {}
+
+    def __enter__(self) -> "UcmdbSession":
+        try:
+            r = self.client.post("/authenticate", json={
+                "username": self.settings.ucmdb_user,
+                "password": self.settings.ucmdb_password,
+                "clientContext": self.settings.ucmdb_client_context,
+            })
+        except httpx.HTTPError as exc:
+            self.close()
+            raise UcmdbError(f"Erro de comunicação com a UCMDB: {exc}") from exc
         if r.status_code != 200:
+            self.close()
             raise UcmdbError(f"Autenticação UCMDB falhou: HTTP {r.status_code}")
         token = (r.json() or {}).get("token")
         if not token:
+            self.close()
             raise UcmdbError("Autenticação UCMDB sem token na resposta")
-        r = client.post("/topology", content=tql.encode("utf-8"),
-                        headers={"Authorization": f"Bearer {token}", "Content-Type": "application/json"})
-        if r.status_code != 200:
-            raise UcmdbError(f"Execução do TQL '{tql}' falhou: HTTP {r.status_code}")
-        data = r.json()
-    except httpx.HTTPError as exc:
-        raise UcmdbError(f"Erro de comunicação com a UCMDB: {exc}") from exc
-    finally:
-        if own_client:
-            client.close()
+        self.headers = {"Authorization": f"Bearer {token}"}
+        return self
 
-    if not isinstance(data, dict) or "cis" not in data:
-        raise UcmdbError("Resposta inesperada da UCMDB (sem 'cis')")
-    extra = set(data) - {"cis", "relations"}
-    if extra:
-        log.warning("Resposta UCMDB com chaves adicionais (possível paginação): %s", sorted(extra))
-    return list(data.get("cis") or [])
+    def __exit__(self, *exc) -> None:
+        self.close()
+
+    def close(self) -> None:
+        if self.own:
+            self.client.close()
+
+    def _request(self, method: str, path: str, what: str, **kw) -> httpx.Response:
+        try:
+            r = self.client.request(method, path, headers={**self.headers, **kw.pop("headers", {})}, **kw)
+        except httpx.HTTPError as exc:
+            raise UcmdbError(f"Erro de comunicação com a UCMDB: {exc}") from exc
+        if r.status_code != 200:
+            detail = ""
+            try:
+                detail = str((r.json() or {}).get("error") or "")[:200]
+            except ValueError:
+                pass
+            raise UcmdbError(f"{what} falhou: HTTP {r.status_code}{': ' + detail if detail else ''}")
+        return r
+
+    def _result(self, data, what: str) -> list[dict]:
+        """Lê o resultado de uma consulta, incluindo resultados divididos em blocos (queryResultId)."""
+        if not isinstance(data, dict):
+            raise UcmdbError(f"Resposta inesperada da UCMDB em {what}")
+        if data.get("queryResultId"):
+            qid, n = data["queryResultId"], int(data.get("numberOfChunks") or 0)
+            cis: list[dict] = []
+            for i in range(1, n + 1):
+                part = self._request("GET", f"/topology/result/{qid}/{i}", f"{what} (bloco {i})").json() or {}
+                cis += list(part.get("cis") or [])
+            try:
+                self.client.delete(f"/topology/result/{qid}", headers=self.headers)
+            except httpx.HTTPError:
+                pass
+            return cis
+        if "cis" not in data:
+            raise UcmdbError(f"Resposta inesperada da UCMDB em {what} (sem 'cis')")
+        extra = set(data) - {"cis", "relations"}
+        if extra:
+            log.warning("Resposta UCMDB com chaves adicionais: %s", sorted(extra))
+        return list(data.get("cis") or [])
+
+    def topology(self, tql: str) -> list[dict]:
+        """Executa um TQL guardado na UCMDB, pelo nome."""
+        r = self._request("POST", "/topology", f"Execução do TQL '{tql}'", content=tql.encode("utf-8"),
+                          headers={"Content-Type": "application/json"})
+        return self._result(r.json(), f"TQL '{tql}'")
+
+    def topology_query(self, ci_type: str, layout: list[str], ids: list[str] | None = None) -> list[dict]:
+        """Consulta ad-hoc (POST /topologyQuery) que escolhe os atributos devolvidos, sem mexer no TQL."""
+        body = {"nodes": [{"type": ci_type, "queryIdentifier": "ci", "visible": True, "includeSubtypes": True,
+                           "layout": layout, "attributeConditions": [], "ids": ids or [], "linkConditions": []}],
+                "relations": []}
+        r = self._request("POST", "/topologyQuery", "Consulta ad-hoc (topologyQuery)", json=body)
+        return self._result(r.json(), "topologyQuery")
+
+    def ci(self, ucmdb_id: str) -> dict:
+        """Todas as propriedades de um CI (GET /dataModel/ci/{id})."""
+        return self._request("GET", f"/dataModel/ci/{ucmdb_id}", f"Leitura do CI {ucmdb_id}").json() or {}
+
+
+def fetch_topology(settings: Settings, tql: str, client: httpx.Client | None = None) -> list[dict]:
+    """Autentica e executa um TQL pelo nome. Devolve a lista de CIs."""
+    if not tql:
+        raise UcmdbError("Defina o nome do TQL no ficheiro .env")
+    with UcmdbSession(settings, client) as s:
+        return s.topology(tql)
 
 
 def fetch_certificates(settings: Settings, client: httpx.Client | None = None) -> list[dict]:
@@ -228,9 +291,78 @@ def parse_api_url(value: str | None) -> tuple[str, str, int | None]:
     return scheme, norm_host(parts.hostname or ""), port
 
 
+MAX_CI_LOOKUPS = 5000
+# Atributos técnicos da UCMDB que não interessam (mas create_time interessa: é a data de registo)
+_SKIP_LAYOUT = re.compile(r"^(root_|data_|calculated_|tenant|global_id$|last_|track_|monitored_by|ucmdb_id$)", re.I)
+
+
+def _layout_from(props: dict) -> list[str]:
+    """Atributos a pedir na consulta ad-hoc: os não sensíveis, sem os técnicos da UCMDB."""
+    keys = [k for k in safe_properties(props) if not _SKIP_LAYOUT.search(k) or REGISTERED_KEY.search(k)]
+    return sorted(set(keys) | {"display_label"})
+
+
+def _merge(cis: list[dict], extra: dict[str, dict]) -> list[dict]:
+    out = []
+    for ci in cis:
+        props = {**(extra.get(str(ci.get("ucmdbId"))) or {}), **{k: v for k, v in (ci.get("properties") or {}).items()
+                                                                 if v not in (None, "")}}
+        out.append({**ci, "properties": props})
+    return out
+
+
+def enrich_cis(session: UcmdbSession, cis: list[dict], mode: str = "auto") -> tuple[list[dict], str, list[str]]:
+    """Quando o layout do TQL não traz os atributos, vai buscá-los à REST API sem mexer no TQL:
+    1) lê um CI (GET /dataModel/ci/{id}) para saber que atributos existem;
+    2) pede esses atributos para todos os CIs numa só consulta ad-hoc (POST /topologyQuery);
+    3) se a consulta ad-hoc não for permitida, lê CI a CI.
+    Devolve (cis, método, avisos)."""
+    notes: list[str] = []
+    if mode == "off" or not cis:
+        return cis, "tql", notes
+    ids = [str(c.get("ucmdbId")) for c in cis if c.get("ucmdbId")]
+    if mode in ("auto", "query"):
+        try:
+            probe = session.ci(ids[0])
+            layout = _layout_from(probe.get("properties") or {})
+            ci_type = str(cis[0].get("type") or probe.get("type") or "")
+            got = session.topology_query(ci_type, layout, ids)
+            extra = {str(c.get("ucmdbId")): safe_properties(c.get("properties") or {}) for c in got}
+            if any(len(v) > 1 for v in extra.values()):
+                return _merge(cis, extra), "topologyQuery", notes
+            notes.append("topologyQuery não devolveu atributos")
+        except UcmdbError as exc:
+            notes.append(str(exc))
+            log.warning("Consulta ad-hoc falhou, a ler CI a CI: %s", exc)
+        if mode == "query":
+            return cis, "tql", notes
+    extra: dict[str, dict] = {}
+    for uid in ids[:MAX_CI_LOOKUPS]:
+        try:
+            extra[uid] = safe_properties((session.ci(uid).get("properties") or {}))
+        except UcmdbError as exc:
+            notes.append(str(exc))
+            if len(notes) > 5:
+                break
+    if extra:
+        return _merge(cis, extra), "ci", notes
+    return cis, "tql", notes
+
+
 def fetch_apis(settings: Settings, client: httpx.Client | None = None) -> tuple[list[dict], dict]:
-    cis = fetch_topology(settings, settings.ucmdb_tql_apis, client)
-    return parse_apis(cis, settings)
+    if not settings.ucmdb_tql_apis:
+        raise UcmdbError("CERTWATCH_UCMDB_TQL_APIS não definido")
+    with UcmdbSession(settings, client) as s:
+        cis = s.topology(settings.ucmdb_tql_apis)
+        method, notes = "tql", []
+        fields = detect_api_fields(cis, settings)
+        if not fields.get("validade") and settings.apis_enrich != "off":
+            cis, method, notes = enrich_cis(s, cis, settings.apis_enrich)
+    records, fields = parse_apis(cis, settings)
+    fields = {**fields, "metodo": method}
+    if notes:
+        fields["avisos"] = notes[:5]
+    return records, fields
 
 
 def parse_apis(cis: list[dict], settings: Settings) -> tuple[list[dict], dict]:
@@ -263,8 +395,21 @@ def parse_apis(cis: list[dict], settings: Settings) -> tuple[list[dict], dict]:
 
 
 def describe_tql(settings: Settings, tql: str, client: httpx.Client | None = None) -> dict:
-    """Resumo de um TQL para configuração: atributos, tipos e exemplos não sensíveis."""
-    cis = fetch_topology(settings, tql, client)
+    """Resumo de um TQL para configuração: atributos, tipos e exemplos não sensíveis. Para o TQL das APIs,
+    se o layout só trouxer o nome, mostra também o que se obtém pela REST API (topologyQuery / CI a CI)."""
+    method, notes = "tql", []
+    with UcmdbSession(settings, client) as s:
+        cis = s.topology(tql)
+        if tql == settings.ucmdb_tql_apis and cis and not detect_api_fields(cis, settings).get("validade"):
+            cis, method, notes = enrich_cis(s, cis, "auto" if settings.apis_enrich == "off" else settings.apis_enrich)
+    out = _describe(cis, settings)
+    out = {"tql": tql, **out, "metodo": method}
+    if notes:
+        out["avisos"] = notes[:5]
+    return out
+
+
+def _describe(cis: list[dict], settings: Settings) -> dict:
     keys: dict[str, dict] = {}
     for ci in cis:
         for k, v in (ci.get("properties") or {}).items():
@@ -281,5 +426,5 @@ def describe_tql(settings: Settings, tql: str, client: httpx.Client | None = Non
                         info["exemplo"] = f"(URL/host com {len(host)} caracteres{', porta ' + str(port) if port else ''})"
                     else:
                         info["exemplo"] = f"(texto, {len(str(v))} caracteres)"
-    return {"tql": tql, "total_cis": len(cis), "tipos_ci": sorted({str(c.get('type')) for c in cis}),
+    return {"total_cis": len(cis), "tipos_ci": sorted({str(c.get('type')) for c in cis}),
             "atributos": keys, "campos_detetados": detect_api_fields(cis, settings) if cis else {}}

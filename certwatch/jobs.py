@@ -109,7 +109,7 @@ def ingest_cmdb(session: Session, settings: Settings, records: list[dict] | None
 def ingest_apis(session: Session, settings: Settings, records: list[dict] | None = None,
                 fields: dict | None = None) -> dict:
     if records is None:
-        records, fields = fetch_apis(settings)
+        records, fields = load_api_records(settings)
     valid = [r for r in records if r.get("ucmdb_id")]
     if len(valid) < settings.apis_min:
         raise IngestAborted(f"A lista de APIs devolveu {len(valid)} registos (mínimo: {settings.apis_min}).")
@@ -163,6 +163,33 @@ def ingest_apis(session: Session, settings: Settings, records: list[dict] | None
     return {"recebidos": len(records), "novos": created, "sem_url": sem_url,
             "com_validade": sum(1 for r in valid if r.get("expiry")),
             "endpoints_criados": ep_created, "campos": fields or {}}
+
+
+def apis_configured(settings: Settings) -> bool:
+    from .reconcile import find_api_file
+    return bool(settings.ucmdb_tql_apis) or find_api_file(settings) is not None
+
+
+def load_api_records(settings: Settings) -> tuple[list[dict], dict]:
+    """REST (TQL + enriquecimento) primeiro; se não houver datas de expiração, o ficheiro api-cmdb* em import/."""
+    from .collectors.ucmdb import UcmdbError
+    from .reconcile import find_api_file, read_api_file
+    records, fields, rest_error = None, {}, None
+    if settings.ucmdb_tql_apis:
+        try:
+            records, fields = fetch_apis(settings)
+        except UcmdbError as exc:
+            rest_error = exc
+    has_dates = bool(records) and any(r.get("expiry") for r in records)
+    path = find_api_file(settings)
+    if path is not None and not has_dates:
+        records, file_fields = read_api_file(path, settings)
+        motivo = (f"REST falhou: {rest_error}" if rest_error else
+                  "REST sem datas de expiração" if settings.ucmdb_tql_apis else "TQL não configurado")
+        return records, {**file_fields, "motivo": motivo}
+    if records is None:
+        raise rest_error or IngestAborted("Lista de APIs não configurada (TQL ou ficheiro api-cmdb em import/)")
+    return records, fields
 
 
 # ---------------------------------------------------------------- scan
@@ -285,7 +312,7 @@ def _run(job: str, settings: Settings) -> dict:
         except Exception as exc:  # continua com os dados que já existem
             log.exception("Ingestão CMDB falhou")
             summary["ingest_cmdb"] = {"erro": str(exc)}
-        if settings.ucmdb_tql_apis:
+        if apis_configured(settings):
             try:
                 with session_scope() as s:
                     summary["ingest_apis"] = ingest_apis(s, settings)

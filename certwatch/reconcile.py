@@ -298,6 +298,8 @@ def ingest_imports(session: Session, settings: Settings) -> dict:
     for p in sorted(d.iterdir()):
         if not p.is_file() or p.name.startswith(".") or p.suffix.lower() not in ALLOWED_EXT:
             continue
+        if settings.apis_file and p.name.lower().startswith(settings.apis_file):
+            continue   # lista de APIs: lida pela importação de APIs, não pela reconciliação
         src = source_for(p.name, settings)
         if src is None:
             ignored.append(p.name)
@@ -407,3 +409,77 @@ def reconcile(session: Session, settings: Settings, now: datetime | None = None)
     for x in rows:
         counts[x["state"]] += 1
     return {"rows": rows, "counts": dict(counts), "files": files}
+
+
+# ------------------------------------------------------------------ lista de APIs a partir de ficheiro
+API_COLUMNS = {
+    "name": ["displaylabel", "nome", "name", "label"],
+    "application": ["aplicacao", "application", "app", "aplicacoes"],
+    "expiry": ["datadeexpiracao", "dataexpiracao", "datadevalidade", "expirationdate", "expirydate", "enddate",
+               "validade", "validto", "expira"],
+    "expired": ["expirado", "expired", "estaexpirado"],
+    "location": ["localizacao", "location", "local"],
+    "registered": ["dataderegistonacmdb", "dataderegisto", "createtime", "datacriacao", "datadecriacao", "registo"],
+    "url": ["url", "endpoint", "endpointurl", "endereco", "enderecourl"],
+    "ucmdb_id": ["ucmdbid", "globalid", "id", "cmdbid"],
+}
+_BOOL = {"true": True, "sim": True, "yes": True, "1": True, "false": False, "nao": False, "não": False, "no": False, "0": False}
+
+
+def find_api_file(settings: Settings) -> Path | None:
+    """Ficheiro mais recente com o prefixo CERTWATCH_APIS_FILE (ex.: api-cmdb.csv) na diretoria de importação."""
+    d, prefix = settings.import_dir, settings.apis_file
+    if not prefix or not d.is_dir():
+        return None
+    files = [p for p in d.iterdir() if p.is_file() and p.name.lower().startswith(prefix)
+             and p.suffix.lower() in ALLOWED_EXT]
+    return max(files, key=lambda p: p.stat().st_mtime) if files else None
+
+
+def read_api_file(path: Path, settings: Settings) -> tuple[list[dict], dict]:
+    """Lê a exportação da lista de APIs da CMDB (CSV/TSV/Excel, cabeçalhos "[API secrets] : Display Label"...)."""
+    from .collectors.ucmdb import parse_api_url
+    tz = ZoneInfo(settings.timezone)
+    headers, rows = read_table(path)
+    normed = [norm_header(h) for h in headers]
+    cols = {}
+    for field, cands in API_COLUMNS.items():
+        for cand in cands:
+            if cand in normed:
+                cols[field] = normed.index(cand)
+                break
+    if "name" not in cols:
+        raise ValueError(f"{path.name}: coluna de nome (Display Label) não encontrada. Cabeçalhos: {', '.join(headers)[:300]}")
+    out, seen, problems = [], defaultdict(int), []
+    for n, row in enumerate(rows, start=2):
+        cell = lambda f: (row[cols[f]] if f in cols and cols[f] < len(row) else None)
+        name = _fix_mojibake(str(cell("name") or "")).strip()
+        if not name:
+            continue
+        raw_exp = cell("expiry")
+        expiry = parse_date(raw_exp, tz)
+        if raw_exp not in (None, "") and expiry is None and len(problems) < MAX_PROBLEMS:
+            problems.append(f"Linha {n}: data de expiração não reconhecida ({raw_exp!r}) para {name}")
+        app = _fix_mojibake(str(cell("application") or "")).strip()
+        loc = _fix_mojibake(str(cell("location") or "")).strip()
+        raw_url = str(cell("url") or "").strip()
+        scheme, host, port = parse_api_url(raw_url)
+        uid = str(cell("ucmdb_id") or "").strip()
+        if not uid:   # sem ID da CMDB: identificador estável a partir do nome, aplicação e localização
+            base = hashlib.sha1(f"{name.lower()}|{app.lower()}|{loc.lower()}".encode()).hexdigest()[:24]
+            seen[base] += 1
+            uid = f"ficheiro:{base}" + (f"-{seen[base]}" if seen[base] > 1 else "")
+        exp_flag = cell("expired")
+        out.append({
+            "ucmdb_id": uid[:64], "name": name[:512], "application": app[:512], "location": loc[:512],
+            "cmdb_expired": exp_flag if isinstance(exp_flag, bool) else _BOOL.get(str(exp_flag or "").strip().lower()),
+            "registered_at": parse_date(cell("registered"), tz),
+            "url": raw_url[:1024] if host else "", "scheme": scheme, "host": host, "port": port,
+            "expiry": expiry, "extra": {},
+        })
+    fields = {"nome": headers[cols["name"]], **{k: (headers[cols[f]] if f in cols else None) for k, f in (
+        ("aplicacao", "application"), ("validade", "expiry"), ("expirado", "expired"), ("localizacao", "location"),
+        ("registo", "registered"), ("url", "url"))}, "metodo": "ficheiro", "ficheiro": path.name}
+    if problems:
+        fields["avisos"] = problems[:5]
+    return out, fields

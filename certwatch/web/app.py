@@ -25,7 +25,7 @@ from ..config import get_settings
 from ..db import as_utc, init_db, session_scope, utcnow
 from ..evaluator import FINDING_CHECK, FINDING_TYPES, SEV_RANK, SEVERITIES, days_left, load_snapshot
 from ..insights import STATE_LABELS, ancestry, build_inventory, build_tree, check_matrix, check_totals, dashboard_stats
-from ..jobs import JOBS, enqueue
+from ..jobs import apis_configured, JOBS, enqueue
 from ..collectors.ct import SOURCE_LABELS
 from ..discovery import CT_STATE_HELP, CT_STATES, CT_TABS, TRIAGE_LABELS, classify_ct
 from ..models import ApiRecord, AuditLog, Certificate, CmdbRecord, CtCert, Endpoint, Finding, ImportFile, JobRun, ScanResult, SslLabsResult
@@ -179,10 +179,13 @@ def setup_checklist(s, settings, stats) -> list[dict]:
     items.append({"ok": stats["ep_verified"] > 0, "title": "Servidores verificados",
                   "hint": (f"{stats['ep_tls_ok']} de {stats['ep_total']} responderam por TLS" if stats["ep_verified"] else
                            "Execute a verificação em Execuções e auditoria.")})
-    if settings.ucmdb_tql_apis:
+    if apis_configured(settings):
         jr, part = _last_ok(s, "ingest_apis")
-        items.append({"ok": bool(jr), "title": "Lista de APIs importada",
-                      "hint": f"{part.get('recebidos', 0)} APIs" if jr else "Ainda não importada com sucesso."})
+        com = part.get("com_validade") if jr else None
+        items.append({"ok": bool(jr) and bool(com), "title": "Lista de APIs importada",
+                      "hint": (f"{part.get('recebidos', 0)} APIs, {com} com data de expiração "
+                               f"({ {'tql': 'TQL', 'topologyQuery': 'REST, consulta ad-hoc', 'ci': 'REST, CI a CI', 'ficheiro': 'ficheiro'}.get((part.get('campos') or {}).get('metodo'), 'TQL') })"
+                               if jr else "Ainda não importada com sucesso.")})
     else:
         items.append({"ok": None, "title": "Lista de APIs", "hint": "Opcional: definir CERTWATCH_UCMDB_TQL_APIS no .env."})
     if settings.ct_domains:
@@ -436,7 +439,7 @@ def apis_page(request: Request, vista: str = "", q: str = "", user: str = Depend
                         .order_by(JobRun.id.desc()).limit(1))
         summary = (last.summary or {}).get("ingest_apis", {}) if last else {}
     return render(request, "apis.html", user, rows=rows, counts=counts, vista=vista, q=q, views=API_VIEWS,
-                  configured=bool(settings.ucmdb_tql_apis), tql=settings.ucmdb_tql_apis,
+                  configured=apis_configured(settings), tql=settings.ucmdb_tql_apis,
                   campos=summary.get("campos") if isinstance(summary, dict) else None,
                   resumo=summary if isinstance(summary, dict) else {},
                   any_host=any(r["api"].host for r in rows))
@@ -562,7 +565,7 @@ def jobs_page(request: Request, user: str = Depends(current_user)):
         runs = list(s.scalars(select(JobRun).order_by(JobRun.id.desc()).limit(50)))
         audits = list(s.scalars(select(AuditLog).order_by(AuditLog.id.desc()).limit(50)))
     st = get_settings()
-    jobs = [j for j in JOBS if (j != "ingest_apis" or st.ucmdb_tql_apis) and (j != "ingest_ct" or st.ct_domains)
+    jobs = [j for j in JOBS if (j != "ingest_apis" or apis_configured(st)) and (j != "ingest_ct" or st.ct_domains)
             and (j != "ssllabs" or st.ssllabs_email)]
     return render(request, "jobs.html", user, runs=runs, audits=audits, jobs=jobs, daily_at=st.pipeline_daily_at)
 

@@ -92,6 +92,8 @@ class Settings:
     apis_field_location: str
     apis_field_expired: str
     apis_field_registered: str
+    apis_enrich: str          # auto | query | ci | off
+    apis_file: str            # prefixo do ficheiro de exportação na diretoria de importação
 
     # Descoberta na internet (Certificate Transparency)
     ct_domains: list[str]
@@ -171,6 +173,8 @@ class Settings:
             apis_field_location=_env("CERTWATCH_APIS_FIELD_LOCATION", ""),
             apis_field_expired=_env("CERTWATCH_APIS_FIELD_EXPIRED", ""),
             apis_field_registered=_env("CERTWATCH_APIS_FIELD_REGISTERED", ""),
+            apis_enrich=(_env("CERTWATCH_APIS_ENRICH", "auto") or "auto").lower(),
+            apis_file=(_env("CERTWATCH_APIS_FILE", "api-cmdb") or "").lower(),
             ct_domains=_str_list(_env("CERTWATCH_CT_DOMAINS", "")),
             ct_sources=_str_list(_env("CERTWATCH_CT_SOURCES", "crtsh,certspotter,ctlogs")),
             ct_include_expired_days=int(_env("CERTWATCH_CT_INCLUDE_EXPIRED_DAYS", "0")),

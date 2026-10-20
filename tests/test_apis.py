@@ -48,7 +48,8 @@ def test_fetch_detects_fields_and_never_keeps_secrets(env):
     settings = replace(env, ucmdb_tql_apis="APIs_Exemplo")
     records, fields = fetch_apis(settings, client(CIS))
     assert fields == {"nome": "display_label", "url": "endpoint_url", "validade": "secret_expiration_date",
-                      "aplicacao": "aplicacao", "expirado": None, "localizacao": None, "registo": None}
+                      "aplicacao": "aplicacao", "expirado": None, "localizacao": None, "registo": None,
+                      "metodo": "tql"}
     dump = json.dumps(records, default=str)
     for secret in ("S3gr3d0", "p4ss", "tok-abc", "PRIVATE KEY"):
         assert secret not in dump
@@ -149,3 +150,98 @@ def test_api_page_views_and_export(env):
         assert "Segredo sem validade" in c.get("/apis", params={"vista": "sem_data"}, auth=auth).text
         csv_text = c.get("/apis/exportar", auth=auth).content.decode("utf-8")
         assert csv_text.startswith("\ufeffNome;Aplicação;Localização") and "CRM" in csv_text
+
+
+# ---- TQL cujo layout só traz o display_label (caso real): enriquecimento pela REST API ----
+THIN = [{"ucmdbId": f"id{i}", "type": "api_secrets", "properties": {"display_label": p["properties"]["display_label"]}}
+        for i, p in enumerate(REAL)]
+FULL = {f"id{i}": p["properties"] for i, p in enumerate(REAL)}
+
+
+def rest_client(allow_query=True, calls=None):
+    calls = calls if calls is not None else []
+
+    def handler(request):
+        path = request.url.path
+        calls.append((request.method, path))
+        if path.endswith("/authenticate"):
+            return httpx.Response(200, json={"token": "t"})
+        assert request.headers["authorization"] == "Bearer t"
+        if path.endswith("/topology"):
+            return httpx.Response(200, json={"cis": THIN, "relations": []})
+        if path.endswith("/topologyQuery"):
+            if not allow_query:
+                return httpx.Response(403, json={"error": "sem permissão para consultas por definição"})
+            body = json.loads(request.content)
+            node = body["nodes"][0]
+            assert node["type"] == "api_secrets" and node["ids"] == list(FULL)
+            assert "secret_value" not in node["layout"] and "secret_expiration_date" in node["layout"]
+            return httpx.Response(200, json={"cis": [
+                {"ucmdbId": k, "type": "api_secrets", "properties": {a: v.get(a) for a in node["layout"] if a in v}}
+                for k, v in FULL.items()], "relations": []})
+        if "/dataModel/ci/" in path:
+            uid = path.rsplit("/", 1)[1]
+            return httpx.Response(200, json={"ucmdbId": uid, "type": "api_secrets",
+                                             "properties": {**FULL[uid], "root_class": "api_secrets"}})
+        return httpx.Response(404)
+    return httpx.Client(base_url="https://cmdb.test/rest-api", transport=httpx.MockTransport(handler)), calls
+
+
+def test_enrich_with_topology_query(env):
+    settings = replace(env, ucmdb_tql_apis="APIs_Exemplo")
+    c, calls = rest_client()
+    records, fields = fetch_apis(settings, c)
+    assert fields["metodo"] == "topologyQuery" and fields["validade"] == "secret_expiration_date"
+    assert sum(1 for m, p in calls if "/dataModel/ci/" in p) == 1          # só um CI para conhecer os atributos
+    assert records[1]["application"] == "CRM" and records[1]["expiry"] is not None
+    assert "Xy7~Qk2" not in json.dumps(records, default=str)
+
+
+def test_enrich_ci_by_ci_when_query_not_allowed(env):
+    settings = replace(env, ucmdb_tql_apis="APIs_Exemplo")
+    c, calls = rest_client(allow_query=False)
+    records, fields = fetch_apis(settings, c)
+    assert fields["metodo"] == "ci" and "HTTP 403" in fields["avisos"][0]
+    assert sum(1 for r in records if r["expiry"]) == 2 and records[0]["cmdb_expired"] is True
+    assert "Xy7~Qk2" not in json.dumps(records, default=str)
+    info = describe_tql(settings, "APIs_Exemplo", rest_client(allow_query=False)[0])
+    assert info["metodo"] == "ci" and "secret_expiration_date" in info["atributos"]
+    assert "Xy7~Qk2" not in json.dumps(info, default=str)
+
+
+def test_api_file_fallback(env, tmp_path):
+    from certwatch.jobs import load_api_records
+    imp = tmp_path / "import"
+    imp.mkdir()
+    (imp / "api-cmdb.csv").write_bytes("\n".join([
+        "[API secrets] : Display Label\t[API secrets] : Aplicação\t[API secrets] : Data de expiração\t"
+        "[API secrets] : Expirado?\t[API secrets] : Localização\t[API secrets] : Data de registo na CMDB",
+        "Agente de inventario de rede - 0f1e2d3c4b5a69788796a5b4c3d2e1f00f1e2d3c\tSeguranca\t13-02-2023 13:00:00\ttrue\t"
+        "AzureAD - App Registration - Client Secret\t22-08-2025 11:13:52",
+        "CRM Testes\tCRM\t24-01-2027 13:00:00\tfalse\tAzureAD - App Registration - Client Secret\t22-08-2025 11:06:53",
+        "CRM Testes\tCRM\t24-01-2028 13:00:00\tfalse\tAzureAD - App Registration - Client Secret\t22-08-2025 11:06:53",
+    ]).encode("cp1252"))
+    # Sem TQL: usa o ficheiro
+    s = replace(env, import_dir=imp)
+    records, fields = load_api_records(s)
+    assert fields["metodo"] == "ficheiro" and fields["motivo"] == "TQL não configurado"
+    assert [r["application"] for r in records] == ["Seguranca", "CRM", "CRM"]
+    assert records[0]["cmdb_expired"] is True and records[0]["expiry"].year == 2023
+    assert records[0]["registered_at"].year == 2025 and records[1]["ucmdb_id"] != records[2]["ucmdb_id"]
+    # Com TQL mas a REST sem datas (enriquecimento desligado): também usa o ficheiro
+    s2 = replace(s, ucmdb_tql_apis="APIs_Exemplo", apis_enrich="off")
+    import certwatch.jobs as jobs
+    orig = jobs.fetch_apis
+    jobs.fetch_apis = lambda st: fetch_apis(st, rest_client()[0])
+    try:
+        records, fields = load_api_records(s2)
+    finally:
+        jobs.fetch_apis = orig
+    assert fields["metodo"] == "ficheiro" and fields["motivo"] == "REST sem datas de expiração"
+    with session_scope() as db:
+        out = ingest_apis(db, s, records, fields)
+        assert out["com_validade"] == 3
+    # O ficheiro da lista de APIs não aparece como "ignorado" na reconciliação
+    from certwatch.reconcile import ingest_imports
+    with session_scope() as db:
+        assert "ignorados" not in ingest_imports(db, s)

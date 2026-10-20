@@ -11,10 +11,13 @@
 {% block content %}
 {% if not configured %}
 <div class="note warn">A lista de APIs não está configurada. Defina <span class="mono">CERTWATCH_UCMDB_TQL_APIS</span> no ficheiro .env com o nome do TQL
-e reinicie (<span class="mono">docker compose up -d</span>).</div>
+e reinicie (<span class="mono">docker compose up -d</span>), ou coloque a exportação da lista em <span class="mono">import/api-cmdb.csv</span>.</div>
 {% elif campos %}
 <details class="note">
-  <summary>Campos lidos da CMDB{% if resumo.get('recebidos') %}: {{ resumo.get('com_validade', '?') }} de {{ resumo.get('recebidos') }} com data de expiração reconhecida{% endif %}</summary>
+  {% set metodos = {'tql': 'layout do TQL', 'topologyQuery': 'REST API, consulta ad-hoc (topologyQuery)', 'ci': 'REST API, CI a CI', 'ficheiro': 'ficheiro ' ~ (campos.get('ficheiro') or '')} %}
+  <summary>Campos lidos{% if resumo.get('recebidos') %}: {{ resumo.get('com_validade', '?') }} de {{ resumo.get('recebidos') }} com data de expiração reconhecida{% endif %} · origem: {{ metodos.get(campos.get('metodo'), 'layout do TQL') }}</summary>
+  {% if campos.get('motivo') %}<p class="small">Usado o ficheiro porque: {{ campos.get('motivo') }}.</p>{% endif %}
+  {% if campos.get('avisos') %}<ul class="small muted">{% for a in campos.get('avisos') %}<li>{{ a }}</li>{% endfor %}</ul>{% endif %}
   <table class="kv">
     {% for k, label in [('nome','Nome'),('aplicacao','Aplicação'),('validade','Data de expiração'),('expirado','Expirado?'),('localizacao','Localização'),('registo','Data de registo na CMDB'),('url','Endereço (URL)')] %}
     <tr><th>{{ label }}</th><td class="mono">{{ campos.get(k) or '— não encontrado' }}</td></tr>
@@ -22,7 +25,8 @@ e reinicie (<span class="mono">docker compose up -d</span>).</div>
   </table>
   <p class="small muted">Se algum campo estiver errado ou em falta, indique o nome do atributo no .env:
   <span class="mono">CERTWATCH_APIS_FIELD_NAME, _APP, _EXPIRY, _EXPIRED, _LOCATION, _REGISTERED, _URL</span>.
-  Para ver todos os atributos do TQL: <span class="mono">docker compose exec worker python -m certwatch.cli inspect-tql {{ tql }}</span></p>
+  Para ver todos os atributos: <span class="mono">docker compose exec worker python -m certwatch.cli inspect-tql {{ tql or 'NOME_DO_TQL' }}</span>.
+  Alternativa sem REST: colocar a exportação da lista em <span class="mono">import/api-cmdb.csv</span>; é usada quando a REST não traz datas.</p>
 </details>
 {% endif %}
 
