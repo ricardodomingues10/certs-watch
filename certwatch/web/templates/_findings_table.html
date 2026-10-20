@@ -1,5 +1,5 @@
 {% from "_macros.html" import sev, next_field %}
-<table>
+<div class="table-wrap"><table>
   <thead><tr><th>Severidade</th><th>Tipo</th><th>Alvo</th><th>Detalhes</th><th>Estado</th><th>Desde</th><th></th></tr></thead>
   <tbody>
   {% for f in findings %}
@@ -39,4 +39,4 @@
     <tr><td colspan="7" class="muted">Sem findings.</td></tr>
   {% endfor %}
   </tbody>
-</table>
+</table></div>

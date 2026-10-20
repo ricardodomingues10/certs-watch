@@ -8,7 +8,7 @@
 {% endblock %}
 {% block content %}
 {% set bs = s.by_state %}
-<section class="verdict" aria-label="Resumo">
+<section class="verdict {{ 'v-bad' if bs.get('falha', 0) else ('v-warn' if bs.get('aviso', 0) else ('v-ok' if s.total else '')) }}" aria-label="Resumo">
   {% if not s.total %}
     <p class="say">Ainda não há certificados. Comece por executar a importação da CMDB.</p>
   {% elif bs.get('falha', 0) %}
@@ -29,30 +29,39 @@
     <a href="/certificados?estado=cmdb" title="Sem servidor para testar: autoridades, utilizadores, dispositivos"><i class="lg lg-cmdb"></i>Só na CMDB {{ bs.get('cmdb',0) }}</a>
   </div>
   {% endif %}
-  <div class="facts">
-    <span><a href="/certificados"><b>{{ s.total }}</b> certificados</a></span>
-    <span><a href="/testes"><b>{{ s.ep_tls_ok }}</b> de {{ s.ep_total }} servidores verificados</a></span>
-    <span><a href="/certificados?dias=30"><b>{{ soon30 }}</b> expiram em 30 dias</a></span>
-    {% if smax_on %}<span><a href="/certificados?dias=30&pedido=nao_em_curso"><b class="{{ 'bad' if soon30_sem_pedido }}">{{ soon30_sem_pedido }}</b> destes sem pedido em curso</a></span>{% endif %}
-    <span><a href="/findings"><b>{{ n_open }}</b> alertas abertos</a></span>
-    <span><a href="/descoberta"><b>{{ nav.ct_por_triar }}</b> encontrados na internet por triar</a></span>
-    <span><a href="/reconciliacao"><b>{{ nav.reconc_dif }}</b> diferenças na reconciliação</a></span>
-    <span><a href="/apis"><b>{{ n_apis }}</b> APIs</a></span>
+  <div class="todo">
+    <div class="todo-group">
+      <span class="todo-h">Agir</span>
+      <a class="pill {{ 'pill-hot' if soon30 }}" href="/certificados?dias=30"><b>{{ soon30 }}</b> expiram em 30 dias</a>
+      {% if smax_on %}<a class="pill {{ 'pill-hot' if soon30_sem_pedido }}" href="/certificados?dias=30&amp;pedido=nao_em_curso"><b>{{ soon30_sem_pedido }}</b> destes sem pedido em curso</a>{% endif %}
+      <a class="pill {{ 'pill-hot' if sev_counts.get('critica',0) + sev_counts.get('alta',0) }}" href="/findings"><b>{{ sev_counts.get('critica',0) + sev_counts.get('alta',0) }}</b> alertas altos ou críticos</a>
+    </div>
+    <div class="todo-group">
+      <span class="todo-h">Rever</span>
+      <a class="pill {{ 'pill-warm' if nav.ct_por_triar }}" href="/descoberta"><b>{{ nav.ct_por_triar }}</b> encontrados na internet por triar</a>
+      <a class="pill {{ 'pill-warm' if nav.reconc_dif }}" href="/reconciliacao"><b>{{ nav.reconc_dif }}</b> diferenças na reconciliação</a>
+    </div>
+    <div class="todo-group">
+      <span class="todo-h">Inventário</span>
+      <a class="pill" href="/certificados"><b>{{ s.total }}</b> certificados</a>
+      <a class="pill" href="/testes"><b>{{ s.ep_tls_ok }}</b> de {{ s.ep_total }} servidores verificados</a>
+      <a class="pill" href="/apis"><b>{{ n_apis }}</b> APIs e segredos</a>
+    </div>
   </div>
 </section>
 
 <div class="split">
   <div>
-    <section class="card flush">
+    <section class="card flush urgent">
       <h2>Precisam de ação</h2>
       <div class="scroll"><table>
-        <thead><tr><th>Certificado</th><th>Tipo</th><th>Problema</th><th>Prazo</th>{% if smax_on %}<th>Pedido SMAX</th>{% endif %}<th>Gravidade</th></tr></thead>
+        <thead><tr><th>Certificado</th><th class="opt">Tipo</th><th class="opt-s">Problema</th><th>Prazo</th>{% if smax_on %}<th>Pedido SMAX</th>{% endif %}<th>Gravidade</th></tr></thead>
         <tbody>
         {% for r in urgent %}
           <tr>
             <td><a href="/certificados/detalhe?cn={{ r.cn|urlencode }}">{{ r.common_name }}</a></td>
-            <td>{{ type_chip(r.type) }} {{ scope_chip(r.scope) }}</td>
-            <td>{{ r.summary }}</td>
+            <td class="opt">{{ type_chip(r.type) }} {{ scope_chip(r.scope) }}</td>
+            <td class="opt-s">{{ r.summary }}</td>
             <td>{{ days(r.dias) }}</td>
             {% if smax_on %}<td>{{ ticket_cell(r.smax, r.dias) }}</td>{% endif %}
             <td>{{ sev(r.max_sev) }}</td>
@@ -127,14 +136,21 @@
   </div>
 
   <div>
-    <section class="card">
-      <h2>Configuração</h2>
-      <ul class="setup">
-        {% for it in setup %}
-        <li><span class="ic {{ 'ok' if it.ok else ('off' if it.ok is none else 'todo') }}" aria-hidden="true">{{ '✓' if it.ok else ('–' if it.ok is none else '!') }}</span>
-          <div>{{ it.title }}<span class="hint">{{ it.hint }}</span></div></li>
-        {% endfor %}
+    <section class="card renew">
+      <h2>Renovações e pedidos SMAX</h2>
+      {% if smax_on %}
+      <p class="renew-total"><b>{{ renew.ativos }}</b> certificados ativos <span class="muted small">(não expirados)</span></p>
+      {{ stackbar([('ok', renew.em_curso, 'Com pedido em curso'), ('aviso', renew.outra_data, 'Pedido aberto para outra data'),
+                   ('pendente', renew.sem, 'Sem pedido em curso')], renew.ativos) }}
+      <ul class="renew-list">
+        <li><i class="lg lg-ok"></i><a href="/certificados?dias=ativos&amp;pedido=em_curso">Com pedido em curso</a><b>{{ renew.em_curso }}</b></li>
+        <li><i class="lg lg-aviso"></i><a href="/certificados?dias=ativos&amp;pedido=outra_data">Pedido aberto para outra data</a><b>{{ renew.outra_data }}</b></li>
+        <li><i class="lg lg-pendente"></i><a href="/certificados?dias=ativos&amp;pedido=nao_em_curso">Sem pedido em curso</a><b>{{ renew.sem }}</b></li>
+        <li class="renew-hot"><a href="/certificados?dias=30&amp;pedido=nao_em_curso">Destes, expiram em 30 dias</a><b class="{{ 'bad' if renew.sem_30 }}">{{ renew.sem_30 }}</b></li>
       </ul>
+      {% else %}
+      <p class="muted small">Ligue a leitura do SMAX para ver, para cada certificado ativo, se já há pedido de renovação (README, secção 7).</p>
+      {% endif %}
     </section>
 
     <section class="card">
@@ -167,6 +183,16 @@
       </table>
       <p class="small"><a href="/jobs">Ver todas e a auditoria</a></p>
     </section>
+    {% set pend = setup|selectattr('ok', 'equalto', false)|list %}
+    <details class="card setup-card" {{ 'open' if pend }}>
+      <summary><h2>Configuração <small>{{ 'tudo ligado' if not pend else pend|length ~ ' por resolver' }}</small></h2></summary>
+      <ul class="setup">
+        {% for it in setup %}
+        <li><span class="ic {{ 'ok' if it.ok else ('off' if it.ok is none else 'todo') }}" aria-hidden="true">{{ '✓' if it.ok else ('–' if it.ok is none else '!') }}</span>
+          <div>{{ it.title }}<span class="hint">{{ it.hint }}</span></div></li>
+        {% endfor %}
+      </ul>
+    </details>
   </div>
 </div>
 {% endblock %}

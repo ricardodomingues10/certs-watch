@@ -245,9 +245,16 @@ def dashboard(request: Request, user: str = Depends(current_user)):
     soon30 = sum(1 for r in inv if r["dias"] is not None and 0 <= r["dias"] <= 30)
     soon30_sem_pedido = sum(1 for r in inv if r["dias"] is not None and 0 <= r["dias"] <= 30
                             and r["smax"]["state"] != "em_curso")
+    # Renovações: certificados ativos (não expirados) e a situação do pedido no SMAX
+    active = [r for r in inv if r["dias"] is not None and r["dias"] >= 0]
+    renew = {"ativos": len(active),
+             "em_curso": sum(1 for r in active if r["smax"]["state"] == "em_curso"),
+             "outra_data": sum(1 for r in active if r["smax"]["state"] == "outra_data"),
+             "sem": sum(1 for r in active if r["smax"]["state"] in ("fechado", "sem_pedido")),
+             "sem_30": soon30_sem_pedido}
     return render(request, "dashboard.html", user, s=stats, sev_counts=sev_counts, urgent=urgent, setup=setup,
                   last_jobs=last_jobs, n_apis=n_apis, n_open=len(open_findings), soon30=soon30,
-                  soon30_sem_pedido=soon30_sem_pedido, smax_on=smax_configured(settings))
+                  soon30_sem_pedido=soon30_sem_pedido, smax_on=smax_configured(settings), renew=renew)
 
 
 @app.get("/pesquisa")
@@ -281,9 +288,12 @@ def _inventory_filtered(q: str, dias: str, estado: str, tipo: str, ambito: str, 
         rows = [r for r in rows if ql in r["cn"] or any(ql in i.lower() for i in r["issuers"])
                 or ql in (r["live_issuer"] or "").lower() or any(ql in a.lower() for a in r["apis"])
                 or any(ql == x["id"].lower() for x in r["smax"]["open"] + r["smax"]["closed"])]
-    if dias.lstrip("-").isdigit():
+    # Prazo: "≤ N dias" = de hoje até N dias (sem os já expirados); -1 = só expirados; "ativos" = não expirados
+    if dias == "ativos":
+        rows = [r for r in rows if r["dias"] is not None and r["dias"] >= 0]
+    elif dias.lstrip("-").isdigit():
         lim = int(dias)
-        rows = [r for r in rows if r["dias"] is not None and r["dias"] <= lim]
+        rows = [r for r in rows if r["dias"] is not None and (r["dias"] < 0 if lim < 0 else 0 <= r["dias"] <= lim)]
     if estado in STATE_LABELS:
         rows = [r for r in rows if r["state"] == estado]
     if tipo in TYPE_LABELS:

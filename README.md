@@ -90,11 +90,11 @@ ssh -L 8088:127.0.0.1:8088 utilizador@servidor
 
 Abrir `http://localhost:8088`. O utilizador é `admin` e a palavra-passe é o conteúdo de `secrets/admin_password`.
 
-A navegação lateral está agrupada por tarefa: **Inventário** (o que existe), **Verificação** (o que está bem ou mal), **Descoberta** (o que existe e ninguém registou) e **Operação**. A caixa no topo procura em tudo.
+A interface adapta-se ao telemóvel (menu no botão do canto, colunas secundárias escondidas, tabelas que deslizam). A navegação lateral está agrupada por tarefa: **Inventário** (o que existe), **Verificação** (o que está bem ou mal), **Descoberta** (o que existe e ninguém registou) e **Operação**. A caixa no topo procura em tudo.
 
 | Página | Para que serve |
 |---|---|
-| Painel | Quantos certificados há, quantos falham, por tipo e âmbito, expirações dos próximos 12 meses, testes com mais falhas |
+| Painel | Frase de estado, o que fazer hoje (agir, rever), renovações com e sem pedido SMAX, certificados em falha, expirações dos próximos 12 meses, testes com mais falhas |
 | Certificados | Inventário com estado, tipo, âmbito, situação em linguagem simples, prazo e **renovação automática** (Let's Encrypt). Filtros por tudo isto e exportação CSV |
 | Detalhe | Todos os testes do servidor por camada, com **o que significa e como corrigir** cada falha; cadeia; registos CMDB; alertas |
 | Testes | Resumo de cada teste, notas externas do SSL Labs e matriz servidor × teste; clicar num teste mostra os servidores com problemas e a correção |
@@ -281,7 +281,7 @@ Os testes levantam servidores TLS reais em localhost com uma PKI de teste (chain
 Fazer o build numa máquina com acesso e transferir a imagem:
 
 ```bash
-docker compose build && docker save certwatch:0.5.1 postgres:16-alpine | gzip > certwatch-images.tar.gz
+docker compose build && docker save certwatch:0.6.0 postgres:16-alpine | gzip > certwatch-images.tar.gz
 # no servidor:
 gunzip -c certwatch-images.tar.gz | docker load && docker compose up -d --no-build
 ```

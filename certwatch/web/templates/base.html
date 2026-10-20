@@ -4,6 +4,8 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>{% block title %}certwatch{% endblock %} · certwatch</title>
+  <link rel="icon" href="/static/logo.svg" type="image/svg+xml">
+  <link rel="preload" href="/static/fonts/public-sans-latin-wght-normal.woff2" as="font" type="font/woff2" crossorigin>
   <link rel="stylesheet" href="/static/style.css">
 </head>
 <body>
@@ -12,8 +14,13 @@
 <a href="{{ href }}" class="{{ 'on' if active }}"{% if active %} aria-current="page"{% endif %}><span>{{ label }}</span>{% if count %}<span class="badge {{ kind }}">{{ count }}</span>{% endif %}</a>
 {%- endmacro %}
 <div class="shell">
+  <input type="checkbox" id="menu-toggle" class="menu-toggle" aria-label="Menu">
+  <header class="mobilebar">
+    <a class="brand" href="/"><img src="/static/logo.svg" alt="" width="28" height="28"><span class="word"><b>cert</b>watch</span></a>
+    <label for="menu-toggle" class="menu-btn" aria-label="Abrir ou fechar o menu"><span></span><span></span><span></span></label>
+  </header>
   <nav class="rail" aria-label="Navegação principal">
-    <a class="brand" href="/">cert<span>watch</span><small>Gestão de certificados</small></a>
+    <a class="brand" href="/"><img src="/static/logo.svg" alt="" width="34" height="34"><span class="word"><b>cert</b>watch<small>Gestão de certificados</small></span></a>
 
     <h4>Visão geral</h4>
     {{ navlink('/', 'Painel', p == '/') }}

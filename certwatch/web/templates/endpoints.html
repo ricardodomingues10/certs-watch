@@ -20,8 +20,8 @@
 
 <form class="filters" method="get"><input type="search" name="q" value="{{ q }}" placeholder="host ou CN"><button>Filtrar</button></form>
 
-<table>
-  <thead><tr><th>Endpoint</th><th>CN esperado</th><th>Origem</th><th>Estado</th><th>Última verificação</th><th>Falhas seguidas</th><th>Nota</th><th></th></tr></thead>
+<div class="card flush table-wrap"><table>
+  <thead><tr><th>Servidor</th><th>CN esperado</th><th>Origem</th><th>Estado</th><th>Última verificação</th><th>Falhas seguidas</th><th>Nota</th><th></th></tr></thead>
   <tbody>
   {% for e in eps %}
     {% set sr = scans.get(e.last_scan_id) %}
@@ -44,5 +44,5 @@
     <tr><td colspan="8" class="muted">Sem servidores. São criados ao importar a CMDB: <a href="/jobs">executar agora</a>.</td></tr>
   {% endfor %}
   </tbody>
-</table>
+</table></div>
 {% endblock %}
