@@ -306,7 +306,15 @@ def ingest_imports(session: Session, settings: Settings) -> dict:
             continue
         if src not in newest or p.stat().st_mtime > newest[src].stat().st_mtime:
             newest[src] = p
-    out = {src: import_file(session, path, src, settings) for src, path in sorted(newest.items())}
+    out = {}
+    for src, path in sorted(newest.items()):
+        try:
+            out[src] = import_file(session, path, src, settings)
+        except PermissionError:
+            out[src] = {"ficheiro": path.name, "estado": "erro",
+                        "problemas": [f"Sem permissão de leitura: no servidor, correr chmod 644 import/{path.name}"]}
+        except OSError as exc:
+            out[src] = {"ficheiro": path.name, "estado": "erro", "problemas": [f"Não foi possível ler: {exc}"]}
     if ignored:
         out["ignorados"] = ignored[:50]
     return out
@@ -483,3 +491,30 @@ def read_api_file(path: Path, settings: Settings) -> tuple[list[dict], dict]:
     if problems:
         fields["avisos"] = problems[:5]
     return out, fields
+
+
+def scan_import_dir(settings: Settings) -> list[dict]:
+    """O que está na diretoria de importação e o que acontece a cada ficheiro (para a página)."""
+    import os
+    d = settings.import_dir
+    if not d.is_dir():
+        return []
+    out = []
+    for p in sorted(d.iterdir(), key=lambda x: x.name.lower()):
+        if not p.is_file() or p.name.startswith(".") or p.name.lower() == "readme.md":
+            continue
+        name = p.name.lower()
+        readable = os.access(p, os.R_OK)
+        if p.suffix.lower() not in ALLOWED_EXT:
+            what, ok = f"ignorado: extensão {p.suffix or '(nenhuma)'} não suportada (usar .csv, .txt ou .xlsx)", False
+        elif settings.apis_file and name.startswith(settings.apis_file):
+            what, ok = "lista de APIs (usada na página APIs)", True
+        elif source_for(p.name, settings) is None:
+            what, ok = ("ignorado: o nome não começa por nenhum prefixo conhecido ("
+                        + ", ".join(f"{v}*" for v in settings.import_sources.values()) + ")"), False
+        else:
+            what, ok = f"fonte {source_for(p.name, settings)}", True
+        if not readable:
+            what, ok = f"sem permissão de leitura: correr chmod 644 import/{p.name}", False
+        out.append({"name": p.name, "size": p.stat().st_size, "what": what, "ok": ok})
+    return out

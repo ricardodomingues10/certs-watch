@@ -30,6 +30,21 @@
   </section>
 </div>
 
+{% set bad = dir_files|selectattr('ok', 'equalto', false)|list %}
+<details class="note {{ 'warn' if bad }}" {{ 'open' if bad }}>
+  <summary>Diretoria de importação: {{ dir_files|length }} ficheiro(s){% if bad %}, {{ bad|length }} com problemas{% endif %}</summary>
+  {% if dir_files %}
+  <table class="compact">
+    <thead><tr><th>Ficheiro</th><th>O que acontece</th><th>Última leitura</th></tr></thead>
+    {% for f in dir_files %}
+    <tr><td class="mono small">{{ f.name }}</td><td class="small">{% if not f.ok %}<span class="tag tag-err">atenção</span> {% endif %}{{ f.what }}
+      {% if f.last and f.last.status == 'erro' %}<ul class="small">{% for pr in (f.last.problems or [])[:5] %}<li>{{ pr }}</li>{% endfor %}</ul>{% endif %}</td>
+      <td class="small">{{ f.last.imported_at|dtt if f.last else 'ainda não lido: use "Ler a diretoria agora"' }}</td></tr>
+    {% endfor %}
+  </table>
+  {% else %}<p class="small">Sem ficheiros em <span class="mono">import/</span> (na pasta da aplicação no servidor).</p>{% endif %}
+</details>
+
 {% for f in files if f.problems %}
 <details class="note warn"><summary>{{ f.source }}: {{ f.problems|length }} aviso(s) na leitura de {{ f.name }}</summary>
   <ul class="small">{% for pr in f.problems[:50] %}<li>{{ pr }}</li>{% endfor %}</ul>

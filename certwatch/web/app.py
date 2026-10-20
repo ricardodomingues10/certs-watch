@@ -29,7 +29,7 @@ from ..jobs import apis_configured, JOBS, enqueue
 from ..collectors.ct import SOURCE_LABELS
 from ..discovery import CT_STATE_HELP, CT_STATES, CT_TABS, TRIAGE_LABELS, classify_ct
 from ..models import ApiRecord, AuditLog, Certificate, CmdbRecord, CtCert, Endpoint, Finding, ImportFile, JobRun, ScanResult, SslLabsResult
-from ..reconcile import REC_HELP, REC_STATES, REC_TABS, reconcile
+from ..reconcile import REC_HELP, REC_STATES, REC_TABS, scan_import_dir, reconcile
 from ..trust import local_trust_files
 from ..normalize import split_api_name, is_ip, is_valid_hostname, norm_host, norm_issuer
 from .security import check_csrf, current_user, security_middleware
@@ -654,6 +654,13 @@ def reconciliacao(request: Request, estado: str = "", fonte: str = "", q: str = 
     with session_scope() as s:
         res = reconcile(s, settings)
         history = list(s.scalars(select(ImportFile).order_by(ImportFile.id.desc()).limit(20)))
+        dir_files = scan_import_dir(settings)
+        for f in dir_files:   # último resultado de leitura deste ficheiro (para mostrar erros de colunas, datas...)
+            last = s.scalar(select(ImportFile).where(ImportFile.name == f["name"]).order_by(ImportFile.id.desc()).limit(1))
+            f["last"] = last
+            if last is not None and last.status == "erro":
+                f["ok"] = False
+                f["what"] += " — a última leitura falhou"
     rows = res["rows"]
     if not estado:
         estado = "diferencas"
@@ -669,7 +676,7 @@ def reconciliacao(request: Request, estado: str = "", fonte: str = "", q: str = 
     return render(request, "reconciliacao.html", user, rows=rows[:2000], n_rows=len(rows), counts=res["counts"],
                   n_diff=n_diff, files=res["files"], history=history, estado=estado, fonte=fonte, q=q,
                   sources=sorted(settings.import_sources), prefixes=settings.import_sources,
-                  import_dir=str(settings.import_dir))
+                  import_dir=str(settings.import_dir), dir_files=dir_files)
 
 
 @app.get("/reconciliacao/exportar")

@@ -63,6 +63,8 @@ def _int_list(value: str) -> list[int]:
     return sorted({int(x) for x in value.split(",") if x.strip()})
 
 
+DEFAULT_IMPORT_SOURCES = "CA1=ca1;CA2=ca2;AVI=avi;AZURE=azure"
+
 # Let's Encrypt: pelo nome da organização ou pelo CN das intermédias (R3, R10, R11, E5, E6, YR1...),
 # que é muitas vezes o único texto que fica no campo Issuer da CMDB.
 DEFAULT_AUTO_RENEW = r"let'?s ?encrypt;\bisrg\b;^(cn=)?[re]\d{1,2}$;^(cn=)?y[re]\d{1,2}$"
@@ -185,7 +187,8 @@ class Settings:
             ssllabs_max_age_days=int(_env("CERTWATCH_SSLLABS_MAX_AGE_DAYS", "7")),
             ssllabs_budget_min=int(_env("CERTWATCH_SSLLABS_BUDGET_MIN", "30")),
             import_dir=Path(_env("CERTWATCH_IMPORT_DIR", "/app/import")),
-            import_sources=_kv_map(_env("CERTWATCH_IMPORT_SOURCES", "CA1=ca1;CA2=ca2;AVI=avi;AZURE=azure")),
+            # As fontes do .env juntam-se às de origem (um .env antigo sem AZURE continua a reconhecer azure*)
+            import_sources={**_kv_map(DEFAULT_IMPORT_SOURCES), **_kv_map(_env("CERTWATCH_IMPORT_SOURCES", ""))},
             import_issuers=_kv_map(_env("CERTWATCH_IMPORT_ISSUERS", "")),
             internal_suffixes=_str_list(_env("CERTWATCH_INTERNAL_SUFFIXES", ".local,.lan,.internal,.intranet,.corp")),
             internal_issuer_patterns=_str_list(_env("CERTWATCH_INTERNAL_ISSUER_PATTERNS", "internal,interna")),

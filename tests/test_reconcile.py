@@ -166,3 +166,26 @@ def test_azure_credentials_against_api_list(env, tmp_path):
     assert by[("AZURE", "Radar")]["state"] == "data_posterior"            # segredo novo não registado
     assert by[("AZURE", "Removida do Azure")]["state"] == "so_na_cmdb"
     assert all(r["azure"] for r in res["rows"])
+
+
+def test_old_env_still_reads_azure_and_directory_panel(env, tmp_path, monkeypatch):
+    """Um .env da 0.3 com CERTWATCH_IMPORT_SOURCES sem AZURE continua a reconhecer azure*;
+    a página mostra o que acontece a cada ficheiro da diretoria."""
+    from fastapi.testclient import TestClient
+    from certwatch import config
+    from certwatch.web.app import app
+    imp = tmp_path / "imp"
+    imp.mkdir()
+    (imp / "azure.csv").write_text('"AppRegistration";"CredentialType";"KeyId";"EndDate"\n"App X";"Secret";"k";"20/10/2030 10:00:00"\n')
+    (imp / "notas.docx").write_bytes(b"x")
+    (imp / "exportacao.csv").write_text("a;b\n1;2\n")
+    monkeypatch.setenv("CERTWATCH_IMPORT_DIR", str(imp))
+    monkeypatch.setenv("CERTWATCH_IMPORT_SOURCES", "CA1=ca1;CA2=ca2;AVI=avi")
+    config.get_settings.cache_clear()
+    assert config.get_settings().import_sources["AZURE"] == "azure"
+    from certwatch.jobs import run_now
+    assert run_now("ingest_imports", "teste", config.get_settings()).summary["ingest_imports"]["AZURE"]["registos"] == 1
+    with TestClient(app) as c:
+        page = c.get("/reconciliacao", params={"fonte": "AZURE", "estado": "novo"}, auth=("admin", "teste-admin-123")).text
+    assert "App X" in page and "fonte AZURE" in page
+    assert "extensão .docx não suportada" in page and "não começa por nenhum prefixo conhecido" in page
