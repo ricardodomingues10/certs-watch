@@ -2,7 +2,7 @@
 {% block title %}Reconciliação{% endblock %}
 {% block crumb %}Descoberta{% endblock %}
 {% block page_title %}Reconciliação com as exportações{% endblock %}
-{% block lede %}Compara os ficheiros exportados das CAs e do AVI com a CMDB: certificados novos, datas que mudaram e registos que deixaram de aparecer. Quando o servidor foi verificado, a sua data serve de desempate.{% endblock %}
+{% block lede %}Compara os ficheiros exportados das CAs, do AVI e do Azure com a CMDB: certificados e segredos novos, datas que mudaram e registos que deixaram de aparecer. Quando o servidor foi verificado, a sua data serve de desempate.{% endblock %}
 {% block actions %}
 <form method="post" action="/jobs/ingest_imports"><input type="hidden" name="csrf" value="{{ csrf }}"><input type="hidden" name="next" value="/jobs"><button class="primary">Ler a diretoria agora</button></form>
 <a class="button" href="/reconciliacao/exportar?estado={{ estado }}">Exportar esta vista (CSV)</a>
@@ -13,7 +13,7 @@
     <h2>Ficheiros em uso</h2>
     {% if files %}
     <table class="compact">
-      <thead><tr><th>Fonte</th><th>Ficheiro</th><th>Lido em</th><th class="num">Certificados</th></tr></thead>
+      <thead><tr><th>Fonte</th><th>Ficheiro</th><th>Lido em</th><th class="num">Registos</th></tr></thead>
       {% for f in files %}<tr><td><b>{{ f.source }}</b></td><td class="mono small">{{ f.name }}</td><td class="small">{{ f.imported_at|dtt }}</td><td class="num">{{ f.rows_ok }}</td></tr>{% endfor %}
     </table>
     {% else %}
@@ -26,6 +26,7 @@
       {% for label, prefix in prefixes.items() %}<span class="mono">{{ prefix }}*</span> = {{ label }}{{ ', ' if not loop.last else '.' }}{% endfor %}
       Em cada fonte é usado o ficheiro mais recente. Um ficheiro igual ao anterior não é lido de novo.</p>
     <p class="small muted">São reconhecidas as colunas das exportações do certutil (Issued Common Name, Certificate Expiration Date, Serial Number, Request Disposition) e do AVI (Subject_CommonName, Validity_NotAfter, Issuer_CommonName). Pedidos revogados ou não emitidos são ignorados. Datas DD/MM/AAAA nunca são trocadas.</p>
+    <p class="small muted">Exportações do Azure AD (colunas AppRegistration, CredentialType, KeyId, EndDate) são comparadas com a <a href="/apis">lista de APIs e segredos</a> da CMDB, pelo nome da App Registration e pela data de fim.</p>
   </section>
 </div>
 
@@ -53,18 +54,18 @@
 
 <div class="card flush scroll">
 <table>
-  <thead><tr><th>Fonte</th><th>Certificado</th><th>Situação</th><th>Validade na fonte</th><th>Na CMDB</th><th>No servidor</th><th>Serial / emissor</th></tr></thead>
+  <thead><tr><th>Fonte</th><th>Certificado ou segredo</th><th>Situação</th><th>Validade na fonte</th><th>Na CMDB</th><th>No servidor</th><th>Identificador / emissor</th></tr></thead>
   <tbody>
   {% for r in rows %}
     <tr>
       <td><b>{{ r.source }}</b></td>
-      <td><a href="/certificados/detalhe?cn={{ r.cn_norm|urlencode }}" class="mono">{{ r.cn }}</a>
+      <td>{% if r.azure %}<a href="/apis?q={{ r.cn|urlencode }}">{{ r.cn }}</a>{% if r.app and r.app != r.cn %}<div class="small muted">{{ 'Aplicação na CMDB' if r.state == 'so_na_cmdb' else 'Enterprise app' }}: {{ r.app }}</div>{% endif %}{% else %}<a href="/certificados/detalhe?cn={{ r.cn_norm|urlencode }}" class="mono">{{ r.cn }}</a>{% endif %}
         <div class="small muted">{{ r.file }}{{ ', linha ' ~ r.row_no if r.row_no }}</div></td>
       <td><span class="tag {{ 'tag-err' if r.state in ('novo', 'data_anterior') else ('tag-run' if r.state in ('data_posterior', 'so_na_cmdb') else 'tag-ok' if r.state == 'igual' else 'tag-off') }}" title="{{ REC_HELP[r.state] }}">{{ REC_STATES[r.state] }}</span></td>
       <td>{{ r.valid_to|dt }}</td>
       <td>{{ r.cmdb_valid_to|dt }}</td>
       <td>{{ r.live_valid_to|dt }}{% if r.live_confirma %} <span class="tag tag-ok" title="O servidor apresenta a mesma data que a fonte">confirma</span>{% endif %}</td>
-      <td class="small"><span class="mono">{{ r.serial or '—' }}</span><div class="muted">{{ r.issuer }}</div></td>
+      <td class="small">{% if r.azure %}{{ r.issuer or '—' }}{% if r.serial %}<div class="mono muted" title="KeyId">{{ r.serial }}</div>{% endif %}{% else %}<span class="mono">{{ r.serial or '—' }}</span><div class="muted">{{ r.issuer }}</div>{% endif %}</td>
     </tr>
   {% else %}
     <tr><td colspan="7"><div class="empty">{% if files %}<b>Sem diferenças nesta vista</b>A CMDB coincide com as exportações.{% else %}<b>Sem dados</b>Ainda não foram lidos ficheiros.{% endif %}</div></td></tr>

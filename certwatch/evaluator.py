@@ -15,10 +15,11 @@ from datetime import datetime
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from .classify import is_auto_renew
 from .checks import days_left, evaluate_endpoint, expiry_severity  # noqa: F401  (reexportados)
 from .config import Settings
 from .db import as_utc, utcnow
-from .models import ApiRecord, Certificate, CmdbRecord, Endpoint, Finding, ScanResult
+from .models import ApiRecord, Certificate, CmdbRecord, Endpoint, Finding, ScanResult, SslLabsResult
 
 SEVERITIES = ("info", "baixa", "media", "alta", "critica")
 SEV_RANK = {s: i for i, s in enumerate(SEVERITIES)}
@@ -38,7 +39,9 @@ FINDING_TYPES = {
     "TLS_LEGADO": "Protocolo TLS obsoleto",
     "INALCANCAVEL": "Servidor sem resposta em verificações seguidas",
     "WILDCARD_SEM_ENDPOINT": "Wildcard sem servidores conhecidos para verificar",
-    "API_EXPIRACAO": "Validade registada na lista de APIs a terminar",
+    "API_EXPIRACAO": "Segredo de API a expirar (lista de APIs da CMDB)",
+    "API_REGISTO_EXPIRADO": "Segredo de API expirado há mais de 30 dias ainda na lista",
+    "SSLLABS_NOTA": "Nota baixa na avaliação externa do SSL Labs",
     "API_SEM_TLS": "API publicada sem TLS (http://)",
 }
 
@@ -159,10 +162,12 @@ def collect_findings(session: Session, settings: Settings, now: datetime) -> dic
                 c.add("CMDB_REGISTO_EXPIRADO", "baixa", f"{rec.common_name} ({label})", f"cmdb:{cn}|{li}", cn,
                       dias=dl, expira_em=_iso(rec.valid_to), ucmdb_id=rec.ucmdb_id)
                 continue
-            sev = expiry_severity(dl, None, settings)
+            auto = is_auto_renew(settings, rec.issuer, rec.issuer_name)
+            sev = expiry_severity(dl, None, settings, auto_renew=auto)
             if sev:
                 c.add("EXPIRACAO", sev, f"{rec.common_name} ({label})", f"cmdb:{cn}|{li}", cn,
-                      fonte="cmdb", dias=dl, expira_em=_iso(rec.valid_to), emissor=label, ucmdb_id=rec.ucmdb_id)
+                      fonte="cmdb", dias=dl, expira_em=_iso(rec.valid_to), emissor=label, ucmdb_id=rec.ucmdb_id,
+                      renovacao_automatica=auto or None)
 
     # Lista de APIs
     for api in snap.apis:
@@ -171,11 +176,30 @@ def collect_findings(session: Session, settings: Settings, now: datetime) -> dic
             c.add("API_SEM_TLS", "alta", subj, f"api:{api.ucmdb_id}", api.host, url=api.url)
         if api.expiry is not None:
             dl = days_left(api.expiry, now)
+            extra = dict(aplicacao=api.application or None, localizacao=api.location or None,
+                         url=api.url or None, ucmdb_id=api.ucmdb_id)
+            if dl < -30:
+                # Segredo antigo: já não é um risco de interrupção, é limpeza (no Azure e na CMDB)
+                c.add("API_REGISTO_EXPIRADO", "baixa", subj, f"api:{api.ucmdb_id}", api.host,
+                      dias=dl, expira_em=_iso(api.expiry), **extra)
+                continue
             sev = expiry_severity(dl, None, settings)
             if sev:
                 c.add("API_EXPIRACAO", sev, subj, f"api:{api.ucmdb_id}", api.host,
-                      dias=dl, expira_em=_iso(api.expiry), url=api.url, ucmdb_id=api.ucmdb_id)
+                      dias=dl, expira_em=_iso(api.expiry), **extra)
+    # Avaliação externa SSL Labs
+    for r in session.scalars(select(SslLabsResult).where(SslLabsResult.status == "READY")):
+        sev = SSLLABS_SEVERITY.get(r.grade)
+        if sev:
+            c.add("SSLLABS_NOTA", sev, f"{r.host}: nota {r.grade}", f"ssllabs:{r.host}", r.host,
+                  nota=r.grade, avaliado_em=_iso(r.test_time),
+                  ips={e.get("ip"): e.get("grade") for e in (r.endpoints or [])},
+                  relatorio=f"https://www.ssllabs.com/ssltest/analyze.html?d={r.host}&hideResults=on")
     return c.items
+
+
+# Notas A+, A e A- não geram alerta. T = certificado não confiável; M = nome não corresponde.
+SSLLABS_SEVERITY = {"B": "media", "C": "alta", "D": "alta", "E": "alta", "F": "alta", "T": "alta", "M": "media"}
 
 
 def evaluate(session: Session, settings: Settings, now: datetime | None = None) -> dict:

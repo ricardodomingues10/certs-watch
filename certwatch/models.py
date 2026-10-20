@@ -106,6 +106,10 @@ class ApiRecord(Base):
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     ucmdb_id: Mapped[str] = mapped_column(String(64), unique=True, index=True)
     name: Mapped[str] = mapped_column(String(512), default="")
+    application: Mapped[str] = mapped_column(String(512), default="")
+    location: Mapped[str] = mapped_column(String(512), default="")       # ex.: "AzureAD - App Registration - Client Secret"
+    cmdb_expired: Mapped[bool | None] = mapped_column(Boolean, nullable=True)   # campo "Expirado?" da CMDB
+    registered_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     url: Mapped[str] = mapped_column(String(1024), default="")
     scheme: Mapped[str] = mapped_column(String(16), default="")
     host: Mapped[str] = mapped_column(String(253), default="", index=True)
@@ -221,3 +225,19 @@ class AuditLog(Base):
     action: Mapped[str] = mapped_column(String(64))
     target: Mapped[str] = mapped_column(String(600), default="")
     details: Mapped[dict] = mapped_column(JSON, default=dict)
+
+
+class SslLabsResult(Base):
+    """Última avaliação externa do Qualys SSL Labs para um nome público."""
+
+    __tablename__ = "ssllabs_results"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    host: Mapped[str] = mapped_column(String(253), unique=True, index=True)
+    status: Mapped[str] = mapped_column(String(32), default="")
+    status_message: Mapped[str] = mapped_column(String(512), default="")
+    grade: Mapped[str] = mapped_column(String(8), default="")          # pior nota entre os IPs do nome
+    has_warnings: Mapped[bool] = mapped_column(Boolean, default=False)
+    endpoints: Mapped[list] = mapped_column(JSON, default=list)
+    test_time: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    checked_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)

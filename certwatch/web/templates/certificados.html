@@ -4,7 +4,7 @@
 {% block crumb %}Inventário{% endblock %}
 {% block page_title %}Certificados <small>{{ rows|length }} de {{ total }}</small>{% endblock %}
 {% block lede %}Um certificado por nome, de todas as origens: CMDB, lista de APIs e servidores adicionados à mão. A data que conta é a do servidor quando ele responde; senão usa-se a da CMDB. Passe o rato sobre o tipo e o âmbito para ver o que significam.{% endblock %}
-{% block actions %}<a class="button" href="/api/inventario">Dados em JSON</a>{% endblock %}
+{% block actions %}<a class="button" href="/certificados/exportar{{ '?' ~ export_qs if export_qs }}">Exportar esta vista (CSV)</a>{% endblock %}
 {% block content %}
 
 <form class="filters" method="get">
@@ -21,6 +21,11 @@
     <option value="">Interno e externo</option>
     {% for k, l in SCOPE_LABELS.items() %}<option value="{{ k }}" {{ 'selected' if ambito == k }}>{{ l }}</option>{% endfor %}
   </select>
+  <select id="f-renovacao" name="renovacao" aria-label="Renovação">
+    <option value="">Renovação automática ou manual</option>
+    <option value="auto" {{ 'selected' if renovacao == 'auto' }}>Renovação automática (Let's Encrypt)</option>
+    <option value="manual" {{ 'selected' if renovacao == 'manual' }}>Renovação manual</option>
+  </select>
   <select id="f-dias" name="dias" aria-label="Prazo">
     <option value="">Qualquer prazo</option>
     {% for v, l in [('-1','Expirados'),('7','≤ 7 dias'),('20','≤ 20 dias'),('30','≤ 30 dias'),('90','≤ 90 dias')] %}
@@ -28,13 +33,13 @@
     {% endfor %}
   </select>
   <button>Filtrar</button>
-  {% if q or dias or estado or tipo or ambito %}<a href="/certificados">limpar filtros</a>{% endif %}
+  {% if q or dias or estado or tipo or ambito or renovacao %}<a href="/certificados">limpar filtros</a>{% endif %}
 </form>
 
 <div class="card flush scroll">
 <table>
   <thead>
-    <tr><th>Estado</th><th>Certificado</th><th>Tipo</th><th>Âmbito</th><th>Situação</th><th>Prazo</th><th>Emissor</th><th>Origem</th></tr>
+    <tr><th>Estado</th><th>Certificado</th><th>Tipo</th><th>Âmbito</th><th>Situação</th><th>Prazo</th><th>Emissor</th><th title="{{ AUTO_RENEW_HELP['auto'] }}">Renovação automática</th><th>Origem</th></tr>
   </thead>
   <tbody>
   {% for r in rows %}
@@ -47,10 +52,11 @@
       <td>{{ r.summary }}{% if r.findings > 1 %} <span class="muted small">(+{{ r.findings - 1 }})</span>{% endif %}</td>
       <td>{{ days(r.dias) }} <div class="small muted">{{ (r.live_not_after or r.cmdb_valid_to)|dt }} · {{ r.fonte_data }}</div></td>
       <td class="small">{{ r.live_issuer or r.issuers|join(', ') or '—' }}</td>
+      <td>{% if r.renovacao == 'auto' %}<span class="tag tag-ok" title="{{ AUTO_RENEW_HELP['auto'] }} Detetado em: {{ r.renovacao_fonte }}.">Sim</span>{% else %}<span class="muted" title="{{ AUTO_RENEW_HELP['manual'] }}">Não</span>{% endif %}</td>
       <td class="small">{% if r.in_cmdb %}CMDB{% if r.registos > 1 %} ({{ r.registos }}){% endif %}{% endif %}{% if r.apis %}{{ ' · ' if r.in_cmdb }}APIs{% endif %}{% if not r.in_cmdb and not r.apis %}manual{% endif %}</td>
     </tr>
   {% else %}
-    <tr><td colspan="8" class="muted">Sem resultados.</td></tr>
+    <tr><td colspan="9" class="muted">Sem resultados.</td></tr>
   {% endfor %}
   </tbody>
 </table>

@@ -20,7 +20,7 @@ from .trust import build_bundle
 
 log = logging.getLogger(__name__)
 
-JOBS = ("pipeline", "ingest_cmdb", "ingest_apis", "ingest_imports", "ingest_ct", "scan", "evaluate")
+JOBS = ("pipeline", "ingest_cmdb", "ingest_apis", "ingest_imports", "ingest_ct", "scan", "ssllabs", "evaluate")
 SCAN_RETENTION_DAYS = 90
 
 
@@ -125,8 +125,9 @@ def ingest_apis(session: Session, settings: Settings, records: list[dict] | None
             session.add(api)
             existing[r["ucmdb_id"]] = api
             created += 1
-        for k in ("name", "url", "scheme", "host", "port", "expiry", "extra"):
-            setattr(api, k, r.get(k))
+        for k in ("name", "application", "location", "cmdb_expired", "registered_at",
+                  "url", "scheme", "host", "port", "expiry", "extra"):
+            setattr(api, k, (r.get(k) or "") if k in ("application", "location") else r.get(k))
         api.active, api.last_seen = True, now
         if not api.host:
             sem_url += 1
@@ -160,6 +161,7 @@ def ingest_apis(session: Session, settings: Settings, records: list[dict] | None
             ep.enabled, ep.note = False, "desativado: API já não está na lista"
 
     return {"recebidos": len(records), "novos": created, "sem_url": sem_url,
+            "com_validade": sum(1 for r in valid if r.get("expiry")),
             "endpoints_criados": ep_created, "campos": fields or {}}
 
 
@@ -269,6 +271,9 @@ def _run(job: str, settings: Settings) -> dict:
     if job == "scan":
         with session_scope() as s:
             return {"scan": run_scan(s, settings)}
+    if job == "ssllabs":
+        from .external import run_ssllabs
+        return {"ssllabs": run_ssllabs(settings)}
     if job == "evaluate":
         with session_scope() as s:
             return {"evaluate": evaluate(s, settings)}
@@ -304,6 +309,13 @@ def _run(job: str, settings: Settings) -> dict:
                 summary["ingest_ct"] = {"erro": str(exc)}
         with session_scope() as s:
             summary["scan"] = run_scan(s, settings)
+        if settings.ssllabs_email:
+            from .external import run_ssllabs
+            try:
+                summary["ssllabs"] = run_ssllabs(settings)
+            except Exception as exc:
+                log.exception("SSL Labs falhou")
+                summary["ssllabs"] = {"erro": str(exc)}
         with session_scope() as s:
             summary["evaluate"] = evaluate(s, settings)
         return summary

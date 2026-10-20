@@ -23,17 +23,23 @@ from .config import Settings
 from .db import as_utc, utcnow
 from .evaluator import load_snapshot
 from .models import CmdbRecord, ImportFile, ImportRecord
-from .normalize import norm_host, norm_issuer, norm_serial
+from .normalize import norm_host, norm_issuer, norm_label, norm_serial
 
 ALLOWED_EXT = {".csv", ".txt", ".xlsx", ".xlsm"}
 MAX_PROBLEMS = 200
 
 COLUMNS = {
-    "cn": ["issuedcommonname", "subjectcommonname", "commonname", "cn"],
-    "cn_fallback": ["nome", "name", "displaylabel", "hostname"],
+    "cn": ["issuedcommonname", "subjectcommonname", "commonname", "cn", "appregistration"],
+    "cn_fallback": ["nome", "name", "displaylabel", "hostname", "enterpriseapplication"],
     "valid_to": ["certificateexpirationdate", "validitynotafter", "notafter", "validto", "expirationdate",
-                 "dataexpiracao", "datadeexpiracao", "datadevalidade", "validade", "expira"],
-    "serial": ["serialnumber", "serial", "numerodeserie"],
+                 "dataexpiracao", "datadeexpiracao", "datadevalidade", "validade", "expira", "enddate"],
+    "serial": ["serialnumber", "serial", "numerodeserie", "keyid"],
+    # Azure AD (credenciais de App Registrations)
+    "cred_type": ["credentialtype"],
+    "app_id": ["appid", "applicationid", "clientid"],
+    "enterprise_app": ["enterpriseapplication"],
+    "start": ["startdate"],
+    "status": ["status"],
     "issuer": ["issuercommonname", "issuername", "issuer", "emissor"],
     "san": ["subjectalternativename", "subjectalternativenames", "san"],
     "disposition": ["requestdisposition", "disposition"],
@@ -56,7 +62,7 @@ REC_HELP = {
     "data_posterior": "A fonte tem um certificado mais recente: foi renovado e a CMDB não foi atualizada.",
     "data_anterior": "A fonte tem um certificado mais antigo do que o registado. Confirmar no servidor qual está em uso antes de mexer na CMDB.",
     "igual": "Nome e data coincidem com a CMDB.",
-    "so_na_cmdb": "A CMDB indica este emissor, mas o certificado não aparece na exportação da CA. Pode ter sido revogado, ou a exportação estar incompleta.",
+    "so_na_cmdb": "A CMDB indica este emissor (ou, no Azure, uma App Registration), mas o registo não aparece na exportação. Pode ter sido revogado ou apagado, ou a exportação estar incompleta.",
     "expirado": "Já expirou na fonte; não é comparado.",
 }
 
@@ -223,6 +229,8 @@ def import_file(session: Session, path: Path, source: str, settings: Settings) -
 
     records = []
     skipped = defaultdict(int)
+    # Exportação de credenciais do Azure AD: compara-se com a lista de APIs (segredos) da CMDB
+    azure = "cred_type" in cols or "appregistration" in {norm_header(h) for h in headers}
     if "cn" in cols and "valid_to" in cols:
         def cell(row, key):
             i = cols.get(key)
@@ -242,6 +250,15 @@ def import_file(session: Session, path: Path, source: str, settings: Settings) -
             if vt is None:
                 if len(problems) < MAX_PROBLEMS:
                     problems.append(f"Linha {n}: data de expiração não reconhecida ({raw_date!r}) para {cn}")
+                continue
+            if azure:
+                ctype = str(cell(row, "cred_type") or "").strip()
+                records.append(ImportRecord(
+                    source=source, row_no=n, common_name=cn, cn_norm=norm_label(cn), valid_to=vt,
+                    serial=str(cell(row, "serial") or "").strip()[:200], issuer=ctype, san="",
+                    extra={"tipo": "azure", **{k: str(cell(row, k)).strip() for k in
+                           ("cred_type", "app_id", "enterprise_app", "start", "status") if cell(row, k) not in (None, "")}},
+                ))
                 continue
             issuer = str(cell(row, "issuer") or "").strip() or settings.import_issuers.get(source, "")
             records.append(ImportRecord(
@@ -309,16 +326,27 @@ def reconcile(session: Session, settings: Settings, now: datetime | None = None)
     file_by_id = {f.id: f for f in files}
     recs = list(session.scalars(select(ImportRecord).where(ImportRecord.file_id.in_(list(file_by_id) or [-1]))))
 
+    api_by_label: dict[str, list] = defaultdict(list)
+    for a in snap.apis:
+        api_by_label[norm_label(a.name)].append(a)
+
     rows, seen = [], set()
     present: dict[str, set[str]] = defaultdict(set)
+    azure_sources: set[str] = set()
     for r in recs:
+        is_azure = (r.extra or {}).get("tipo") == "azure"
         present[r.source].add(r.cn_norm)
-        key = (r.source, r.cn_norm, as_utc(r.valid_to).date() if r.valid_to else None)
+        key = (r.source, r.cn_norm, as_utc(r.valid_to).date() if r.valid_to else None, r.serial if is_azure else "")
         if key in seen:
             continue
         seen.add(key)
-        cmdb = snap.by_cn.get(r.cn_norm, [])
-        cmdb_dates = sorted((as_utc(c.valid_to) for c in cmdb if c.valid_to), reverse=True)
+        if is_azure:
+            azure_sources.add(r.source)
+            cmdb_dates = sorted((as_utc(a.expiry) for a in api_by_label.get(r.cn_norm, []) if a.expiry), reverse=True)
+            cmdb = api_by_label.get(r.cn_norm, [])
+        else:
+            cmdb = snap.by_cn.get(r.cn_norm, [])
+            cmdb_dates = sorted((as_utc(c.valid_to) for c in cmdb if c.valid_to), reverse=True)
         vt = as_utc(r.valid_to)
         if vt < now:
             state = "expirado"
@@ -330,13 +358,17 @@ def reconcile(session: Session, settings: Settings, now: datetime | None = None)
             state = "data_posterior"
         else:
             state = "data_anterior"
-        lv = live.get(r.cn_norm)
+        lv = None if is_azure else live.get(r.cn_norm)
+        # Para o Azure mostra-se a data da CMDB mais próxima (pode haver vários segredos por aplicação)
+        shown = (min(cmdb_dates, key=lambda d: abs((d - vt).total_seconds())) if is_azure and cmdb_dates
+                 else (cmdb_dates[0] if cmdb_dates else None))
         rows.append({
             "source": r.source, "cn": r.common_name, "cn_norm": r.cn_norm, "valid_to": vt,
-            "cmdb_valid_to": cmdb_dates[0] if cmdb_dates else None, "live_valid_to": lv,
+            "cmdb_valid_to": shown, "live_valid_to": lv,
             "live_confirma": bool(lv and abs((as_utc(lv).date() - vt.date()).days) <= 1),
             "serial": r.serial, "issuer": r.issuer, "san": r.san, "state": state,
-            "file": file_by_id[r.file_id].name, "row_no": r.row_no,
+            "file": file_by_id[r.file_id].name, "row_no": r.row_no, "azure": is_azure,
+            "app": (r.extra or {}).get("enterprise_app", ""),
         })
 
     # CMDB com o emissor de uma CA importada, mas ausente da exportação dessa CA
@@ -351,7 +383,22 @@ def reconcile(session: Session, settings: Settings, now: datetime | None = None)
                     "source": f.source, "cn": c.common_name, "cn_norm": c.cn_norm, "valid_to": None,
                     "cmdb_valid_to": as_utc(c.valid_to), "live_valid_to": live.get(c.cn_norm), "live_confirma": False,
                     "serial": "", "issuer": c.issuer_name or c.issuer, "san": "", "state": "so_na_cmdb",
-                    "file": f.name, "row_no": None,
+                    "file": f.name, "row_no": None, "azure": False, "app": "",
+                })
+
+    # Segredos do Azure registados na CMDB que não aparecem na exportação do Azure
+    for f in files:
+        if f.source not in azure_sources:
+            continue
+        for a in snap.apis:
+            label = norm_label(a.name)
+            if ("azure" in (a.location or "").lower() and label not in present[f.source]
+                    and a.expiry is not None and as_utc(a.expiry) >= now):
+                rows.append({
+                    "source": f.source, "cn": a.name, "cn_norm": label, "valid_to": None,
+                    "cmdb_valid_to": as_utc(a.expiry), "live_valid_to": None, "live_confirma": False,
+                    "serial": "", "issuer": a.location, "san": "", "state": "so_na_cmdb",
+                    "file": f.name, "row_no": None, "azure": True, "app": a.application,
                 })
 
     order = {"novo": 0, "data_posterior": 1, "data_anterior": 2, "so_na_cmdb": 3, "igual": 4, "expirado": 5}

@@ -124,3 +124,45 @@ def test_reconcile_pages(env, tmp_path, monkeypatch):
                       follow_redirects=False).headers["location"] == "/reconciliacao"
         dash = c.get("/", auth=auth).text
         assert "Configuração" in dash and "Ficheiros de reconciliação" in dash and "AVI: avi_x.csv" in dash
+
+
+def test_azure_credentials_against_api_list(env, tmp_path):
+    from certwatch.collectors.ucmdb import parse_apis
+    from certwatch.jobs import ingest_apis
+    imp = tmp_path / "import"
+    imp.mkdir()
+    s = replace(env, import_dir=imp)
+    loc = "AzureAD - App Registration - Client Secret"
+    cis = [
+        {"ucmdbId": "a1", "properties": {"display_label": "CRM Testes", "application_name": "CRM",
+                                         "secret_expiration_date": "24-01-2027 13:00:00", "secret_location": loc}},
+        {"ucmdbId": "a2", "properties": {"display_label": "Radar - 0123456789abcdef0123", "application_name": "Radar",
+                                         "secret_expiration_date": d(100)[:10].replace("/", "-") + " 13:00:00",
+                                         "secret_location": loc}},
+        {"ucmdbId": "a3", "properties": {"display_label": "Removida do Azure", "application_name": "Z",
+                                         "secret_expiration_date": d(200)[:10].replace("/", "-") + " 13:00:00",
+                                         "secret_location": loc}},
+    ]
+    records, fields = parse_apis(cis, s)
+    with session_scope() as db:
+        ingest_apis(db, s, records, fields)
+
+    csv_text = "\n".join([
+        '"EnterpriseApplication";"AppRegistration";"AppId";"CredentialType";"KeyId";"StartDate";"EndDate";"DaysRemaining";"Status"',
+        '"App_TST";"App_TST";"x";"Secret";"k1";"20/10/2024 14:59:29";"20/10/2025 14:59:29";"0";"Expired"',
+        '"Automacao Exemplo";"Novo App";"x";"Certificate";"k2";"21/06/2026 23:00:00";"21/06/2036 23:00:00";"3532";"Valid"',
+        '"CRM";"CRM Testes";"x";"Secret";"k3";"24/01/2025 10:00:00";"24/01/2027 14:59:29";"460";"Valid"',
+        f'"Radar";"Radar";"x";"Secret";"k4";"01/01/2026 10:00:00";"{d(400)}";"400";"Valid"',
+    ])
+    (imp / "azure.csv").write_text(csv_text, encoding="utf-8")
+    with session_scope() as db:
+        out = ingest_imports(db, s)
+        assert out["AZURE"]["registos"] == 4
+        res = reconcile(db, s)
+    by = {(r["source"], r["cn"]): r for r in res["rows"]}
+    assert by[("AZURE", "App_TST")]["state"] == "expirado"
+    assert by[("AZURE", "Novo App")]["state"] == "novo" and by[("AZURE", "Novo App")]["issuer"] == "Certificate"
+    assert by[("AZURE", "CRM Testes")]["state"] == "igual"                 # mesma data, horas diferentes
+    assert by[("AZURE", "Radar")]["state"] == "data_posterior"            # segredo novo não registado
+    assert by[("AZURE", "Removida do Azure")]["state"] == "so_na_cmdb"
+    assert all(r["azure"] for r in res["rows"])

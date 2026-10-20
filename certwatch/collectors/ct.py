@@ -22,7 +22,7 @@ from ..normalize import norm_host, norm_issuer, norm_serial, parse_iso
 from ..trust import build_bundle
 
 log = logging.getLogger(__name__)
-USER_AGENT = "certwatch/0.3 (certificate monitoring for the domain owner)"
+USER_AGENT = "certwatch/0.4 (certificate monitoring for the domain owner)"
 MAX_PAGES = 20
 
 
@@ -49,13 +49,33 @@ class CtRecord:
 
     @property
     def key_serial(self) -> str:
-        return f"{self.issuer_norm}|{self.serial_hex}" if self.serial_hex else ""
+        return serial_key(self.serial_hex)
 
     @property
     def key_time(self) -> str:
-        nb = self.not_before.strftime("%Y%m%d%H%M%S") if self.not_before else ""
-        na = self.not_after.strftime("%Y%m%d%H%M%S") if self.not_after else ""
-        return f"{self.issuer_norm}|{nb}|{na}"
+        return time_key(self.not_before, self.not_after)
+
+    def time_name_keys(self) -> set[tuple[str, str]]:
+        return time_name_keys(self.not_before, self.not_after, self.names)
+
+
+# Chaves de fusão. As fontes descrevem o emissor de formas diferentes (crt.sh dá o DN, ctlogs.dev só o
+# nome da organização, Cert Spotter um DN RFC 2253), por isso o emissor não entra nas chaves:
+#   - serial: aleatório com pelo menos 64 bits nas CA públicas; basta sozinho;
+#   - validade ao segundo + um nome em comum: para fontes sem serial (Cert Spotter).
+def serial_key(serial_hex: str | None) -> str:
+    s = norm_serial(serial_hex or "")
+    return s if len(s) >= 8 else ""
+
+
+def time_key(nb: datetime | None, na: datetime | None) -> str:
+    f = lambda d: d.astimezone(timezone.utc).strftime("%Y%m%d%H%M%S") if d else ""
+    return f"{f(nb)}|{f(na)}" if (nb or na) else ""
+
+
+def time_name_keys(nb, na, names) -> set[tuple[str, str]]:
+    tk = time_key(nb, na)
+    return {(tk, n) for n in names or []} if tk else set()
 
 
 def _dt(value) -> datetime | None:

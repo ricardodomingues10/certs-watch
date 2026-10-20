@@ -14,7 +14,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from .checks import CHECKS, FALHA, STATUS_RANK, days_left, evaluate_endpoint
-from .classify import cert_type, scope_of
+from .classify import cert_type, scope_of, is_auto_renew
 from .config import Settings
 from .db import as_utc
 from .evaluator import FINDING_TYPES, SEV_RANK, Snapshot, load_snapshot
@@ -82,6 +82,8 @@ def build_inventory(session: Session, settings: Settings, now: datetime, snap: S
                           common_name=latest.common_name if latest else cn)
         scope = scope_of(cn, kind, settings, issuer_norm=issuer_norm,
                          resolved_ip=live_scan.resolved_ip if live_scan else "")
+        cmdb_auto = any(is_auto_renew(settings, r.issuer, r.issuer_name) for r in recs)
+        live_auto = bool(live_cert) and is_auto_renew(settings, live_cert.issuer_dn, live_cert.issuer_cn)
         fl = open_f.get(cn, [])
         scannable = kind in ("host", "ip") or bool(snap.ep_by_cn.get(cn))
         state = _state_from(fl, live_cert is not None, scannable)
@@ -104,6 +106,8 @@ def build_inventory(session: Session, settings: Settings, now: datetime, snap: S
             "live_sha256": live_cert.sha256 if live_cert else None,
             "dias": days,
             "fonte_data": "live" if live_cert else ("cmdb" if latest else "—"),
+            "renovacao": "auto" if (cmdb_auto or live_auto) else "manual",
+            "renovacao_fonte": ", ".join(x for x, ok in (("CMDB", cmdb_auto), ("servidor", live_auto)) if ok),
             "findings": len(fl),
             "max_sev": max((f.severity for f in fl), key=lambda x: SEV_RANK[x], default=None),
         })

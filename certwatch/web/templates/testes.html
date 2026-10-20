@@ -26,6 +26,22 @@
   </div>
 </section>
 
+{% if ext or ssllabs_on %}
+<section class="card">
+  <h2>Avaliação externa (SSL Labs) <small>{{ ext|length }} nomes externos</small></h2>
+  <p class="small muted">Nota de A+ a F dada pelo Qualys SSL Labs a partir da internet: protocolos, cifras, cadeia e vulnerabilidades conhecidas. Complementa os testes acima, que correm a partir da rede interna. T = certificado não confiável, M = nome não corresponde.</p>
+  {% if ext %}
+  <div class="grades">
+    {% for r in ext %}
+    <a href="/certificados/detalhe?cn={{ r.host|urlencode }}" title="{{ r.status_message if r.status != 'READY' else ('com avisos' if r.has_warnings else '') }}">
+      <span class="grade grade-{{ 'ok' if r.grade in GOOD_GRADES else ('mid' if r.grade in ('B','M') else ('bad' if r.grade else 'none')) }}">{{ r.grade or '—' }}</span>
+      <span class="mono small">{{ r.host }}</span></a>
+    {% endfor %}
+  </div>
+  {% else %}<p class="muted">Ainda sem resultados: a primeira avaliação corre na próxima execução completa.</p>{% endif %}
+</section>
+{% endif %}
+
 {% if teste %}
 <section class="card">
   {% set c = CHECK_BY_ID[teste] %}

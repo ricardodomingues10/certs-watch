@@ -3,8 +3,10 @@ from __future__ import annotations
 
 import ipaddress
 import re
+from functools import lru_cache
 
 from .config import Settings
+from .normalize import norm_issuer
 
 TYPE_LABELS = {
     "api": "API",
@@ -69,3 +71,37 @@ def scope_of(cn_norm: str, kind: str, settings: Settings, *, issuer_norm: str = 
     if kind in ("host", "wildcard"):
         return "externo"
     return "desconhecido"
+
+
+# ------------------------------------------------------------------ renovação automática
+AUTO_RENEW_LABELS = {"auto": "Automática", "manual": "Manual"}
+AUTO_RENEW_HELP = {
+    "auto": "Emitido por Let's Encrypt (ACME): o certificado dura 90 dias ou menos e o servidor renova-o sozinho, "
+            "normalmente a 30 dias do fim. Só há alerta se faltarem poucos dias, porque isso significa que a renovação falhou.",
+    "manual": "Emitido por uma CA sem renovação automática: alguém tem de pedir, instalar e registar o novo certificado.",
+}
+
+
+@lru_cache(maxsize=64)
+def _auto_renew_res(patterns: tuple[str, ...]) -> tuple[re.Pattern, ...]:
+    out = []
+    for p in patterns:
+        try:
+            out.append(re.compile(p, re.I))
+        except re.error:
+            continue
+    return tuple(out)
+
+
+def is_auto_renew(settings: Settings, *issuers: str | None) -> bool:
+    """Verdadeiro se algum dos textos de emissor (Issuer, IssuerName, DN ou CN visto no servidor)
+    corresponder a uma CA com renovação automática."""
+    res = _auto_renew_res(tuple(settings.auto_renew_issuers))
+    for value in issuers:
+        v = (value or "").strip()
+        if not v:
+            continue
+        for cand in {v, norm_issuer(v)}:
+            if any(r.search(cand) for r in res):
+                return True
+    return False

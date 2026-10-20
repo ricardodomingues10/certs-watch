@@ -103,3 +103,19 @@ def hostname_matches(host: str, dns_names: list[str], ip_names: list[str] | None
             if left and "." not in left:
                 return True
     return False
+
+
+# Nomes de segredos de API: "Nome da App Registration - 0f1e2d3c..." (sufixo com identificador hexadecimal ou GUID)
+_API_SUFFIX = re.compile(r"\s+[-–]\s+([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}|[0-9a-f]{16,64})\s*$", re.I)
+
+
+def split_api_name(name: str | None) -> tuple[str, str]:
+    """('Nome', 'sufixo') — o sufixo é o identificador acrescentado ao nome, se existir."""
+    s = (name or "").strip()
+    m = _API_SUFFIX.search(s)
+    return (s[:m.start()].strip(), m.group(1)) if m else (s, "")
+
+
+def norm_label(name: str | None) -> str:
+    """Nome legível normalizado para comparação: sem sufixo, minúsculas, espaços colapsados."""
+    return re.sub(r"\s+", " ", split_api_name(name)[0]).strip().lower()

@@ -5,6 +5,8 @@
   python -m certwatch.cli trust-fetch HOST[:PORTA]
   python -m certwatch.cli inspect-tql NOME_DO_TQL     (atributos de um TQL, sem valores sensíveis)
   python -m certwatch.cli ct-test DOMINIO             (testa as fontes de Certificate Transparency)
+  python -m certwatch.cli ssllabs-register --nome N --apelido A --email E --organizacao O
+  python -m certwatch.cli ssllabs-test HOST           (avaliação SSL Labs de um nome, 1-2 minutos)
 """
 from __future__ import annotations
 
@@ -51,7 +53,33 @@ def main(argv: list[str] | None = None) -> int:
     i.add_argument("tql")
     c = sub.add_parser("ct-test")
     c.add_argument("domain")
+    reg = sub.add_parser("ssllabs-register", help="registo único na API v4 do SSL Labs (email da organização)")
+    reg.add_argument("--nome", required=True)
+    reg.add_argument("--apelido", required=True)
+    reg.add_argument("--email", required=True)
+    reg.add_argument("--organizacao", required=True)
+    sl = sub.add_parser("ssllabs-test")
+    sl.add_argument("host")
     a = p.parse_args(argv)
+
+    if a.cmd == "ssllabs-register":
+        from .collectors import ssllabs
+        with ssllabs.client(get_settings()) as cl:
+            print(json.dumps(ssllabs.register(cl, a.nome, a.apelido, a.email, a.organizacao), ensure_ascii=False))
+        print(f"Defina CERTWATCH_SSLLABS_EMAIL={a.email} no .env e reinicie (docker compose up -d).")
+        return 0
+
+    if a.cmd == "ssllabs-test":
+        from .collectors import ssllabs
+        st = get_settings()
+        if not st.ssllabs_email:
+            print("Defina primeiro CERTWATCH_SSLLABS_EMAIL no .env.", file=sys.stderr)
+            return 2
+        with ssllabs.client(st) as cl:
+            res = ssllabs.assess(cl, a.host.strip().lower(), st.ssllabs_email)
+        print(json.dumps(res, ensure_ascii=False, indent=2, default=str))
+        print(f"Relatório: {ssllabs.report_url(a.host)}")
+        return 0 if res["status"] == "READY" else 1
 
     if a.cmd == "ct-test":
         from dataclasses import replace

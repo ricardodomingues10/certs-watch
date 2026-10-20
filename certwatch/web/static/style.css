@@ -240,3 +240,15 @@ dl.kv dt { color: var(--muted); } dl.kv dd { margin: 0; }
 @media (prefers-reduced-motion: reduce) { * { scroll-behavior: auto !important; } }
 .nowrap { white-space: nowrap; }
 .ct-names { min-width: 220px; }
+
+/* Notas SSL Labs */
+.grade { display: inline-grid; place-items: center; min-width: 34px; height: 28px; padding: 0 6px; border-radius: 6px;
+         font-weight: 700; font-size: 14px; border: 1px solid var(--line); background: var(--panel); }
+.grade-ok { background: var(--ok-soft, #e3f4ec); color: var(--ok); border-color: var(--ok); }
+.grade-mid { background: var(--warn-soft); color: var(--warn); border-color: var(--warn); }
+.grade-bad { background: var(--bad-soft); color: var(--bad); border-color: var(--bad); }
+.grade-none { color: var(--muted); }
+.grades { display: flex; flex-wrap: wrap; gap: 8px 18px; }
+.grades a { display: inline-flex; align-items: center; gap: 8px; color: var(--ink); }
+.grid2 { display: grid; grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); gap: 16px; }
+.grid2 > .card { margin-bottom: 16px; }

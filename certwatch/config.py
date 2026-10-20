@@ -7,6 +7,7 @@ de ambiente direta só é aceite como último recurso (útil em testes).
 from __future__ import annotations
 
 import os
+import re
 from dataclasses import dataclass, field
 from functools import lru_cache
 from pathlib import Path
@@ -33,7 +34,18 @@ def _secret(name: str, env_var: str) -> str | None:
 
 
 def _str_list(value: str | None) -> list[str]:
-    return [x.strip().lower() for x in (value or "").split(",") if x.strip()]
+    """Lista separada por vírgulas, ponto e vírgula ou espaços; minúsculas, sem repetidos."""
+    out: list[str] = []
+    for x in re.split(r"[,;\s]+", value or ""):
+        x = x.strip().lower()
+        if x and x not in out:
+            out.append(x)
+    return out
+
+
+def _pattern_list(value: str | None) -> list[str]:
+    """Expressões regulares separadas por ';' (a vírgula pode fazer parte de uma expressão)."""
+    return [x.strip() for x in (value or "").split(";") if x.strip()]
 
 
 def _kv_map(value: str | None) -> dict[str, str]:
@@ -49,6 +61,11 @@ def _kv_map(value: str | None) -> dict[str, str]:
 
 def _int_list(value: str) -> list[int]:
     return sorted({int(x) for x in value.split(",") if x.strip()})
+
+
+# Let's Encrypt: pelo nome da organização ou pelo CN das intermédias (R3, R10, R11, E5, E6, YR1...),
+# que é muitas vezes o único texto que fica no campo Issuer da CMDB.
+DEFAULT_AUTO_RENEW = r"let'?s ?encrypt;\bisrg\b;^(cn=)?[re]\d{1,2}$;^(cn=)?y[re]\d{1,2}$"
 
 
 @dataclass(frozen=True)
@@ -71,6 +88,10 @@ class Settings:
     apis_field_name: str
     apis_field_url: str
     apis_field_expiry: str
+    apis_field_app: str
+    apis_field_location: str
+    apis_field_expired: str
+    apis_field_registered: str
 
     # Descoberta na internet (Certificate Transparency)
     ct_domains: list[str]
@@ -78,6 +99,12 @@ class Settings:
     ct_include_expired_days: int
     certspotter_api_key: str | None
     ctlogs_api_key: str | None
+
+    # Avaliação externa Qualys SSL Labs (opcional; exige registo com email da organização)
+    ssllabs_email: str
+    ssllabs_max_hosts: int
+    ssllabs_max_age_days: int
+    ssllabs_budget_min: int
 
     # Reconciliação com ficheiros de exportação
     import_dir: Path
@@ -102,6 +129,9 @@ class Settings:
     # Regras
     expiry_thresholds: dict[str, int] = field(default_factory=dict)
     lifetime_warn_pct: float = 0.2
+    # Renovação automática (ACME / Let's Encrypt): emissores reconhecidos e prazo a partir do qual se alerta
+    auto_renew_issuers: list[str] = field(default_factory=list)
+    auto_renew_alert_days: int = 20
 
     # Agendamento
     pipeline_daily_at: str = "06:15"
@@ -137,13 +167,21 @@ class Settings:
             apis_field_name=_env("CERTWATCH_APIS_FIELD_NAME", ""),
             apis_field_url=_env("CERTWATCH_APIS_FIELD_URL", ""),
             apis_field_expiry=_env("CERTWATCH_APIS_FIELD_EXPIRY", ""),
+            apis_field_app=_env("CERTWATCH_APIS_FIELD_APP", ""),
+            apis_field_location=_env("CERTWATCH_APIS_FIELD_LOCATION", ""),
+            apis_field_expired=_env("CERTWATCH_APIS_FIELD_EXPIRED", ""),
+            apis_field_registered=_env("CERTWATCH_APIS_FIELD_REGISTERED", ""),
             ct_domains=_str_list(_env("CERTWATCH_CT_DOMAINS", "")),
             ct_sources=_str_list(_env("CERTWATCH_CT_SOURCES", "crtsh,certspotter,ctlogs")),
             ct_include_expired_days=int(_env("CERTWATCH_CT_INCLUDE_EXPIRED_DAYS", "0")),
             certspotter_api_key=_secret("certspotter_api_key", "CERTWATCH_CERTSPOTTER_API_KEY"),
             ctlogs_api_key=_secret("ctlogs_api_key", "CERTWATCH_CTLOGS_API_KEY"),
+            ssllabs_email=_env("CERTWATCH_SSLLABS_EMAIL", ""),
+            ssllabs_max_hosts=int(_env("CERTWATCH_SSLLABS_MAX_HOSTS", "25")),
+            ssllabs_max_age_days=int(_env("CERTWATCH_SSLLABS_MAX_AGE_DAYS", "7")),
+            ssllabs_budget_min=int(_env("CERTWATCH_SSLLABS_BUDGET_MIN", "30")),
             import_dir=Path(_env("CERTWATCH_IMPORT_DIR", "/app/import")),
-            import_sources=_kv_map(_env("CERTWATCH_IMPORT_SOURCES", "CA1=ca1;CA2=ca2;AVI=avi")),
+            import_sources=_kv_map(_env("CERTWATCH_IMPORT_SOURCES", "CA1=ca1;CA2=ca2;AVI=avi;AZURE=azure")),
             import_issuers=_kv_map(_env("CERTWATCH_IMPORT_ISSUERS", "")),
             internal_suffixes=_str_list(_env("CERTWATCH_INTERNAL_SUFFIXES", ".local,.lan,.internal,.intranet,.corp")),
             internal_issuer_patterns=_str_list(_env("CERTWATCH_INTERNAL_ISSUER_PATTERNS", "internal,interna")),
@@ -161,6 +199,8 @@ class Settings:
                 "baixa": int(_env("CERTWATCH_EXPIRY_BAIXA", "90")),
             },
             lifetime_warn_pct=float(_env("CERTWATCH_LIFETIME_WARN_PCT", "0.2")),
+            auto_renew_issuers=_pattern_list(_env("CERTWATCH_AUTO_RENEW_ISSUERS", DEFAULT_AUTO_RENEW)),
+            auto_renew_alert_days=int(_env("CERTWATCH_AUTO_RENEW_ALERT_DAYS", "20")),
             pipeline_daily_at=_env("CERTWATCH_PIPELINE_DAILY_AT", "06:15"),
             timezone=_env("CERTWATCH_TIMEZONE", "Europe/Lisbon"),
             admin_user=_env("CERTWATCH_ADMIN_USER", "admin"),

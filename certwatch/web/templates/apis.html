@@ -2,38 +2,65 @@
 {% from "_macros.html" import days, state, scope_chip %}
 {% block title %}APIs{% endblock %}
 {% block crumb %}Inventário{% endblock %}
-{% block page_title %}APIs <small>{{ apis|length }}</small>{% endblock %}
-{% block lede %}APIs da lista da CMDB{% if tql %} ({{ tql }}){% endif %}. Para cada uma é verificado o certificado do servidor onde está publicada e vigiada a data de validade registada na lista. Segredos e palavras-passe da CMDB nunca são importados.{% endblock %}
-{% block actions %}{% if configured %}<form method="post" action="/jobs/ingest_apis"><input type="hidden" name="csrf" value="{{ csrf }}"><input type="hidden" name="next" value="/jobs"><button>Importar lista agora</button></form>{% endif %}{% endblock %}
+{% block page_title %}APIs e segredos <small>{{ counts[''] }}</small>{% endblock %}
+{% block lede %}Segredos de aplicações registados na CMDB{% if tql %} ({{ tql }}){% endif %}, por exemplo client secrets de App Registrations do Azure AD. A data que conta é a data de expiração registada; quando a API tem um endereço, o certificado do servidor também é verificado. Os segredos em si nunca são importados.{% endblock %}
+{% block actions %}
+{% if configured %}<form method="post" action="/jobs/ingest_apis"><input type="hidden" name="csrf" value="{{ csrf }}"><input type="hidden" name="next" value="/apis"><button>Importar lista agora</button></form>{% endif %}
+<a class="button" href="/apis/exportar?vista={{ vista }}{{ '&q=' ~ q|urlencode if q }}">Exportar esta vista (CSV)</a>
+{% endblock %}
 {% block content %}
 {% if not configured %}
 <div class="note warn">A lista de APIs não está configurada. Defina <span class="mono">CERTWATCH_UCMDB_TQL_APIS</span> no ficheiro .env com o nome do TQL
-(ex.: <span class="mono">Lista_de_APIs</span>) e reinicie (<span class="mono">docker compose up -d</span>).</div>
+e reinicie (<span class="mono">docker compose up -d</span>).</div>
 {% elif campos %}
-<div class="note">Campos usados da CMDB: nome = <span class="mono">{{ campos.get('nome') or '—' }}</span>,
-URL = <span class="mono">{{ campos.get('url') or '—' }}</span>, validade = <span class="mono">{{ campos.get('validade') or '—' }}</span>.
-Se algum estiver errado, defina-o no .env (<span class="mono">CERTWATCH_APIS_FIELD_NAME / _URL / _EXPIRY</span>).</div>
+<details class="note">
+  <summary>Campos lidos da CMDB{% if resumo.get('recebidos') %}: {{ resumo.get('com_validade', '?') }} de {{ resumo.get('recebidos') }} com data de expiração reconhecida{% endif %}</summary>
+  <table class="kv">
+    {% for k, label in [('nome','Nome'),('aplicacao','Aplicação'),('validade','Data de expiração'),('expirado','Expirado?'),('localizacao','Localização'),('registo','Data de registo na CMDB'),('url','Endereço (URL)')] %}
+    <tr><th>{{ label }}</th><td class="mono">{{ campos.get(k) or '— não encontrado' }}</td></tr>
+    {% endfor %}
+  </table>
+  <p class="small muted">Se algum campo estiver errado ou em falta, indique o nome do atributo no .env:
+  <span class="mono">CERTWATCH_APIS_FIELD_NAME, _APP, _EXPIRY, _EXPIRED, _LOCATION, _REGISTERED, _URL</span>.
+  Para ver todos os atributos do TQL: <span class="mono">docker compose exec worker python -m certwatch.cli inspect-tql {{ tql }}</span></p>
+</details>
 {% endif %}
+
+<nav class="tabs" aria-label="Vistas">
+  {% for k, label in views.items() %}
+  <a href="/apis{{ '?vista=' ~ k if k }}" class="{{ 'on' if vista == k }}">{{ label }} <span class="n">{{ counts[k] }}</span></a>
+  {% endfor %}
+</nav>
+{% if vista == 'divergentes' %}<p class="muted">O campo "Expirado?" da CMDB não corresponde à data de expiração: um dos dois está desatualizado.</p>{% endif %}
+
+<form class="filters" method="get">
+  {% if vista %}<input type="hidden" name="vista" value="{{ vista }}">{% endif %}
+  <input type="search" id="a-q" name="q" value="{{ q }}" placeholder="nome, aplicação ou localização" aria-label="Filtrar">
+  <button>Filtrar</button>{% if q %} <a href="/apis{{ '?vista=' ~ vista if vista }}">limpar</a>{% endif %}
+</form>
 
 <div class="card flush scroll">
 <table>
-  <thead><tr><th>API</th><th>Servidor</th><th>Âmbito</th><th>Certificado do servidor</th><th>Validade na lista</th><th>Outros dados</th></tr></thead>
+  <thead><tr><th>Nome</th><th>Aplicação</th><th>Localização</th><th>Expira</th><th>Expirado? (CMDB)</th><th>Registo na CMDB</th>{% if any_host %}<th>Servidor</th>{% endif %}</tr></thead>
   <tbody>
-  {% for a in apis %}
-    {% set r = inv.get(a.host) %}
+  {% for r in rows %}{% set a = r.api %}
     <tr>
-      <td><b>{{ a.name or '(sem nome)' }}</b><div class="mono small muted">{{ a.url or 'sem URL' }}</div>
+      <td><b>{{ r.nome or '(sem nome)' }}</b>{% if r.sufixo %}<div class="mono small muted" title="Identificador que faz parte do nome na CMDB">{{ r.sufixo }}</div>{% endif %}
         {% if a.scheme == 'http' %}<span class="tag tag-err">sem TLS</span>{% endif %}</td>
-      <td class="mono small">{% if a.host %}<a href="/certificados/detalhe?cn={{ a.host|urlencode }}">{{ a.host }}{{ ':' ~ a.port if a.port }}</a>{% else %}—{% endif %}</td>
-      <td>{% if r %}{{ scope_chip(r.scope) }}{% endif %}</td>
-      <td>{% if r %}{{ state(r.state) }}<div class="small">{{ r.summary }}</div>{% else %}<span class="muted">por verificar</span>{% endif %}</td>
-      <td>{% if a.expiry %}{{ days(days_left(a.expiry, now)) }}<div class="small muted">{{ a.expiry|dt }}</div>{% else %}<span class="muted">—</span>{% endif %}</td>
-      <td class="small">{% for k, v in a.extra.items() %}<div><span class="muted">{{ k }}:</span> {{ v }}</div>{% endfor %}</td>
+      <td>{{ a.application or '—' }}</td>
+      <td class="small">{{ a.location or '—' }}</td>
+      <td class="nowrap">{% if a.expiry %}{{ days(r.dias) }}<div class="small muted">{{ a.expiry|dt }}</div>{% else %}<span class="muted">sem data</span>{% endif %}</td>
+      <td>{% if a.cmdb_expired is none %}<span class="muted">—</span>{% else %}{{ 'Sim' if a.cmdb_expired else 'Não' }}{% endif %}
+        {% if r.divergente %}<div><span class="tag tag-run" title="O campo da CMDB não corresponde à data de expiração">desatualizado</span></div>{% endif %}</td>
+      <td class="small nowrap">{{ a.registered_at|dt if a.registered_at else '—' }}</td>
+      {% if any_host %}<td class="small">{% if a.host %}<a class="mono" href="/certificados/detalhe?cn={{ a.host|urlencode }}">{{ a.host }}{{ ':' ~ a.port if a.port }}</a>
+        {% if r.servidor %}<div>{{ state(r.servidor.state) }} {{ scope_chip(r.servidor.scope) }}</div>{% endif %}{% else %}—{% endif %}</td>{% endif %}
     </tr>
   {% else %}
-    <tr><td colspan="6" class="muted">{{ 'Ainda não foi importada nenhuma API. Use "Importar lista agora" no topo da página.' if configured else 'Sem dados.' }}</td></tr>
+    <tr><td colspan="7" class="muted">{{ 'Ainda não foi importada nenhuma API. Use "Importar lista agora" no topo da página.' if configured and not counts[''] else 'Nenhuma API nesta vista.' }}</td></tr>
   {% endfor %}
   </tbody>
 </table>
 </div>
+<p class="muted small">Segredos expirados há mais de 30 dias geram um alerta de gravidade baixa (limpeza no Azure e na CMDB); os que estão a expirar seguem os prazos normais de alerta.</p>
 {% endblock %}

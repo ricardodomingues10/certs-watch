@@ -12,6 +12,7 @@ from dataclasses import dataclass, field
 from datetime import datetime
 
 from .config import Settings
+from .classify import is_auto_renew
 from .db import as_utc
 from .normalize import hostname_matches, norm_issuer
 
@@ -191,7 +192,13 @@ def days_left(not_after: datetime, now: datetime) -> int:
 SEV_ORDER = ("info", "baixa", "media", "alta", "critica")
 
 
-def expiry_severity(days: int, pct_left: float | None, settings: Settings) -> str | None:
+def expiry_severity(days: int, pct_left: float | None, settings: Settings, auto_renew: bool = False) -> str | None:
+    """Gravidade do alerta de expiração. Com renovação automática (Let's Encrypt) só há alerta quando faltam
+    CERTWATCH_AUTO_RENEW_ALERT_DAYS dias ou menos: a renovação devia ter acontecido antes, por isso falhou."""
+    if auto_renew and settings.auto_renew_alert_days > 0:
+        if days > settings.auto_renew_alert_days:
+            return None
+        pct_left = None
     t = settings.expiry_thresholds
     if days < 0 or days <= t["critica"]:
         sev = "critica"
@@ -297,14 +304,18 @@ def evaluate_endpoint(ep, sr, leaf, latest_by_issuer: dict, settings: Settings, 
     dl = days_left(na, now)
     total = (na - nb).total_seconds() if nb else 0
     pct = max(0.0, (na - now).total_seconds() / total) if total > 0 else None
-    sev = expiry_severity(dl, pct, settings)
+    auto = is_auto_renew(settings, leaf.issuer_dn, leaf.issuer_cn)
+    sev = expiry_severity(dl, pct, settings, auto_renew=auto)
     label = f"expirou há {-dl} dias ({_fmt(na)})" if dl < 0 else f"expira em {dl} dias ({_fmt(na)})"
+    if auto:
+        label += " · renovação automática" + (" falhou?" if sev else "")
     ev.set("validade.prazo", FALHA if sev in ("critica", "alta") else (AVISO if sev else OK), label)
     if sev:
         ev.findings.append(("EXPIRACAO", sev, {
             "fonte": "live", "dias": dl, "expira_em": _iso(na),
             "vida_restante_pct": round(pct * 100, 1) if pct is not None else None,
-            "emissor": leaf.issuer_cn, "serial": leaf.serial_hex, "sha256": leaf.sha256}))
+            "emissor": leaf.issuer_cn, "serial": leaf.serial_hex, "sha256": leaf.sha256,
+            "renovacao_automatica": auto or None}))
 
     # Criptografia
     weak, leaf_weak = [], False
