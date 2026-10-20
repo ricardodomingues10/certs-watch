@@ -1,11 +1,11 @@
 {% extends "base.html" %}
 {% from "_macros.html" import days, state, scope_chip %}
 {% block title %}APIs{% endblock %}
+{% block crumb %}Inventário{% endblock %}
+{% block page_title %}APIs <small>{{ apis|length }}</small>{% endblock %}
+{% block lede %}APIs da lista da CMDB{% if tql %} ({{ tql }}){% endif %}. Para cada uma é verificado o certificado do servidor onde está publicada e vigiada a data de validade registada na lista. Segredos e palavras-passe da CMDB nunca são importados.{% endblock %}
+{% block actions %}{% if configured %}<form method="post" action="/jobs/ingest_apis"><input type="hidden" name="csrf" value="{{ csrf }}"><input type="hidden" name="next" value="/jobs"><button>Importar lista agora</button></form>{% endif %}{% endblock %}
 {% block content %}
-<h1>APIs <small>{{ apis|length }}</small></h1>
-<p class="sub">APIs da lista da CMDB{% if tql %} (<span class="mono">{{ tql }}</span>){% endif %}. Para cada uma, o certwatch verifica o certificado do servidor onde está publicada
-e vigia a data de validade registada na lista. Segredos e palavras-passe da CMDB nunca são importados.</p>
-
 {% if not configured %}
 <div class="note warn">A lista de APIs não está configurada. Defina <span class="mono">CERTWATCH_UCMDB_TQL_APIS</span> no ficheiro .env com o nome do TQL
 (ex.: <span class="mono">Lista_de_APIs</span>) e reinicie (<span class="mono">docker compose up -d</span>).</div>
@@ -15,7 +15,7 @@ URL = <span class="mono">{{ campos.get('url') or '—' }}</span>, validade = <sp
 Se algum estiver errado, defina-o no .env (<span class="mono">CERTWATCH_APIS_FIELD_NAME / _URL / _EXPIRY</span>).</div>
 {% endif %}
 
-<div class="card scroll">
+<div class="card flush scroll">
 <table>
   <thead><tr><th>API</th><th>Servidor</th><th>Âmbito</th><th>Certificado do servidor</th><th>Validade na lista</th><th>Outros dados</th></tr></thead>
   <tbody>
@@ -31,7 +31,7 @@ Se algum estiver errado, defina-o no .env (<span class="mono">CERTWATCH_APIS_FIE
       <td class="small">{% for k, v in a.extra.items() %}<div><span class="muted">{{ k }}:</span> {{ v }}</div>{% endfor %}</td>
     </tr>
   {% else %}
-    <tr><td colspan="6" class="muted">{{ 'Ainda não foi importada nenhuma API. Corra "Importar lista de APIs" em Jobs.' if configured else 'Sem dados.' }}</td></tr>
+    <tr><td colspan="6" class="muted">{{ 'Ainda não foi importada nenhuma API. Use "Importar lista agora" no topo da página.' if configured else 'Sem dados.' }}</td></tr>
   {% endfor %}
   </tbody>
 </table>

@@ -38,18 +38,17 @@
     </details>
   </li>
 {%- endmacro %}
+{% block crumb %}Inventário{% endblock %}
+{% block page_title %}Árvore de confiança{% endblock %}
+{% block lede %}Quem assina quem. No topo estão as raízes; por baixo, as autoridades intermédias; no fim, os certificados instalados nos servidores. Construída a partir das cadeias que os servidores apresentam e das raízes de confiança configuradas; os {{ n_cmdb }} registos da CMDB aparecem como contagem em cada autoridade.{% endblock %}
 {% block content %}
-<h1>Árvore de certificados</h1>
-<p class="sub">Quem assina quem. No topo estão as raízes; por baixo, as autoridades intermédias; no fim, os certificados instalados nos servidores.
-A árvore é construída a partir das cadeias que os servidores apresentam e das raízes de confiança configuradas. Os {{ n_cmdb }} registos da CMDB aparecem como contagem em cada autoridade.</p>
-
 <div class="card scroll">
 {% if roots %}
   <ul class="tree">
     {% for r in roots %}{{ render_node(r, 0) }}{% endfor %}
   </ul>
 {% else %}
-  <p class="muted">Ainda não há certificados observados. Corra o pipeline em <a href="/jobs">Jobs</a>.</p>
+  <div class="empty"><b>Ainda não há certificados observados</b>A árvore aparece depois da primeira verificação de servidores. <a href="/jobs">Executar agora</a>.</div>
 {% endif %}
 </div>
 {% endblock %}

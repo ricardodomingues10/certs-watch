@@ -1,0 +1,88 @@
+{% extends "base.html" %}
+{% from "_macros.html" import days, next_field %}
+{% block title %}Na internet{% endblock %}
+{% block crumb %}Descoberta{% endblock %}
+{% block page_title %}Certificados encontrados na internet{% endblock %}
+{% block lede %}Todas as autoridades públicas publicam os certificados que emitem em registos abertos (Certificate Transparency). Aqui aparecem os emitidos para os domínios da organização, comparados com a CMDB. Decida para cada um: adicionar à CMDB, investigar ou ignorar.{% endblock %}
+{% block actions %}
+{% if domains %}
+<form method="post" action="/jobs/ingest_ct"><input type="hidden" name="csrf" value="{{ csrf }}"><input type="hidden" name="next" value="/jobs"><button class="primary">Procurar agora</button></form>
+{% endif %}
+<a class="button" href="/descoberta/exportar?triagem=adicionar">Exportar "Adicionar à CMDB" (CSV)</a>
+{% endblock %}
+{% block content %}
+{% if not domains %}
+<div class="note warn"><b>A procura não está configurada.</b> Defina os domínios da organização no .env, por exemplo
+<span class="mono">CERTWATCH_CT_DOMAINS=exemplo.pt,exemplo.com</span>, e reinicie com <span class="mono">docker compose up -d</span>.
+O servidor precisa de saída HTTPS para crt.sh, api.certspotter.com e api.ctlogs.dev (diretamente ou por proxy, com <span class="mono">HTTPS_PROXY</span>).</div>
+{% else %}
+<p class="small muted">Domínios: <b>{{ domains|join(', ') }}</b>. Fontes: {% for s in sources %}{{ CT_SOURCE_LABELS.get(s, s) }}{{ ', ' if not loop.last }}{% endfor %}.
+{% if last %}Última procura: {{ last.finished_at|dtt }}{% if last_part and last_part.fontes %} ({% for k, v in last_part.fontes.items() %}{{ k }}: {{ v }}{{ '; ' if not loop.last }}{% endfor %}){% endif %}.{% else %}Ainda não houve nenhuma procura bem-sucedida.{% endif %}</p>
+{% endif %}
+
+<nav class="tabs" aria-label="Vistas">
+  <a href="/descoberta" class="{{ 'on' if estado == 'pendentes' }}">Por triar <span class="n">{{ n_pending }}</span></a>
+  {% for k, label in CT_TABS.items() %}
+  <a href="/descoberta?estado={{ k }}" class="{{ 'on' if estado == k and not triagem }}" title="{{ CT_STATES[k] }}. {{ CT_STATE_HELP[k] }}">{{ label }} <span class="n">{{ counts.get(k, 0) }}</span></a>
+  {% endfor %}
+  <span class="tab-sep" aria-hidden="true"></span>
+  {% for k in ('adicionar', 'investigar', 'ignorar') %}
+  <a href="/descoberta?triagem={{ k }}" class="{{ 'on' if triagem == k }}">{{ TRIAGE_LABELS[k] }}</a>
+  {% endfor %}
+</nav>
+
+{% if estado in CT_STATE_HELP %}<p class="muted"><b>{{ CT_STATES[estado] }}.</b> {{ CT_STATE_HELP[estado] }}</p>
+{% elif estado == 'pendentes' %}<p class="muted">Certificados que não correspondem a nenhum registo da CMDB e ainda não foram avaliados por ninguém.</p>{% endif %}
+
+<form class="filters" method="get">
+  {% if estado and estado != 'pendentes' %}<input type="hidden" name="estado" value="{{ estado }}">{% endif %}
+  {% if triagem %}<input type="hidden" name="triagem" value="{{ triagem }}">{% endif %}
+  <input type="search" id="d-q" name="q" value="{{ q }}" placeholder="nome ou emissor" aria-label="Filtrar">
+  <label class="small"><input type="checkbox" name="expirados" value="1" {{ 'checked' if expirados }}> incluir expirados</label>
+  <button>Filtrar</button>
+</form>
+
+<div class="card flush scroll">
+<table>
+  <thead><tr><th>Nomes no certificado</th><th>Emissor</th><th>Validade</th><th>Situação</th><th>Na CMDB</th><th>Decisão</th></tr></thead>
+  <tbody>
+  {% for r in rows %}{% set c = r.ct %}
+    <tr>
+      <td class="ct-names"><b class="mono">{{ c.names[0] if c.names else '—' }}</b>
+        {% if c.names|length > 1 %}<div class="small muted mono">{{ c.names[1:6]|join(', ') }}{% if c.names|length > 6 %} e mais {{ c.names|length - 6 }}{% endif %}</div>{% endif %}
+        <div class="small muted">{% for s in c.sources %}{{ CT_SOURCE_LABELS.get(s, s) }}{{ ', ' if not loop.last }}{% endfor %} · visto pela 1.ª vez {{ c.first_seen|dt }}</div></td>
+      <td class="small">{{ c.issuer_cn or '—' }}</td>
+      <td>{{ days(r.days) }}<div class="small muted nowrap">{{ c.not_before|dt }} → {{ c.not_after|dt }}</div></td>
+      <td><span class="tag {{ 'tag-err' if r.state == 'desconhecido' else ('tag-run' if r.state == 'nome_conhecido' else 'tag-ok') }}" title="{{ CT_STATE_HELP[r.state] }}">{{ CT_STATES[r.state] }}</span>
+        {% if r.live %}<div class="small"><span class="tag tag-acc">instalado num servidor verificado</span></div>{% endif %}</td>
+      <td class="small">{% for cn, vt, iss in r.cmdb[:3] %}<div><a href="/certificados/detalhe?cn={{ cn|lower|urlencode }}">{{ cn }}</a> <span class="muted">até {{ vt.strftime('%d-%m-%Y') if vt else '—' }} · {{ iss }}</span></div>{% else %}<span class="muted">—</span>{% endfor %}</td>
+      <td class="actions">
+        {% if c.triage != 'por_triar' %}<div><b>{{ TRIAGE_LABELS[c.triage] }}</b> <span class="small muted">por {{ c.triage_by }}, {{ c.triage_at|dt }}</span></div>
+          {% if c.triage_note %}<div class="small muted">{{ c.triage_note }}</div>{% endif %}{% endif %}
+        {% if r.state != 'na_cmdb' or c.triage != 'por_triar' %}
+        <details><summary>{{ 'Alterar decisão' if c.triage != 'por_triar' else 'Decidir' }}</summary>
+          <form method="post" action="/descoberta/{{ c.id }}/triagem" class="stack">
+            <input type="hidden" name="csrf" value="{{ csrf }}">{{ next_field(request) }}
+            <label><input type="radio" name="decisao" value="adicionar" required> Adicionar à CMDB</label>
+            <label><input type="radio" name="decisao" value="investigar"> Investigar (não sabemos de quem é)</label>
+            <label><input type="radio" name="decisao" value="ignorar"> Ignorar (ex.: serviço de fornecedor)</label>
+            <label><input type="radio" name="decisao" value="por_triar"> Voltar a "por triar"</label>
+            <textarea name="nota" placeholder="Nota (obrigatória para investigar ou ignorar)"></textarea>
+            <button class="primary">Guardar decisão</button>
+          </form>
+        </details>
+        {% endif %}
+      </td>
+    </tr>
+  {% else %}
+    <tr><td colspan="6"><div class="empty">
+      {% if not total %}<b>Ainda não há resultados</b>{{ 'Use "Procurar agora" para consultar os registos públicos.' if domains else 'Configure os domínios primeiro.' }}
+      {% elif estado == 'pendentes' %}<b>Nada por triar</b>Todos os certificados encontrados estão na CMDB ou já têm decisão.
+      {% else %}<b>Sem resultados</b>Nenhum certificado nesta vista.{% endif %}
+    </div></td></tr>
+  {% endfor %}
+  </tbody>
+</table>
+</div>
+{% if n_rows > rows|length %}<p class="small muted">A mostrar {{ rows|length }} de {{ n_rows }}.</p>{% endif %}
+{% endblock %}

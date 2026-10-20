@@ -35,6 +35,8 @@ def env(tmp_path, monkeypatch, pki):
         from certwatch import models  # noqa: F401
         db.Base.metadata.drop_all(db.get_engine())
     db.init_db()
+    from certwatch.web import app as webapp
+    webapp.invalidate_nav()
     yield config.get_settings()
     db.get_engine().dispose()
     for f in (config.get_settings, db.get_engine, db.get_sessionmaker):

@@ -1,9 +1,11 @@
 {% extends "base.html" %}
 {% from "_macros.html" import sev, days, type_chip, scope_chip, state %}
 {% block title %}Certificados{% endblock %}
+{% block crumb %}Inventário{% endblock %}
+{% block page_title %}Certificados <small>{{ rows|length }} de {{ total }}</small>{% endblock %}
+{% block lede %}Um certificado por nome, de todas as origens: CMDB, lista de APIs e servidores adicionados à mão. A data que conta é a do servidor quando ele responde; senão usa-se a da CMDB. Passe o rato sobre o tipo e o âmbito para ver o que significam.{% endblock %}
+{% block actions %}<a class="button" href="/api/inventario">Dados em JSON</a>{% endblock %}
 {% block content %}
-<h1>Certificados <small>{{ rows|length }} de {{ total }}</small></h1>
-<p class="sub">Um certificado por nome. A data que conta é a do servidor quando ele responde; senão usa-se a da CMDB. Passe o rato sobre o tipo e o âmbito para ver o que significam.</p>
 
 <form class="filters" method="get">
   <input type="search" id="f-q" name="q" value="{{ q }}" placeholder="nome, emissor ou API" aria-label="Pesquisar">
@@ -29,7 +31,7 @@
   {% if q or dias or estado or tipo or ambito %}<a href="/certificados">limpar filtros</a>{% endif %}
 </form>
 
-<div class="card scroll">
+<div class="card flush scroll">
 <table>
   <thead>
     <tr><th>Estado</th><th>Certificado</th><th>Tipo</th><th>Âmbito</th><th>Situação</th><th>Prazo</th><th>Emissor</th><th>Origem</th></tr>

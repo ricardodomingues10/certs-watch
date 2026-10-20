@@ -1,13 +1,17 @@
 """Interface web e API de leitura."""
 from __future__ import annotations
 
+import csv
+import io
+import time
 from contextlib import asynccontextmanager
 from datetime import datetime, timedelta
 from pathlib import Path
+from urllib.parse import quote
 from zoneinfo import ZoneInfo
 
 from fastapi import Depends, FastAPI, Form, HTTPException, Request
-from fastapi.responses import JSONResponse, RedirectResponse
+from fastapi.responses import JSONResponse, RedirectResponse, Response
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from sqlalchemy import select
@@ -20,14 +24,26 @@ from ..db import as_utc, init_db, session_scope, utcnow
 from ..evaluator import FINDING_CHECK, FINDING_TYPES, SEV_RANK, SEVERITIES, days_left, load_snapshot
 from ..insights import STATE_LABELS, ancestry, build_inventory, build_tree, check_matrix, check_totals, dashboard_stats
 from ..jobs import JOBS, enqueue
-from ..models import ApiRecord, AuditLog, Certificate, CmdbRecord, Endpoint, Finding, JobRun, ScanResult
+from ..collectors.ct import SOURCE_LABELS
+from ..discovery import CT_STATE_HELP, CT_STATES, CT_TABS, TRIAGE_LABELS, classify_ct
+from ..models import ApiRecord, AuditLog, Certificate, CmdbRecord, CtCert, Endpoint, Finding, ImportFile, JobRun, ScanResult
+from ..reconcile import REC_HELP, REC_STATES, REC_TABS, reconcile
+from ..trust import local_trust_files
 from ..normalize import is_ip, is_valid_hostname, norm_host, norm_issuer
 from .security import check_csrf, current_user, security_middleware
 
 BASE = Path(__file__).parent
 MONTHS = ["jan", "fev", "mar", "abr", "mai", "jun", "jul", "ago", "set", "out", "nov", "dez"]
-JOB_LABELS = {"pipeline": "Pipeline completo", "ingest_cmdb": "Importar certificados da CMDB",
-              "ingest_apis": "Importar lista de APIs", "scan": "Verificar servidores", "evaluate": "Reavaliar regras"}
+JOB_LABELS = {"pipeline": "Executar tudo", "ingest_cmdb": "Importar certificados da CMDB",
+              "ingest_apis": "Importar lista de APIs", "ingest_imports": "Ler ficheiros de reconciliação",
+              "ingest_ct": "Procurar na internet (CT)", "scan": "Verificar servidores", "evaluate": "Reavaliar regras"}
+JOB_HELP = {"pipeline": "Faz todos os passos pela ordem: CMDB, APIs, ficheiros, internet, servidores e regras.",
+            "ingest_cmdb": "Lê os certificados da UCMDB (nome, validade e emissor).",
+            "ingest_apis": "Lê a lista de APIs da UCMDB.",
+            "ingest_imports": "Lê os ficheiros CA1, CA2 e AVI da diretoria de importação.",
+            "ingest_ct": "Consulta crt.sh, Cert Spotter e ctlogs.dev para os domínios configurados.",
+            "scan": "Liga-se a cada servidor e recolhe o certificado e a cadeia.",
+            "evaluate": "Volta a aplicar as regras e atualiza os alertas, sem novas ligações."}
 
 
 @asynccontextmanager
@@ -66,12 +82,57 @@ templates.env.globals.update(
     FINDING_TYPES=FINDING_TYPES, FINDING_CHECK=FINDING_CHECK, SEVERITIES=SEVERITIES, version=__version__,
     TYPE_LABELS=TYPE_LABELS, TYPE_HELP=TYPE_HELP, SCOPE_LABELS=SCOPE_LABELS, SCOPE_HELP=SCOPE_HELP,
     STATE_LABELS=STATE_LABELS, STATUS_LABELS=STATUS_LABELS, CHECKS=CHECKS, CHECK_BY_ID=CHECK_BY_ID,
-    LAYERS=LAYERS, MONTHS=MONTHS, JOB_LABELS=JOB_LABELS,
+    LAYERS=LAYERS, MONTHS=MONTHS, JOB_LABELS=JOB_LABELS, JOB_HELP=JOB_HELP,
+    CT_STATES=CT_STATES, CT_TABS=CT_TABS, CT_SOURCE_LABELS=SOURCE_LABELS, CT_STATE_HELP=CT_STATE_HELP, TRIAGE_LABELS=TRIAGE_LABELS,
+    REC_STATES=REC_STATES, REC_TABS=REC_TABS, REC_HELP=REC_HELP,
 )
+
+_NAV_CACHE: dict = {"at": 0.0, "data": None}
+
+
+def nav_counts() -> dict:
+    """Contadores da navegação lateral (cache de 30 s para não pesar em cada página)."""
+    if _NAV_CACHE["data"] is not None and time.monotonic() - _NAV_CACHE["at"] < 30:
+        return _NAV_CACHE["data"]
+    data = {"alertas": 0, "alertas_altos": 0, "ct_por_triar": 0, "reconc_dif": 0}
+    try:
+        settings = get_settings()
+        with session_scope() as s:
+            sevs = [f.severity for f in s.scalars(select(Finding).where(Finding.status == "aberto"))]
+            data["alertas"] = len(sevs)
+            data["alertas_altos"] = sum(1 for x in sevs if x in ("alta", "critica"))
+            if s.scalar(select(CtCert.id).limit(1)) is not None:
+                data["ct_por_triar"] = sum(1 for r in classify_ct(s, settings)
+                                           if r["state"] != "na_cmdb" and r["ct"].triage == "por_triar" and not r["expired"])
+            if s.scalar(select(ImportFile.id).where(ImportFile.is_current.is_(True)).limit(1)) is not None:
+                c = reconcile(s, settings)["counts"]
+                data["reconc_dif"] = c.get("novo", 0) + c.get("data_posterior", 0) + c.get("data_anterior", 0)
+    except Exception:
+        pass
+    _NAV_CACHE.update(at=time.monotonic(), data=data)
+    return data
+
+
+def invalidate_nav() -> None:
+    _NAV_CACHE["data"] = None
 
 
 def render(request: Request, name: str, user: str, **ctx):
-    return templates.TemplateResponse(request, name, {"user": user, "csrf": request.state.csrf, **ctx})
+    return templates.TemplateResponse(request, name, {"user": user, "csrf": request.state.csrf, "nav": nav_counts(), **ctx})
+
+
+def csv_response(filename: str, header: list[str], rows: list[list]) -> Response:
+    """CSV para Excel PT (BOM UTF-8, ponto e vírgula), com proteção contra injeção de fórmulas."""
+    def safe(v):
+        s = "" if v is None else str(v)
+        return "'" + s if s[:1] in ("=", "+", "-", "@", "\t", "\r") else s
+    buf = io.StringIO()
+    w = csv.writer(buf, delimiter=";", lineterminator="\r\n")
+    w.writerow(header)
+    for r in rows:
+        w.writerow([safe(v) for v in r])
+    return Response("\ufeff" + buf.getvalue(), media_type="text/csv; charset=utf-8",
+                    headers={"Content-Disposition": f'attachment; filename="{filename}"'})
 
 
 def safe_next(value: str | None, default: str) -> str:
@@ -91,21 +152,89 @@ def healthz():
     return {"estado": "ok"}
 
 
+def _last_ok(s, key: str):
+    """Última execução em que o passo `key` correu sem erro (job próprio ou dentro do pipeline)."""
+    for jr in s.scalars(select(JobRun).where(JobRun.status.in_(("ok", "error"))).order_by(JobRun.id.desc()).limit(40)):
+        part = (jr.summary or {}).get(key)
+        if isinstance(part, dict) and "erro" not in part:
+            return jr, part
+    return None, None
+
+
+def setup_checklist(s, settings, stats) -> list[dict]:
+    items = []
+    jr, part = _last_ok(s, "ingest_cmdb")
+    items.append({"ok": bool(jr), "title": "Certificados importados da CMDB",
+                  "hint": (f"{part.get('recebidos', 0)} registos em {fmt_dt(jr.finished_at, True)}" if jr else
+                           "Ainda não houve uma importação bem-sucedida. Veja o erro em Execuções e auditoria.")})
+    trust = local_trust_files(settings)
+    items.append({"ok": bool(trust), "title": "Raiz interna de confiança configurada",
+                  "hint": (", ".join(f.name for f in trust) if trust else
+                           "Coloque a raiz da PKI interna em trust/ (ver README, secção 1.2).")})
+    items.append({"ok": stats["ep_verified"] > 0, "title": "Servidores verificados",
+                  "hint": (f"{stats['ep_tls_ok']} de {stats['ep_total']} responderam por TLS" if stats["ep_verified"] else
+                           "Execute a verificação em Execuções e auditoria.")})
+    if settings.ucmdb_tql_apis:
+        jr, part = _last_ok(s, "ingest_apis")
+        items.append({"ok": bool(jr), "title": "Lista de APIs importada",
+                      "hint": f"{part.get('recebidos', 0)} APIs" if jr else "Ainda não importada com sucesso."})
+    else:
+        items.append({"ok": None, "title": "Lista de APIs", "hint": "Opcional: definir CERTWATCH_UCMDB_TQL_APIS no .env."})
+    if settings.ct_domains:
+        jr, part = _last_ok(s, "ingest_ct")
+        items.append({"ok": bool(jr), "title": "Procura na internet",
+                      "hint": (f"{', '.join(settings.ct_domains)}: {part.get('total', 0)} certificados conhecidos" if jr else
+                               f"Domínios: {', '.join(settings.ct_domains)}. Ainda sem resultados; o servidor precisa de saída para a internet.")})
+    else:
+        items.append({"ok": None, "title": "Procura na internet", "hint": "Opcional: definir CERTWATCH_CT_DOMAINS no .env."})
+    files = list(s.scalars(select(ImportFile).where(ImportFile.is_current.is_(True))))
+    items.append({"ok": True if files else None, "title": "Ficheiros de reconciliação",
+                  "hint": (", ".join(f"{f.source}: {f.name}" for f in files) if files else
+                           "Opcional: colocar exportações CA1*, CA2* e AVI* na diretoria import/.")})
+    last = s.scalar(select(JobRun).where(JobRun.job == "pipeline", JobRun.requested_by == "agendador",
+                                         JobRun.status.in_(("ok", "error"))).order_by(JobRun.id.desc()).limit(1))
+    recent = last is not None and last.finished_at and as_utc(last.finished_at) > utcnow() - timedelta(hours=26)
+    items.append({"ok": bool(recent), "title": f"Execução automática diária às {settings.pipeline_daily_at}",
+                  "hint": (f"Última: {fmt_dt(last.finished_at, True)} ({last.status})" if last else
+                           "Ainda não correu automaticamente. Confirme que o worker está ativo.")})
+    return items
+
+
 @app.get("/")
 def dashboard(request: Request, user: str = Depends(current_user)):
-    now = utcnow()
+    now, settings = utcnow(), get_settings()
     with session_scope() as s:
         snap = load_snapshot(s)
-        inv = build_inventory(s, get_settings(), now, snap)
-        matrix = check_matrix(s, get_settings(), now, snap)
+        inv = build_inventory(s, settings, now, snap)
+        matrix = check_matrix(s, settings, now, snap)
         stats = dashboard_stats(inv, matrix, now)
         open_findings = list(s.scalars(select(Finding).where(Finding.status == "aberto")))
         last_jobs = list(s.scalars(select(JobRun).order_by(JobRun.id.desc()).limit(5)))
         n_apis = len(snap.apis)
+        setup = setup_checklist(s, settings, stats)
     sev_counts = {sv: sum(1 for f in open_findings if f.severity == sv) for sv in SEVERITIES}
     urgent = [r for r in inv if r["state"] == "falha"][:12]
-    return render(request, "dashboard.html", user, s=stats, sev_counts=sev_counts, urgent=urgent,
-                  last_jobs=last_jobs, n_apis=n_apis, n_open=len(open_findings))
+    soon30 = sum(1 for r in inv if r["dias"] is not None and 0 <= r["dias"] <= 30)
+    return render(request, "dashboard.html", user, s=stats, sev_counts=sev_counts, urgent=urgent, setup=setup,
+                  last_jobs=last_jobs, n_apis=n_apis, n_open=len(open_findings), soon30=soon30)
+
+
+@app.get("/pesquisa")
+def pesquisa(request: Request, q: str = "", user: str = Depends(current_user)):
+    q = q.strip()
+    certs, eps, cts = [], [], []
+    if q:
+        ql = q.lower()
+        with session_scope() as s:
+            inv = build_inventory(s, get_settings(), utcnow())
+            certs = [r for r in inv if ql in r["cn"] or ql in r["common_name"].lower()
+                     or any(ql in i.lower() for i in r["issuers"]) or ql in (r["live_issuer"] or "").lower()
+                     or any(ql in a.lower() for a in r["apis"])][:100]
+            eps = [e for e in s.scalars(select(Endpoint)) if ql in e.host or ql in e.expected_cn_norm][:50]
+            cts = [c for c in s.scalars(select(CtCert)) if any(ql in n for n in c.names or [])][:50]
+        if len(certs) == 1 and not cts and len(eps) <= 1:
+            return RedirectResponse(f"/certificados/detalhe?cn={quote(certs[0]['cn'])}", status_code=303)
+    return render(request, "pesquisa.html", user, q=q, certs=certs, eps=eps, cts=cts)
 
 
 @app.get("/certificados")
@@ -269,6 +398,7 @@ def finding_accept(request: Request, fid: str, reason: str = Form(...), until: s
             raise HTTPException(404)
         f.status, f.accepted_until, f.accepted_by, f.accept_reason = "aceite", until_dt, user, reason
         audit(s, user, "finding.aceitar", f.subject, finding=fid, tipo=f.type, ate=until, motivo=reason)
+    invalidate_nav()
     return RedirectResponse(safe_next(next, "/findings"), status_code=303)
 
 
@@ -337,19 +467,126 @@ def jobs_page(request: Request, user: str = Depends(current_user)):
         runs = list(s.scalars(select(JobRun).order_by(JobRun.id.desc()).limit(50)))
         audits = list(s.scalars(select(AuditLog).order_by(AuditLog.id.desc()).limit(50)))
     st = get_settings()
-    jobs = [j for j in JOBS if j != "ingest_apis" or st.ucmdb_tql_apis]
+    jobs = [j for j in JOBS if (j != "ingest_apis" or st.ucmdb_tql_apis) and (j != "ingest_ct" or st.ct_domains)]
     return render(request, "jobs.html", user, runs=runs, audits=audits, jobs=jobs, daily_at=st.pipeline_daily_at)
 
 
 @app.post("/jobs/{job}")
-def job_enqueue(request: Request, job: str, csrf: str = Form(""), user: str = Depends(current_user)):
+def job_enqueue(request: Request, job: str, csrf: str = Form(""), next: str = Form(""), user: str = Depends(current_user)):
     check_csrf(request, csrf)
     if job not in JOBS:
         raise HTTPException(404)
     jid = enqueue(job, user)
     with session_scope() as s:
         audit(s, user, "job.pedir", job, job_id=jid)
-    return RedirectResponse("/jobs", status_code=303)
+    invalidate_nav()
+    return RedirectResponse(safe_next(next, "/jobs"), status_code=303)
+
+
+# ------------------------------------------------------------------ descoberta (CT)
+def _ct_filter(rows, estado, triagem, q, expirados):
+    if not expirados:
+        rows = [r for r in rows if not r["expired"]]
+    if estado in CT_STATES:
+        rows = [r for r in rows if r["state"] == estado]
+    if triagem in TRIAGE_LABELS:
+        rows = [r for r in rows if r["ct"].triage == triagem]
+    if q:
+        rows = [r for r in rows if any(q.lower() in n for n in r["ct"].names) or q.lower() in (r["ct"].issuer_cn or "").lower()]
+    return rows
+
+
+@app.get("/descoberta")
+def descoberta(request: Request, estado: str = "", triagem: str = "", q: str = "", expirados: int = 0,
+               user: str = Depends(current_user)):
+    settings = get_settings()
+    with session_scope() as s:
+        all_rows = classify_ct(s, settings, include_expired=bool(expirados))
+        total = s.query(CtCert).count()
+        jr, part = _last_ok(s, "ingest_ct")
+    if not estado and not triagem and not q:
+        estado = "pendentes"
+    base = [r for r in all_rows if expirados or not r["expired"]]
+    counts = {k: sum(1 for r in base if r["state"] == k) for k in CT_STATES}
+    pending = [r for r in base if r["state"] != "na_cmdb" and r["ct"].triage == "por_triar"]
+    rows = pending if estado == "pendentes" else _ct_filter(all_rows, estado, triagem, q, expirados)
+    if estado == "pendentes" and q:
+        rows = _ct_filter(rows, "", "", q, expirados)
+    return render(request, "descoberta.html", user, rows=rows[:1000], n_rows=len(rows), counts=counts,
+                  n_pending=len(pending), estado=estado, triagem=triagem, q=q, expirados=expirados, total=total,
+                  domains=settings.ct_domains, sources=settings.ct_sources, last=jr, last_part=part)
+
+
+@app.post("/descoberta/{cid}/triagem")
+def descoberta_triagem(request: Request, cid: int, decisao: str = Form(...), nota: str = Form(""),
+                       csrf: str = Form(""), next: str = Form(""), user: str = Depends(current_user)):
+    check_csrf(request, csrf)
+    if decisao not in TRIAGE_LABELS:
+        raise HTTPException(400, "Decisão inválida")
+    if decisao in ("ignorar", "investigar") and len(nota.strip()) < 5:
+        raise HTTPException(400, "Indique o motivo (mínimo 5 caracteres)")
+    with session_scope() as s:
+        c = s.get(CtCert, cid)
+        if c is None:
+            raise HTTPException(404)
+        c.triage, c.triage_note, c.triage_by, c.triage_at = decisao, nota.strip()[:2000], user, utcnow()
+        audit(s, user, f"descoberta.{decisao}", c.primary_name, nomes=c.names[:10], nota=nota.strip()[:500])
+    invalidate_nav()
+    return RedirectResponse(safe_next(next, "/descoberta"), status_code=303)
+
+
+@app.get("/descoberta/exportar")
+def descoberta_exportar(triagem: str = "adicionar", user: str = Depends(current_user)):
+    with session_scope() as s:
+        rows = [r for r in classify_ct(s, get_settings(), include_expired=True)
+                if triagem == "todos" or r["ct"].triage == triagem]
+    return csv_response(f"certificados-internet-{triagem}.csv",
+                        ["Nomes", "Emissor", "Válido desde", "Válido até", "Serial", "Situação na CMDB", "Triagem",
+                         "Nota", "Decidido por", "Fontes"],
+                        [[", ".join(r["ct"].names), r["ct"].issuer_cn, fmt_dt(r["ct"].not_before), fmt_dt(r["ct"].not_after),
+                          r["ct"].serial_hex, CT_STATES[r["state"]], TRIAGE_LABELS.get(r["ct"].triage, r["ct"].triage),
+                          r["ct"].triage_note, r["ct"].triage_by, ", ".join(r["ct"].sources)] for r in rows])
+
+
+# ------------------------------------------------------------------ reconciliação
+@app.get("/reconciliacao")
+def reconciliacao(request: Request, estado: str = "", fonte: str = "", q: str = "", user: str = Depends(current_user)):
+    settings = get_settings()
+    with session_scope() as s:
+        res = reconcile(s, settings)
+        history = list(s.scalars(select(ImportFile).order_by(ImportFile.id.desc()).limit(20)))
+    rows = res["rows"]
+    if not estado:
+        estado = "diferencas"
+    if estado == "diferencas":
+        rows = [r for r in rows if r["state"] in ("novo", "data_posterior", "data_anterior", "so_na_cmdb")]
+    elif estado in REC_STATES:
+        rows = [r for r in rows if r["state"] == estado]
+    if fonte:
+        rows = [r for r in rows if r["source"] == fonte]
+    if q:
+        rows = [r for r in rows if q.lower() in r["cn_norm"]]
+    n_diff = sum(res["counts"].get(k, 0) for k in ("novo", "data_posterior", "data_anterior", "so_na_cmdb"))
+    return render(request, "reconciliacao.html", user, rows=rows[:2000], n_rows=len(rows), counts=res["counts"],
+                  n_diff=n_diff, files=res["files"], history=history, estado=estado, fonte=fonte, q=q,
+                  sources=sorted(settings.import_sources), prefixes=settings.import_sources,
+                  import_dir=str(settings.import_dir))
+
+
+@app.get("/reconciliacao/exportar")
+def reconciliacao_exportar(estado: str = "diferencas", user: str = Depends(current_user)):
+    with session_scope() as s:
+        rows = reconcile(s, get_settings())["rows"]
+    if estado == "diferencas":
+        rows = [r for r in rows if r["state"] in ("novo", "data_posterior", "data_anterior", "so_na_cmdb")]
+    elif estado in REC_STATES:
+        rows = [r for r in rows if r["state"] == estado]
+    return csv_response(f"reconciliacao-{estado}.csv",
+                        ["Fonte", "CommonName", "Situação", "Validade na fonte", "Validade na CMDB", "Validade no servidor",
+                         "Servidor confirma a fonte", "Serial", "Emissor", "SAN", "Ficheiro", "Linha"],
+                        [[r["source"], r["cn"], REC_STATES[r["state"]], fmt_dt(r["valid_to"]), fmt_dt(r["cmdb_valid_to"]),
+                          fmt_dt(r["live_valid_to"]), "sim" if r["live_confirma"] else "", r["serial"], r["issuer"],
+                          r["san"], r["file"], r["row_no"] or ""] for r in rows])
 
 
 # ------------------------------------------------------------------ API (só leitura)

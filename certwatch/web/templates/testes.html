@@ -1,11 +1,11 @@
 {% extends "base.html" %}
 {% from "_macros.html" import cell, state, type_chip, scope_chip, stackbar, fixbox %}
 {% block title %}Testes{% endblock %}
+{% block crumb %}Verificação{% endblock %}
+{% block page_title %}Testes{% endblock %}
+{% block lede %}Todos os servidores passam pelos mesmos {{ CHECKS|length }} testes, organizados em camadas da rede até ao inventário. Uma falha numa camada impede os testes das seguintes, que ficam como "não testado". Clique num teste para ver os servidores com problemas e como se corrige.{% endblock %}
+{% block actions %}<a class="button" href="/testes/como-funciona">Como funciona cada teste</a>{% endblock %}
 {% block content %}
-<h1>Testes</h1>
-<p class="sub">Todos os servidores conhecidos passam pelos mesmos {{ CHECKS|length }} testes, organizados por camadas, da rede até ao inventário.
-Uma falha numa camada impede os testes das camadas seguintes (ficam "não testado"). <a href="/testes/como-funciona">Como funciona cada teste</a>.</p>
-
 <section class="card">
   <h2>Resumo por teste <small>{{ matrix|length }} servidores</small></h2>
   {% for lid, ltitle, lq in LAYERS %}
@@ -76,7 +76,7 @@ Uma falha numa camada impede os testes das camadas seguintes (ficam "não testad
         {% for c in CHECKS %}<td class="c">{{ cell(r.results.get(c.id), c.id) }}</td>{% endfor %}
       </tr>
     {% else %}
-      <tr><td colspan="{{ 3 + CHECKS|length }}" class="muted">Nenhum servidor corresponde aos filtros{% if not matrix %}. Corra o pipeline em <a href="/jobs">Jobs</a>{% endif %}.</td></tr>
+      <tr><td colspan="{{ 3 + CHECKS|length }}" class="muted">Nenhum servidor corresponde aos filtros{% if not matrix %}. Ainda não houve verificações: <a href="/jobs">executar agora</a>{% endif %}.</td></tr>
     {% endfor %}
     </tbody>
   </table>

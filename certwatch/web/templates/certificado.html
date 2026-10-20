@@ -1,13 +1,10 @@
 {% extends "base.html" %}
 {% from "_macros.html" import sev, scanstatus, next_field, type_chip, scope_chip, state, fixbox %}
 {% block title %}{{ cn }}{% endblock %}
+{% block crumb %}<a href="/certificados">Certificados</a>{% endblock %}
+{% block page_title %}<span class="mono">{{ cn }}</span> {{ type_chip(ctype) }} {{ scope_chip(scope) }}{% endblock %}
+{% block lede %}{{ TYPE_HELP.get(ctype) }} {{ SCOPE_HELP.get(scope) }}{% endblock %}
 {% block content %}
-<p class="crumb"><a href="/certificados">Certificados</a> /</p>
-<div class="head">
-  <h1 class="mono">{{ cn }}</h1>
-  {{ type_chip(ctype) }} {{ scope_chip(scope) }}
-</div>
-<p class="sub">{{ TYPE_HELP.get(ctype) }} {{ SCOPE_HELP.get(scope) }}</p>
 
 {% for e in eps %}
 <section class="card">

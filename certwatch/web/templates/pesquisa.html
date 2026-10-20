@@ -1,0 +1,30 @@
+{% extends "base.html" %}
+{% from "_macros.html" import days, type_chip, scope_chip, state %}
+{% block title %}Pesquisa{% endblock %}
+{% block page_title %}{% if q %}Resultados para "{{ q }}"{% else %}Pesquisa{% endif %}{% endblock %}
+{% block lede %}{% if q %}{{ certs|length }} certificado(s), {{ eps|length }} servidor(es) e {{ cts|length }} certificado(s) encontrados na internet.{% else %}Escreva parte de um nome, emissor ou API na caixa de pesquisa no topo.{% endif %}{% endblock %}
+{% block content %}
+{% if q %}
+<section class="card flush results">
+  <h2>Certificados</h2>
+  <div class="scroll"><table>
+    <thead><tr><th>Estado</th><th>Certificado</th><th>Tipo</th><th>Situação</th><th>Prazo</th></tr></thead>
+    {% for r in certs %}
+    <tr><td>{{ state(r.state) }}</td><td><a href="/certificados/detalhe?cn={{ r.cn|urlencode }}">{{ r.common_name }}</a></td>
+      <td>{{ type_chip(r.type) }} {{ scope_chip(r.scope) }}</td><td>{{ r.summary }}</td><td>{{ days(r.dias) }}</td></tr>
+    {% else %}<tr><td colspan="5" class="muted">Nenhum certificado.</td></tr>{% endfor %}
+  </table></div>
+</section>
+<div class="grid g2">
+  <section class="card">
+    <h2>Servidores</h2>
+    <ul>{% for e in eps %}<li><a class="mono" href="/certificados/detalhe?cn={{ e.expected_cn_norm|urlencode }}">{{ e.host }}:{{ e.port }}</a> <span class="muted small">{{ e.source }}</span></li>{% else %}<li class="muted">Nenhum.</li>{% endfor %}</ul>
+  </section>
+  <section class="card">
+    <h2>Na internet</h2>
+    <ul>{% for c in cts %}<li><span class="mono">{{ c.primary_name }}</span> <span class="muted small">{{ c.issuer_cn }}, até {{ c.not_after|dt }}</span></li>{% else %}<li class="muted">Nenhum.</li>{% endfor %}</ul>
+    {% if cts %}<p class="small"><a href="/descoberta?q={{ q|urlencode }}&estado=desconhecido">Ver na Descoberta</a></p>{% endif %}
+  </section>
+</div>
+{% endif %}
+{% endblock %}

@@ -8,13 +8,14 @@ name: certwatch
 
 x-app: &app
   build: .
-  image: certwatch:0.2.0
+  image: certwatch:0.3.0
   network_mode: host
   restart: unless-stopped
   env_file: .env
   secrets: [db_password, ucmdb_user, ucmdb_password, admin_password]
   volumes:
     - ./trust:/app/trust:ro
+    - ./import:/app/import:ro
   read_only: true
   tmpfs: [/tmp]
   security_opt: ["no-new-privileges:true"]

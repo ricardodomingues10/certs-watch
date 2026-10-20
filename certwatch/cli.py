@@ -4,6 +4,7 @@
   python -m certwatch.cli run {pipeline,ingest_cmdb,scan,evaluate}
   python -m certwatch.cli trust-fetch HOST[:PORTA]
   python -m certwatch.cli inspect-tql NOME_DO_TQL     (atributos de um TQL, sem valores sensíveis)
+  python -m certwatch.cli ct-test DOMINIO             (testa as fontes de Certificate Transparency)
 """
 from __future__ import annotations
 
@@ -48,7 +49,26 @@ def main(argv: list[str] | None = None) -> int:
     t.add_argument("target", help="host[:porta]")
     i = sub.add_parser("inspect-tql")
     i.add_argument("tql")
+    c = sub.add_parser("ct-test")
+    c.add_argument("domain")
     a = p.parse_args(argv)
+
+    if a.cmd == "ct-test":
+        from dataclasses import replace
+        from .collectors.ct import FETCHERS, SOURCE_LABELS, _client
+        st = replace(get_settings(), ct_domains=[a.domain])
+        client = _client(st)
+        ok = False
+        for name in st.ct_sources:
+            try:
+                recs = FETCHERS[name](client, a.domain, st)
+                ok = True
+                print(f"{SOURCE_LABELS.get(name, name)}: {len(recs)} certificados")
+                for r in recs[:3]:
+                    print(f"   {', '.join(r.names[:3])} | {r.issuer_cn} | até {r.not_after}")
+            except Exception as exc:
+                print(f"{SOURCE_LABELS.get(name, name)}: ERRO {type(exc).__name__}: {exc}")
+        return 0 if ok else 1
 
     if a.cmd == "trust-fetch":
         return _trust_fetch(a.target)

@@ -1,18 +1,11 @@
 {% extends "base.html" %}
 {% from "_macros.html" import days %}
 {% block title %}{{ node.subject_cn or 'Certificado' }}{% endblock %}
+{% block crumb %}<a href="/arvore">Árvore de confiança</a>{% endblock %}
+{% block page_title %}{{ node.subject_cn or '(sem CN)' }}
+  <span class="chip">{{ 'Autoridade (CA)' if node.is_ca else 'Certificado final' }}</span>{% if node.subject_dn == node.issuer_dn %} <span class="chip">Raiz</span>{% endif %}{% if node.origin == 'trust' %} <span class="chip">lista de confiança</span>{% endif %}{% endblock %}
+{% block lede %}{% if node.subject_dn == node.issuer_dn %}Uma raiz assina-se a si própria e está no topo da cadeia: tudo abaixo dela depende dela.{% elif node.is_ca %}Uma autoridade intermédia: foi assinada pela entidade acima e assina os certificados abaixo.{% else %}Certificado final, instalado num servidor. Foi assinado pela entidade acima.{% endif %}{% endblock %}
 {% block content %}
-<p class="crumb"><a href="/arvore">Árvore</a> /</p>
-<div class="head">
-  <h1>{{ node.subject_cn or '(sem CN)' }}</h1>
-  <span class="chip">{{ 'Autoridade (CA)' if node.is_ca else 'Certificado final' }}</span>
-  {% if node.subject_dn == node.issuer_dn %}<span class="chip">Raiz</span>{% endif %}
-  {% if node.origin == 'trust' %}<span class="chip">no trust store</span>{% endif %}
-</div>
-<p class="sub">{% if node.subject_dn == node.issuer_dn %}Uma raiz assina-se a si própria e está no topo da cadeia: tudo abaixo dela depende dela.
-{% elif node.is_ca %}Uma autoridade intermédia: foi assinada pela entidade acima e assina os certificados abaixo.
-{% else %}Certificado final, instalado num servidor. Foi assinado pela entidade acima.{% endif %}</p>
-
 <section class="card">
   <h2>Posição na cadeia</h2>
   <ul class="tree">

@@ -1,30 +1,32 @@
 {% extends "base.html" %}
-{% block title %}Jobs e auditoria{% endblock %}
+{% block title %}Execuções e auditoria{% endblock %}
+{% block crumb %}Operação{% endblock %}
+{% block page_title %}Execuções e auditoria{% endblock %}
+{% block lede %}Tudo corre sozinho todos os dias às {{ daily_at }}. Aqui pode pedir uma execução imediata, ver o resultado de cada uma e quem fez o quê.{% endblock %}
 {% block content %}
-<h1>Jobs e auditoria</h1>
-
 <section class="card">
   <h2>Executar agora</h2>
-  <p class="muted small">O pipeline completo (CMDB → lista de APIs → verificação dos servidores → avaliação) corre automaticamente todos os dias às {{ daily_at }}. Os pedidos ficam em fila e são executados pelo worker em segundos.</p>
-  <div class="inline">
+  <p class="muted small">Os pedidos ficam em fila e começam em poucos segundos. Esta página não se atualiza sozinha: recarregue para ver o resultado.</p>
+  <table class="compact">
     {% for j in jobs %}
-    <form method="post" action="/jobs/{{ j }}">
-      <input type="hidden" name="csrf" value="{{ csrf }}">
-      <button class="{{ 'primary' if j == 'pipeline' }}">{{ JOB_LABELS.get(j, j) }}</button>
-    </form>
+    <tr>
+      <td><form method="post" action="/jobs/{{ j }}"><input type="hidden" name="csrf" value="{{ csrf }}">
+        <button class="{{ 'primary' if j == 'pipeline' }}">{{ JOB_LABELS.get(j, j) }}</button></form></td>
+      <td class="small muted">{{ JOB_HELP.get(j, '') }}</td>
+    </tr>
     {% endfor %}
-  </div>
+  </table>
 </section>
 
 <section class="card">
   <h2>Histórico</h2>
   <table>
-    <thead><tr><th>#</th><th>Job</th><th>Pedido por</th><th>Estado</th><th>Pedido</th><th>Fim</th><th>Resumo</th></tr></thead>
+    <thead><tr><th>#</th><th>Execução</th><th>Pedido por</th><th>Estado</th><th>Pedido</th><th>Fim</th><th>Resumo</th></tr></thead>
     <tbody>
     {% for r in runs %}
       <tr>
         <td>{{ r.id }}</td><td>{{ JOB_LABELS.get(r.job, r.job) }}</td><td>{{ r.requested_by }}</td>
-        <td><span class="tag tag-{{ 'ok' if r.status == 'ok' else ('err' if r.status == 'error' else 'run') }}">{{ r.status }}</span></td>
+        <td><span class="tag tag-{{ 'ok' if r.status == 'ok' else ('err' if r.status == 'error' else 'run') }}">{{ {'ok': 'concluído', 'error': 'com erro', 'running': 'a correr', 'pending': 'em fila'}.get(r.status, r.status) }}</span></td>
         <td>{{ r.requested_at|dtt }}</td><td>{{ r.finished_at|dtt if r.finished_at else '—' }}</td>
         <td class="small">
           {% for k, v in r.summary.items() if k != 'trace' %}<div><span class="muted">{{ k }}:</span> {% if v is mapping %}{% for k2, v2 in v.items() %}{{ k2 }}={{ v2 }} {% endfor %}{% else %}{{ v }}{% endif %}</div>{% endfor %}

@@ -117,6 +117,67 @@ class ApiRecord(Base):
     last_seen: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 
 
+class CtCert(Base):
+    """Certificado encontrado nos registos públicos de Certificate Transparency."""
+
+    __tablename__ = "ct_certs"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    key_serial: Mapped[str] = mapped_column(String(200), default="", index=True)   # emissor|serial
+    key_time: Mapped[str] = mapped_column(String(200), default="", index=True)     # emissor|notBefore|notAfter
+    domain: Mapped[str] = mapped_column(String(253), default="", index=True)
+    names: Mapped[list] = mapped_column(JSON, default=list)
+    primary_name: Mapped[str] = mapped_column(String(253), default="", index=True)
+    issuer_cn: Mapped[str] = mapped_column(String(512), default="")
+    issuer_dn: Mapped[str] = mapped_column(Text, default="")
+    serial_hex: Mapped[str] = mapped_column(String(128), default="")
+    not_before: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    not_after: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True, index=True)
+    sources: Mapped[list] = mapped_column(JSON, default=list)
+    source_ids: Mapped[dict] = mapped_column(JSON, default=dict)
+    first_seen: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    last_seen: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    triage: Mapped[str] = mapped_column(String(16), default="por_triar", index=True)  # por_triar | adicionar | ignorar | investigar
+    triage_by: Mapped[str] = mapped_column(String(128), default="")
+    triage_note: Mapped[str] = mapped_column(Text, default="")
+    triage_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
+class ImportFile(Base):
+    """Ficheiro de exportação (CA1, CA2, AVI…) lido da diretoria de importação."""
+
+    __tablename__ = "import_files"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    name: Mapped[str] = mapped_column(String(512))
+    source: Mapped[str] = mapped_column(String(32), index=True)
+    sha256: Mapped[str] = mapped_column(String(64), index=True)
+    size: Mapped[int] = mapped_column(Integer, default=0)
+    imported_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    status: Mapped[str] = mapped_column(String(16), default="ok")  # ok | erro
+    rows_total: Mapped[int] = mapped_column(Integer, default=0)
+    rows_ok: Mapped[int] = mapped_column(Integer, default=0)
+    columns: Mapped[dict] = mapped_column(JSON, default=dict)
+    problems: Mapped[list] = mapped_column(JSON, default=list)
+    is_current: Mapped[bool] = mapped_column(Boolean, default=True, index=True)
+
+
+class ImportRecord(Base):
+    __tablename__ = "import_records"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    file_id: Mapped[int] = mapped_column(ForeignKey("import_files.id", ondelete="CASCADE"), index=True)
+    source: Mapped[str] = mapped_column(String(32), index=True)
+    row_no: Mapped[int] = mapped_column(Integer, default=0)
+    common_name: Mapped[str] = mapped_column(String(512), default="")
+    cn_norm: Mapped[str] = mapped_column(String(512), default="", index=True)
+    valid_to: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    serial: Mapped[str] = mapped_column(String(128), default="")
+    issuer: Mapped[str] = mapped_column(String(512), default="")
+    san: Mapped[str] = mapped_column(Text, default="")
+    extra: Mapped[dict] = mapped_column(JSON, default=dict)
+
+
 class Finding(Base):
     """Problema detetado. O id é estável (hash de tipo + alvo) para não duplicar."""
 

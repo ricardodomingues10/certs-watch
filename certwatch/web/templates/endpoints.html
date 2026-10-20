@@ -1,9 +1,10 @@
 {% extends "base.html" %}
 {% from "_macros.html" import scanstatus, next_field %}
-{% block title %}Endpoints{% endblock %}
+{% block title %}Servidores{% endblock %}
+{% block crumb %}Inventário{% endblock %}
+{% block page_title %}Servidores <small>{{ eps|length }}</small>{% endblock %}
+{% block lede %}Os endereços que o certwatch contacta. São criados a partir da CMDB e da lista de APIs; pode acrescentar outros, por exemplo os servidores que usam um certificado wildcard.{% endblock %}
 {% block content %}
-<h1>Endpoints <small>{{ eps|length }}</small></h1>
-
 <section class="card">
   <h2>Adicionar endpoint manual</h2>
   <p class="muted small">Útil para wildcards (ex.: host <span class="mono">portal.exemplo.pt</span> com CN esperado <span class="mono">*.exemplo.pt</span>) ou serviços TLS fora da porta 443.</p>
@@ -40,7 +41,7 @@
       </td>
     </tr>
   {% else %}
-    <tr><td colspan="8" class="muted">Sem endpoints. Corra a ingestão da CMDB em <a href="/jobs">Jobs</a>.</td></tr>
+    <tr><td colspan="8" class="muted">Sem servidores. São criados ao importar a CMDB: <a href="/jobs">executar agora</a>.</td></tr>
   {% endfor %}
   </tbody>
 </table>

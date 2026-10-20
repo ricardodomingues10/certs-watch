@@ -20,7 +20,7 @@ from .trust import build_bundle
 
 log = logging.getLogger(__name__)
 
-JOBS = ("pipeline", "ingest_cmdb", "ingest_apis", "scan", "evaluate")
+JOBS = ("pipeline", "ingest_cmdb", "ingest_apis", "ingest_imports", "ingest_ct", "scan", "evaluate")
 SCAN_RETENTION_DAYS = 90
 
 
@@ -258,6 +258,14 @@ def _run(job: str, settings: Settings) -> dict:
     if job == "ingest_apis":
         with session_scope() as s:
             return {"ingest_apis": ingest_apis(s, settings)}
+    if job == "ingest_imports":
+        from .reconcile import ingest_imports
+        with session_scope() as s:
+            return {"ingest_imports": ingest_imports(s, settings)}
+    if job == "ingest_ct":
+        from .discovery import ingest_ct
+        with session_scope() as s:
+            return {"ingest_ct": ingest_ct(s, settings)}
     if job == "scan":
         with session_scope() as s:
             return {"scan": run_scan(s, settings)}
@@ -279,6 +287,21 @@ def _run(job: str, settings: Settings) -> dict:
             except Exception as exc:
                 log.exception("Ingestão de APIs falhou")
                 summary["ingest_apis"] = {"erro": str(exc)}
+        from .discovery import ingest_ct
+        from .reconcile import ingest_imports
+        try:
+            with session_scope() as s:
+                summary["ingest_imports"] = ingest_imports(s, settings)
+        except Exception as exc:
+            log.exception("Leitura da diretoria de importação falhou")
+            summary["ingest_imports"] = {"erro": str(exc)}
+        if settings.ct_domains:
+            try:
+                with session_scope() as s:
+                    summary["ingest_ct"] = ingest_ct(s, settings)
+            except Exception as exc:
+                log.exception("Descoberta CT falhou")
+                summary["ingest_ct"] = {"erro": str(exc)}
         with session_scope() as s:
             summary["scan"] = run_scan(s, settings)
         with session_scope() as s:

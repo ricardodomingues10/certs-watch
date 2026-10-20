@@ -7,24 +7,57 @@
   <link rel="stylesheet" href="/static/style.css">
 </head>
 <body>
-<header class="top">
-  <a class="brand" href="/">cert<span>watch</span></a>
-  <nav>
-    {% set p = request.url.path %}
-    <a href="/" class="{{ 'on' if p == '/' }}">Painel</a>
-    <a href="/certificados" class="{{ 'on' if p.startswith('/certificados') or p.startswith('/cert/') }}">Certificados</a>
-    <a href="/testes" class="{{ 'on' if p.startswith('/testes') }}">Testes</a>
-    <a href="/arvore" class="{{ 'on' if p.startswith('/arvore') }}">Árvore</a>
-    <a href="/apis" class="{{ 'on' if p.startswith('/apis') }}">APIs</a>
-    <a href="/findings" class="{{ 'on' if p.startswith('/findings') }}">Alertas</a>
-    <a href="/endpoints" class="{{ 'on' if p.startswith('/endpoints') }}">Endpoints</a>
-    <a href="/jobs" class="{{ 'on' if p.startswith('/jobs') }}">Jobs</a>
+{% set p = request.url.path %}
+{% macro navlink(href, label, active, count=None, kind='') -%}
+<a href="{{ href }}" class="{{ 'on' if active }}"{% if active %} aria-current="page"{% endif %}><span>{{ label }}</span>{% if count %}<span class="badge {{ kind }}">{{ count }}</span>{% endif %}</a>
+{%- endmacro %}
+<div class="shell">
+  <nav class="rail" aria-label="Navegação principal">
+    <a class="brand" href="/">cert<span>watch</span><small>Gestão de certificados</small></a>
+
+    <h4>Visão geral</h4>
+    {{ navlink('/', 'Painel', p == '/') }}
+
+    <h4>Inventário</h4>
+    {{ navlink('/certificados', 'Certificados', p.startswith('/certificados')) }}
+    {{ navlink('/arvore', 'Árvore de confiança', p.startswith('/arvore') or p.startswith('/cert/')) }}
+    {{ navlink('/apis', 'APIs', p.startswith('/apis')) }}
+    {{ navlink('/endpoints', 'Servidores', p.startswith('/endpoints')) }}
+
+    <h4>Verificação</h4>
+    {{ navlink('/testes', 'Testes', p.startswith('/testes') and not p.startswith('/testes/como')) }}
+    {{ navlink('/findings', 'Alertas', p.startswith('/findings'), nav.alertas, 'hot' if nav.alertas_altos else '') }}
+
+    <h4>Descoberta</h4>
+    {{ navlink('/descoberta', 'Na internet', p.startswith('/descoberta'), nav.ct_por_triar, 'warm') }}
+    {{ navlink('/reconciliacao', 'Reconciliação', p.startswith('/reconciliacao'), nav.reconc_dif, 'warm') }}
+
+    <h4>Operação</h4>
+    {{ navlink('/jobs', 'Execuções e auditoria', p.startswith('/jobs')) }}
+    {{ navlink('/testes/como-funciona', 'Como funciona', p.startswith('/testes/como')) }}
   </nav>
-  <span class="who">{{ user }}</span>
-</header>
-<main>
-{% block content %}{% endblock %}
-</main>
-<footer>certwatch {{ version }} · datas em hora de Lisboa · <a href="/testes/como-funciona">Como testamos</a></footer>
+
+  <div class="content">
+    <header class="topbar">
+      <form method="get" action="/pesquisa" role="search">
+        <input type="search" id="global-q" name="q" value="{{ request.query_params.get('q', '') if p == '/pesquisa' else '' }}"
+               placeholder="Procurar certificado, servidor, emissor ou API" aria-label="Procurar">
+      </form>
+      <span class="who">{{ user }}</span>
+    </header>
+    <main>
+      <div class="page-head">
+        <div class="titles">
+          <div class="crumb">{% block crumb %}{% endblock %}</div>
+          <h1>{% block page_title %}{% endblock %}</h1>
+          <p class="lede">{% block lede %}{% endblock %}</p>
+        </div>
+        <div class="page-actions">{% block actions %}{% endblock %}</div>
+      </div>
+      {% block content %}{% endblock %}
+    </main>
+    <footer>certwatch {{ version }} · datas em hora de Lisboa</footer>
+  </div>
+</div>
 </body>
 </html>

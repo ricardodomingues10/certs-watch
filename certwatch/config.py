@@ -36,6 +36,17 @@ def _str_list(value: str | None) -> list[str]:
     return [x.strip().lower() for x in (value or "").split(",") if x.strip()]
 
 
+def _kv_map(value: str | None) -> dict[str, str]:
+    """'CA1=Nome A;CA2=Nome B' -> {'CA1': 'Nome A', 'CA2': 'Nome B'}"""
+    out = {}
+    for part in (value or "").split(";"):
+        if "=" in part:
+            k, v = part.split("=", 1)
+            if k.strip():
+                out[k.strip().upper()] = v.strip()
+    return out
+
+
 def _int_list(value: str) -> list[int]:
     return sorted({int(x) for x in value.split(",") if x.strip()})
 
@@ -60,6 +71,18 @@ class Settings:
     apis_field_name: str
     apis_field_url: str
     apis_field_expiry: str
+
+    # Descoberta na internet (Certificate Transparency)
+    ct_domains: list[str]
+    ct_sources: list[str]
+    ct_include_expired_days: int
+    certspotter_api_key: str | None
+    ctlogs_api_key: str | None
+
+    # Reconciliação com ficheiros de exportação
+    import_dir: Path
+    import_sources: dict[str, str]
+    import_issuers: dict[str, str]
 
     # Classificação interno / externo
     internal_suffixes: list[str]
@@ -114,6 +137,14 @@ class Settings:
             apis_field_name=_env("CERTWATCH_APIS_FIELD_NAME", ""),
             apis_field_url=_env("CERTWATCH_APIS_FIELD_URL", ""),
             apis_field_expiry=_env("CERTWATCH_APIS_FIELD_EXPIRY", ""),
+            ct_domains=_str_list(_env("CERTWATCH_CT_DOMAINS", "")),
+            ct_sources=_str_list(_env("CERTWATCH_CT_SOURCES", "crtsh,certspotter,ctlogs")),
+            ct_include_expired_days=int(_env("CERTWATCH_CT_INCLUDE_EXPIRED_DAYS", "0")),
+            certspotter_api_key=_secret("certspotter_api_key", "CERTWATCH_CERTSPOTTER_API_KEY"),
+            ctlogs_api_key=_secret("ctlogs_api_key", "CERTWATCH_CTLOGS_API_KEY"),
+            import_dir=Path(_env("CERTWATCH_IMPORT_DIR", "/app/import")),
+            import_sources=_kv_map(_env("CERTWATCH_IMPORT_SOURCES", "CA1=ca1;CA2=ca2;AVI=avi")),
+            import_issuers=_kv_map(_env("CERTWATCH_IMPORT_ISSUERS", "")),
             internal_suffixes=_str_list(_env("CERTWATCH_INTERNAL_SUFFIXES", ".local,.lan,.internal,.intranet,.corp")),
             internal_issuer_patterns=_str_list(_env("CERTWATCH_INTERNAL_ISSUER_PATTERNS", "internal,interna")),
             trust_dir=Path(_env("CERTWATCH_TRUST_DIR", "/app/trust")),

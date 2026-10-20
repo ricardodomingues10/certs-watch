@@ -1,8 +1,10 @@
 {% extends "base.html" %}
 {% block title %}Alertas{% endblock %}
+{% block crumb %}Verificação{% endblock %}
+{% block page_title %}Alertas <small>{{ items|length }}</small>{% endblock %}
+{% block lede %}Cada alerta tem uma identificação fixa: se o problema continua é o mesmo alerta, se desaparece fecha sozinho. Aceitar um risco exige justificação e prazo, e fica na auditoria.{% endblock %}
+{% block actions %}<a class="button" href="/api/findings">Dados em JSON</a>{% endblock %}
 {% block content %}
-<h1>Alertas <small>{{ items|length }}</small></h1>
-<p class="sub">Cada alerta tem uma identificação fixa: se o problema continua é o mesmo alerta, se desaparece fecha sozinho. Aceitar um risco exige justificação e prazo.</p>
 
 <form class="filters" method="get">
   <select name="status">

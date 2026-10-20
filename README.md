@@ -1,4 +1,4 @@
-# certwatch 0.2
+# certwatch 0.3
 
 Aplicação autónoma de gestão de certificados X.509 de uma organização. Não depende do n8n.
 
@@ -9,14 +9,16 @@ Aplicação autónoma de gestão de certificados X.509 de uma organização. Nã
 4. Importa a lista de APIs da UCMDB (opcional) e verifica o certificado do servidor de cada API, sem nunca importar segredos.
 5. Classifica cada certificado por tipo (Hostname, Wildcard, IP, API, CA, outro) e âmbito (interno/externo).
 6. Mostra a árvore de certificados (raiz → intermédias → certificados finais) e uma aba de testes por camada, com o que significa cada falha e como corrigir.
+7. Procura na internet (Certificate Transparency: crt.sh, Cert Spotter, ctlogs.dev) os certificados emitidos para os domínios da organização e mostra os que não estão na CMDB, para triagem.
+8. Reconcilia ficheiros de exportação da CA1, CA2 e AVI colocados numa diretoria com a CMDB: certificados novos, datas alteradas e registos em falta.
 
-Fora desta versão: tickets ITSM, escrita na UCMDB, Certificate Transparency, AVI, ADCS, email.
+Fora desta versão: tickets ITSM, escrita na UCMDB, email.
 
 ---
 
 ## 1. Instalação no servidor de testes
 
-Requisitos: Docker com o plugin `compose`, e acesso a `docker.io` e PyPI para o build. Se o servidor não tiver acesso, ver a secção 9.
+Requisitos: Docker com o plugin `compose`, e acesso a `docker.io` e PyPI para o build. Se o servidor não tiver acesso, ver a secção 11.
 
 ```bash
 sudo git clone https://github.com/ricardodomingues10/certs-watch.git /opt/certwatch
@@ -82,6 +84,8 @@ ssh -L 8088:127.0.0.1:8088 utilizador@servidor
 
 Abrir `http://localhost:8088`. O utilizador é `admin` e a palavra-passe é o conteúdo de `secrets/admin_password`.
 
+A navegação lateral está agrupada por tarefa: **Inventário** (o que existe), **Verificação** (o que está bem ou mal), **Descoberta** (o que existe e ninguém registou) e **Operação**. A caixa no topo procura em tudo.
+
 | Página | Para que serve |
 |---|---|
 | Painel | Quantos certificados há, quantos falham, por tipo e âmbito, expirações dos próximos 12 meses, testes com mais falhas |
@@ -91,6 +95,8 @@ Abrir `http://localhost:8088`. O utilizador é `admin` e a palavra-passe é o co
 | Como testamos | Explicação de cada teste, de como é feito e de como se corrige |
 | Árvore | Raízes → intermédias → certificados finais, com onde cada um está instalado e quantos registos CMDB indicam cada CA |
 | APIs | Lista de APIs da CMDB, certificado do servidor de cada uma e validade registada na lista |
+| Na internet | Certificados públicos dos domínios da organização, comparados com a CMDB; decidir adicionar, investigar ou ignorar; exportar CSV |
+| Reconciliação | Exportações CA1/CA2/AVI comparadas com a CMDB e com o servidor; exportar diferenças em CSV |
 | Alertas | Lista filtrável; **aceitar risco** (justificação obrigatória e prazo até 1 ano) ou reabrir |
 | Endpoints | Alvos de verificação; adicionar endpoints manuais (ex.: servidores que usam um wildcard) |
 | Jobs | Executar jobs, histórico de execuções e auditoria |
@@ -110,13 +116,44 @@ API só de leitura (mesma autenticação): `GET /api/inventario`, `GET /api/test
 
 Atributos com nomes como *secret*, *password*, *token* ou *key* nunca são guardados (exceto se forem datas, como `secret_expiration_date`). Textos longos também são descartados.
 
-## 4. Classificação
+## 4. Procura na internet (Certificate Transparency)
+
+As autoridades públicas são obrigadas a publicar todos os certificados que emitem em registos abertos. O certwatch consulta três serviços gratuitos para os domínios em `CERTWATCH_CT_DOMAINS` e funde os resultados (o mesmo certificado e o seu pré-certificado contam como um só):
+
+| Fonte | Sem chave | Notas |
+|---|---|---|
+| crt.sh (Sectigo) | sim | Histórico completo; por vezes lento ou indisponível |
+| Cert Spotter (SSLMate) | sim, com limite horário | Chave opcional no segredo `certspotter_api_key` |
+| ctlogs.dev | 100 pedidos/hora | Últimos 90 dias sem chave; chave opcional no segredo `ctlogs_api_key` |
+
+Cada certificado encontrado fica numa de três situações: **nome não existe na CMDB**, **nome existe mas este certificado não** (renovação não registada, segundo certificado ou outra CA) e **já na CMDB**. Os dois primeiros ficam *por triar* até alguém decidir: adicionar à CMDB, investigar ou ignorar (com motivo). A lista "Adicionar à CMDB" exporta-se em CSV.
+
+O servidor precisa de saída HTTPS para estes três serviços. Para testar a partir do servidor:
+
+```bash
+docker compose exec worker python -m certwatch.cli ct-test exemplo.pt
+```
+
+Se a saída for por proxy, acrescente `HTTPS_PROXY=http://proxy:porta` e `NO_PROXY=.local,10.0.0.0/8` (ajustado) ao `.env`.
+
+## 5. Reconciliação com exportações
+
+Copie os ficheiros exportados para a diretoria `import/` da aplicação. O início do nome indica a fonte (`CERTWATCH_IMPORT_SOURCES`, por omissão `ca1*`, `ca2*` e `avi*`). São aceites CSV (UTF-8, UTF-16 do certutil, Windows-1252; vírgula, ponto e vírgula ou tabulação) e Excel `.xlsx`.
+
+- Colunas reconhecidas: as do certutil (`Issued Common Name`, `Certificate Expiration Date`, `Serial Number`, `Request Disposition`) e as do AVI (`Subject_CommonName`, `Validity_NotAfter`, `SerialNumber`, `Issuer_CommonName`, `SubjectAlternativeName`), mesmo com acentos estragados.
+- Datas: DD/MM/AAAA (nunca trocadas por MM/DD), ISO, seriais do Excel e AAAAMMDD; o formato americano só é aceite com AM/PM explícito.
+- Pedidos revogados ou não emitidos são ignorados; linhas com problemas aparecem na página com o número da linha.
+- Em cada fonte é usado o ficheiro mais recente; um ficheiro igual ao anterior não é lido de novo.
+
+Resultados: **novo** (não existe na CMDB), **data mais recente** (renovado; atualizar a CMDB), **data mais antiga** (confirmar no servidor), **só na CMDB** (quando `CERTWATCH_IMPORT_ISSUERS` diz qual é o emissor de cada CA) e **igual**. Quando o servidor foi verificado, a data que ele apresenta é mostrada ao lado para desempatar.
+
+## 6. Classificação
 
 - **Tipo**: API (está na lista de APIs) · Wildcard · Endereço IP · Hostname · Autoridade (CA) · Outro.
 - **Âmbito**: interno se o nome termina num sufixo de `CERTWATCH_INTERNAL_SUFFIXES`, se o IP (ou o IP para onde o nome resolve) é privado, ou se o emissor contém um padrão de `CERTWATCH_INTERNAL_ISSUER_PATTERNS`. Os restantes nomes são externos.
 - **Estado**: Falha (alerta alto ou crítico) · Atenção (alerta médio ou baixo) · OK (verificado sem alertas) · Por verificar · Só CMDB (sem servidor para testar, ex.: CAs).
 
-## 5. Regras (alertas)
+## 7. Regras (alertas)
 
 | Tipo | Severidade | Quando |
 |---|---|---|
@@ -143,7 +180,7 @@ Atributos com nomes como *secret*, *password*, *token* ou *key* nunca são guard
 
 ---
 
-## 6. Segurança da própria aplicação
+## 8. Segurança da própria aplicação
 
 - A interface escuta só em localhost; o acesso é por túnel SSH. Autenticação HTTP Basic, proteção CSRF (cookie `SameSite=Strict` + token), CSP restritiva, `X-Frame-Options: DENY` e redirecionamentos apenas para caminhos locais.
 - Os segredos ficam em ficheiros montados (`/run/secrets`), nunca em variáveis de ambiente nem no código.
@@ -151,12 +188,14 @@ Atributos com nomes como *secret*, *password*, *token* ou *key* nunca são guard
 - O TLS para a UCMDB é sempre verificado contra o trust store.
 - Os dados da CMDB são tratados como não confiáveis: só hostnames e IPs válidos e portas da allowlist são alvos. Nenhum valor passa por uma shell.
 - A ingestão é abortada se a UCMDB devolver menos de `CERTWATCH_UCMDB_MIN_CIS` registos, para que uma resposta truncada não desative o inventário.
-- Toda a ação humana (aceitar risco, adicionar endpoint, pedir job) fica registada na auditoria.
+- Toda a ação humana (aceitar risco, decidir sobre um certificado encontrado na internet, adicionar servidor, pedir execução) fica registada na auditoria.
+- As exportações CSV protegem contra injeção de fórmulas no Excel.
+- A diretoria de importação é montada só de leitura.
 - **A base de dados é um mapa da superfície TLS da organização**: o volume `pgdata` e os backups devem ser tratados como sensíveis.
 
 ---
 
-## 7. Operação
+## 9. Operação
 
 ```bash
 docker compose logs --tail 100 worker                     # o que o worker está a fazer
@@ -169,7 +208,7 @@ Atualizar: `git pull && docker compose up -d --build`. O esquema da base de dado
 
 ---
 
-## 8. Desenvolvimento e testes
+## 10. Desenvolvimento e testes
 
 ```bash
 python -m venv .venv && . .venv/bin/activate
@@ -182,12 +221,12 @@ Os testes levantam servidores TLS reais em localhost com uma PKI de teste (chain
 
 ---
 
-## 9. Servidor sem acesso à internet
+## 11. Servidor sem acesso à internet
 
 Fazer o build numa máquina com acesso e transferir a imagem:
 
 ```bash
-docker compose build && docker save certwatch:0.2.0 postgres:16-alpine | gzip > certwatch-images.tar.gz
+docker compose build && docker save certwatch:0.3.0 postgres:16-alpine | gzip > certwatch-images.tar.gz
 # no servidor:
 gunzip -c certwatch-images.tar.gz | docker load && docker compose up -d --no-build
 ```
