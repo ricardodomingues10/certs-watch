@@ -240,6 +240,9 @@ def execute_job_run(job_run_id: int, settings: Settings) -> None:
     try:
         with advisory_lock(LOCK_PIPELINE):
             summary = _run(job, settings)
+        # Um passo que falhou dentro do pipeline marca o job como erro (o resumo mantém o detalhe)
+        if any(isinstance(v, dict) and "erro" in v for v in summary.values()):
+            status = "error"
     except JobBusy:
         # Outro job a correr (ex.: CLI): volta para a fila e o worker tenta no próximo ciclo
         with session_scope() as s:
