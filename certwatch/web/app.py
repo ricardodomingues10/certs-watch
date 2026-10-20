@@ -18,17 +18,19 @@ from sqlalchemy import select
 
 from .. import __version__
 from ..checks import CHECK_BY_ID, CHECKS, LAYERS, STATUS_LABELS, evaluate_endpoint
+from ..collectors.smax import configured as smax_configured
 from ..collectors.ssllabs import GOOD_GRADES, GRADE_ORDER, report_url
 from ..classify import (AUTO_RENEW_HELP, AUTO_RENEW_LABELS, SCOPE_HELP, SCOPE_LABELS, TYPE_HELP, TYPE_LABELS,
                         cert_type, is_auto_renew, scope_of)
 from ..config import get_settings
 from ..db import as_utc, init_db, session_scope, utcnow
 from ..evaluator import FINDING_CHECK, FINDING_TYPES, SEV_RANK, SEVERITIES, days_left, load_snapshot
-from ..insights import STATE_LABELS, ancestry, build_inventory, build_tree, check_matrix, check_totals, dashboard_stats
+from ..insights import STATE_LABELS, ancestry, build_inventory, check_matrix, check_totals, dashboard_stats
 from ..jobs import apis_configured, JOBS, enqueue
 from ..collectors.ct import SOURCE_LABELS
 from ..discovery import CT_STATE_HELP, CT_STATES, CT_TABS, TRIAGE_LABELS, classify_ct
 from ..models import ApiRecord, AuditLog, Certificate, CmdbRecord, CtCert, Endpoint, Finding, ImportFile, JobRun, ScanResult, SslLabsResult
+from ..tickets import TICKET_HELP, TICKET_STATES, link as ticket_link, tickets_by_endpoint
 from ..reconcile import REC_HELP, REC_STATES, REC_TABS, scan_import_dir, reconcile
 from ..trust import local_trust_files
 from ..normalize import split_api_name, is_ip, is_valid_hostname, norm_host, norm_issuer
@@ -38,12 +40,14 @@ BASE = Path(__file__).parent
 MONTHS = ["jan", "fev", "mar", "abr", "mai", "jun", "jul", "ago", "set", "out", "nov", "dez"]
 JOB_LABELS = {"pipeline": "Executar tudo", "ingest_cmdb": "Importar certificados da CMDB",
               "ingest_apis": "Importar lista de APIs", "ingest_imports": "Ler ficheiros de reconciliação",
+              "ingest_smax": "Ler pedidos do SMAX",
               "ingest_ct": "Procurar na internet (CT)", "scan": "Verificar servidores",
               "ssllabs": "Avaliação externa (SSL Labs)", "evaluate": "Reavaliar regras"}
-JOB_HELP = {"pipeline": "Faz todos os passos pela ordem: CMDB, APIs, ficheiros, internet, servidores, SSL Labs e regras.",
+JOB_HELP = {"pipeline": "Faz todos os passos pela ordem: CMDB, APIs, ficheiros, SMAX, internet, servidores, SSL Labs e regras.",
             "ingest_cmdb": "Lê os certificados da UCMDB (nome, validade e emissor).",
             "ingest_apis": "Lê a lista de APIs da UCMDB.",
             "ingest_imports": "Lê os ficheiros CA1, CA2, AVI e Azure da diretoria de importação.",
+            "ingest_smax": "Lê os pedidos (changes) de certificados do SMAX, só leitura.",
             "ingest_ct": "Consulta crt.sh, Cert Spotter e ctlogs.dev para os domínios configurados.",
             "scan": "Liga-se a cada servidor e recolhe o certificado e a cadeia.",
             "ssllabs": "Pede ao Qualys SSL Labs a nota dos nomes externos (demora 1 a 2 minutos por nome).",
@@ -86,6 +90,7 @@ templates.env.globals.update(
     FINDING_TYPES=FINDING_TYPES, FINDING_CHECK=FINDING_CHECK, SEVERITIES=SEVERITIES, version=__version__,
     TYPE_LABELS=TYPE_LABELS, TYPE_HELP=TYPE_HELP, SCOPE_LABELS=SCOPE_LABELS, SCOPE_HELP=SCOPE_HELP,
     AUTO_RENEW_LABELS=AUTO_RENEW_LABELS, AUTO_RENEW_HELP=AUTO_RENEW_HELP, ssllabs_report=report_url,
+    TICKET_STATES=TICKET_STATES, TICKET_HELP=TICKET_HELP,
     STATE_LABELS=STATE_LABELS, STATUS_LABELS=STATUS_LABELS, CHECKS=CHECKS, CHECK_BY_ID=CHECK_BY_ID,
     LAYERS=LAYERS, MONTHS=MONTHS, JOB_LABELS=JOB_LABELS, JOB_HELP=JOB_HELP,
     CT_STATES=CT_STATES, CT_TABS=CT_TABS, CT_SOURCE_LABELS=SOURCE_LABELS, CT_STATE_HELP=CT_STATE_HELP, TRIAGE_LABELS=TRIAGE_LABELS,
@@ -188,6 +193,14 @@ def setup_checklist(s, settings, stats) -> list[dict]:
                                if jr else "Ainda não importada com sucesso.")})
     else:
         items.append({"ok": None, "title": "Lista de APIs", "hint": "Opcional: definir CERTWATCH_UCMDB_TQL_APIS no .env."})
+    if smax_configured(settings):
+        jr, part = _last_ok(s, "ingest_smax")
+        items.append({"ok": bool(jr), "title": "Pedidos do SMAX",
+                      "hint": (f"{part.get('tickets', 0)} pedidos lidos, {part.get('abertos', 0)} abertos" if jr
+                               else "Ainda não lidos com sucesso. Ver Execuções e auditoria.")})
+    else:
+        items.append({"ok": None, "title": "Pedidos do SMAX",
+                      "hint": "Opcional: definir CERTWATCH_SMAX_URL, CERTWATCH_SMAX_TENANT e os segredos smax_user/smax_password."})
     if settings.ct_domains:
         jr, part = _last_ok(s, "ingest_ct")
         items.append({"ok": bool(jr), "title": "Procura na internet",
@@ -230,8 +243,11 @@ def dashboard(request: Request, user: str = Depends(current_user)):
     sev_counts = {sv: sum(1 for f in open_findings if f.severity == sv) for sv in SEVERITIES}
     urgent = [r for r in inv if r["state"] == "falha"][:12]
     soon30 = sum(1 for r in inv if r["dias"] is not None and 0 <= r["dias"] <= 30)
+    soon30_sem_pedido = sum(1 for r in inv if r["dias"] is not None and 0 <= r["dias"] <= 30
+                            and r["smax"]["state"] != "em_curso")
     return render(request, "dashboard.html", user, s=stats, sev_counts=sev_counts, urgent=urgent, setup=setup,
-                  last_jobs=last_jobs, n_apis=n_apis, n_open=len(open_findings), soon30=soon30)
+                  last_jobs=last_jobs, n_apis=n_apis, n_open=len(open_findings), soon30=soon30,
+                  soon30_sem_pedido=soon30_sem_pedido, smax_on=smax_configured(settings))
 
 
 @app.get("/pesquisa")
@@ -252,14 +268,19 @@ def pesquisa(request: Request, q: str = "", user: str = Depends(current_user)):
     return render(request, "pesquisa.html", user, q=q, certs=certs, eps=eps, cts=cts)
 
 
-def _inventory_filtered(q: str, dias: str, estado: str, tipo: str, ambito: str, renovacao: str):
+TICKET_FILTERS = {"em_curso": "Com pedido em curso", "nao_em_curso": "Sem pedido em curso",
+                  "outra_data": "Pedido aberto para outra data", "fechado": "Só pedidos fechados", "sem_pedido": "Nenhum pedido"}
+
+
+def _inventory_filtered(q: str, dias: str, estado: str, tipo: str, ambito: str, renovacao: str, pedido: str = ""):
     with session_scope() as s:
         rows = build_inventory(s, get_settings(), utcnow())
     total = len(rows)
     if q:
         ql = q.lower()
         rows = [r for r in rows if ql in r["cn"] or any(ql in i.lower() for i in r["issuers"])
-                or ql in (r["live_issuer"] or "").lower() or any(ql in a.lower() for a in r["apis"])]
+                or ql in (r["live_issuer"] or "").lower() or any(ql in a.lower() for a in r["apis"])
+                or any(ql == x["id"].lower() for x in r["smax"]["open"] + r["smax"]["closed"])]
     if dias.lstrip("-").isdigit():
         lim = int(dias)
         rows = [r for r in rows if r["dias"] is not None and r["dias"] <= lim]
@@ -271,31 +292,40 @@ def _inventory_filtered(q: str, dias: str, estado: str, tipo: str, ambito: str, 
         rows = [r for r in rows if r["scope"] == ambito]
     if renovacao in AUTO_RENEW_LABELS:
         rows = [r for r in rows if r["renovacao"] == renovacao]
+    if pedido == "nao_em_curso":
+        rows = [r for r in rows if r["smax"]["state"] != "em_curso"]
+    elif pedido in TICKET_STATES:
+        rows = [r for r in rows if r["smax"]["state"] == pedido]
     return rows, total
 
 
 @app.get("/certificados")
 def certificados(request: Request, q: str = "", dias: str = "", estado: str = "", tipo: str = "", ambito: str = "",
-                 renovacao: str = "", user: str = Depends(current_user)):
-    rows, total = _inventory_filtered(q, dias, estado, tipo, ambito, renovacao)
+                 renovacao: str = "", pedido: str = "", user: str = Depends(current_user)):
+    rows, total = _inventory_filtered(q, dias, estado, tipo, ambito, renovacao, pedido)
     return render(request, "certificados.html", user, rows=rows, total=total, q=q, dias=dias,
-                  estado=estado, tipo=tipo, ambito=ambito, renovacao=renovacao,
+                  estado=estado, tipo=tipo, ambito=ambito, renovacao=renovacao, pedido=pedido,
+                  ticket_filters=TICKET_FILTERS, smax_on=smax_configured(get_settings()),
                   export_qs=urlencode({k: v for k, v in dict(q=q, dias=dias, estado=estado, tipo=tipo, ambito=ambito,
-                                                                 renovacao=renovacao).items() if v}))
+                                                                 renovacao=renovacao, pedido=pedido).items() if v}))
 
 
 @app.get("/certificados/exportar")
 def certificados_csv(q: str = "", dias: str = "", estado: str = "", tipo: str = "", ambito: str = "",
-                     renovacao: str = "", user: str = Depends(current_user)):
-    rows, _ = _inventory_filtered(q, dias, estado, tipo, ambito, renovacao)
+                     renovacao: str = "", pedido: str = "", user: str = Depends(current_user)):
+    rows, _ = _inventory_filtered(q, dias, estado, tipo, ambito, renovacao, pedido)
     return csv_response("certificados.csv",
                         ["Certificado", "Estado", "Tipo", "Âmbito", "Renovação automática", "Dias", "Expira",
-                         "Data de", "Emissor (servidor)", "Emissores (CMDB)", "Situação", "Registos CMDB", "APIs"],
+                         "Data de", "Emissor (servidor)", "Emissores (CMDB)", "Situação", "Registos CMDB", "APIs",
+                         "Pedido SMAX", "Situação do pedido", "Fase do pedido", "Pedidos abertos", "Link do pedido"],
                         [[r["common_name"], STATE_LABELS.get(r["state"], r["state"]), TYPE_LABELS.get(r["type"], r["type"]),
                           SCOPE_LABELS.get(r["scope"], r["scope"]), "Sim" if r["renovacao"] == "auto" else "Não",
                           r["dias"], fmt_dt(r["live_not_after"] or r["cmdb_valid_to"]),
                           {"live": "servidor", "cmdb": "CMDB"}.get(r["fonte_data"], ""), r["live_issuer"] or "",
-                          ", ".join(r["issuers"]), r["summary"], r["registos"], ", ".join(r["apis"])] for r in rows])
+                          ", ".join(r["issuers"]), r["summary"], r["registos"], ", ".join(r["apis"]),
+                          (r["smax"]["main"] or {}).get("id", ""), r["smax"]["label"], (r["smax"]["main"] or {}).get("fase", ""),
+                          ", ".join(x["id"] for x in r["smax"]["open"]), (r["smax"]["main"] or {}).get("url", "")]
+                         for r in rows])
 
 
 @app.get("/certificados/detalhe")
@@ -330,7 +360,9 @@ def certificado_detalhe(request: Request, cn: str, user: str = Depends(current_u
         auto_cmdb = any(is_auto_renew(settings, r.issuer, r.issuer_name) for r in recs)
         auto_live = bool(leaf0) and is_auto_renew(settings, leaf0.issuer_dn, leaf0.issuer_cn)
         ext = s.scalar(select(SslLabsResult).where(SslLabsResult.host == cn))
-    return render(request, "certificado.html", user, cn=cn, recs=recs, inactive=inactive, eps=ep_data, apis=apis,
+        effective = leaf0.not_after if leaf0 else (recs[0].valid_to if recs else None)
+        smax = ticket_link(tickets_by_endpoint(s).get(cn, []), effective, settings)
+    return render(request, "certificado.html", user, smax=smax, smax_on=smax_configured(settings), cn=cn, recs=recs, inactive=inactive, eps=ep_data, apis=apis,
                   findings=findings, ctype=ctype, scope=scope, now=now, ext=ext, ssllabs_on=bool(settings.ssllabs_email),
                   auto_renew="auto" if (auto_cmdb or auto_live) else "manual",
                   auto_src=", ".join(x for x, ok in (("CMDB", auto_cmdb), ("servidor", auto_live)) if ok),
@@ -352,14 +384,6 @@ def cert_page(request: Request, sha256: str, user: str = Depends(current_user)):
             ).order_by(CmdbRecord.valid_to).limit(300)))
     return render(request, "cert.html", user, node=node, up=up, cert=cert, cmdb_refs=cmdb_refs, now=utcnow(),
                   days_left=days_left)
-
-
-@app.get("/arvore")
-def arvore(request: Request, user: str = Depends(current_user)):
-    with session_scope() as s:
-        roots = build_tree(s, get_settings())
-        n_cmdb = len(load_snapshot(s).records)
-    return render(request, "arvore.html", user, roots=roots, now=utcnow(), days_left=days_left, n_cmdb=n_cmdb)
 
 
 @app.get("/testes")
@@ -566,7 +590,7 @@ def jobs_page(request: Request, user: str = Depends(current_user)):
         audits = list(s.scalars(select(AuditLog).order_by(AuditLog.id.desc()).limit(50)))
     st = get_settings()
     jobs = [j for j in JOBS if (j != "ingest_apis" or apis_configured(st)) and (j != "ingest_ct" or st.ct_domains)
-            and (j != "ssllabs" or st.ssllabs_email)]
+            and (j != "ssllabs" or st.ssllabs_email) and (j != "ingest_smax" or smax_configured(st))]
     return render(request, "jobs.html", user, runs=runs, audits=audits, jobs=jobs, daily_at=st.pipeline_daily_at)
 
 
@@ -698,7 +722,13 @@ def reconciliacao_exportar(estado: str = "diferencas", user: str = Depends(curre
 
 # ------------------------------------------------------------------ API (só leitura)
 def _jsonable(v):
-    return v.isoformat() if isinstance(v, datetime) else v
+    if isinstance(v, datetime):
+        return v.isoformat()
+    if isinstance(v, dict):
+        return {k: _jsonable(x) for k, x in v.items()}
+    if isinstance(v, (list, tuple)):
+        return [_jsonable(x) for x in v]
+    return v
 
 
 @app.get("/api/inventario")

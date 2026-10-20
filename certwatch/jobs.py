@@ -20,7 +20,7 @@ from .trust import build_bundle
 
 log = logging.getLogger(__name__)
 
-JOBS = ("pipeline", "ingest_cmdb", "ingest_apis", "ingest_imports", "ingest_ct", "scan", "ssllabs", "evaluate")
+JOBS = ("pipeline", "ingest_cmdb", "ingest_apis", "ingest_imports", "ingest_smax", "ingest_ct", "scan", "ssllabs", "evaluate")
 SCAN_RETENTION_DAYS = 90
 
 
@@ -291,6 +291,10 @@ def _run(job: str, settings: Settings) -> dict:
         from .reconcile import ingest_imports
         with session_scope() as s:
             return {"ingest_imports": ingest_imports(s, settings)}
+    if job == "ingest_smax":
+        from .tickets import ingest_smax
+        with session_scope() as s:
+            return {"ingest_smax": ingest_smax(s, settings)}
     if job == "ingest_ct":
         from .discovery import ingest_ct
         with session_scope() as s:
@@ -327,6 +331,15 @@ def _run(job: str, settings: Settings) -> dict:
         except Exception as exc:
             log.exception("Leitura da diretoria de importação falhou")
             summary["ingest_imports"] = {"erro": str(exc)}
+        from .collectors.smax import configured as smax_configured
+        if smax_configured(settings):
+            from .tickets import ingest_smax
+            try:
+                with session_scope() as s:
+                    summary["ingest_smax"] = ingest_smax(s, settings)
+            except Exception as exc:
+                log.exception("Leitura do SMAX falhou")
+                summary["ingest_smax"] = {"erro": str(exc)}
         if settings.ct_domains:
             try:
                 with session_scope() as s:

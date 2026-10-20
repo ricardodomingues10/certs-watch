@@ -6,6 +6,53 @@
 {% block lede %}{{ TYPE_HELP.get(ctype) }} {{ SCOPE_HELP.get(scope) }}{% endblock %}
 {% block content %}
 
+{% if smax_on %}
+<section class="card" id="smax">
+  <h2>Pedidos no SMAX <small>{{ smax.open|length }} aberto(s), {{ smax.closed|length }} fechado(s)</small></h2>
+  <p><span class="tag {{ 'tag-ok' if smax.state == 'em_curso' else ('tag-run' if smax.state == 'outra_data' else 'tag-err') }}">{{ smax.label }}</span>
+     <span class="small muted">{{ TICKET_HELP[smax.state] }}</span></p>
+  {% set all = smax.open + smax.closed %}
+  {% if all %}
+  <div class="scroll"><table class="compact">
+    <thead><tr><th>Pedido</th><th>Fase</th><th>Ambiente</th><th>Expiração no pedido</th><th>Grupo / responsável</th><th>Atualizado</th></tr></thead>
+    {% for x in all %}
+    <tr class="{{ 'faded' if not x.aberto }}">
+      <td><a class="ticket {{ 'ticket-open' if x.aberto else 'ticket-closed' }}" href="{{ x.url }}" target="_blank" rel="noopener noreferrer">{{ x.id }}</a>
+        <div class="small muted">{{ x.titulo }}</div></td>
+      <td>{{ x.fase or '—' }}</td>
+      <td>{{ x.ambiente or '—' }}</td>
+      <td>{{ x.expira|dt if x.expira else '—' }}{% if x.aberto and not x.deste_certificado %} <span class="tag tag-run">outra data</span>{% endif %}</td>
+      <td class="small">{{ x.grupo or '—' }}{% if x.responsavel %}<div class="muted">{{ x.responsavel }}</div>{% endif %}</td>
+      <td class="small">{{ x.atualizado|dtt if x.atualizado else '—' }}</td>
+    </tr>
+    {% endfor %}
+  </table></div>
+  {% endif %}
+</section>
+{% endif %}
+
+<div class="grid2">
+<section class="card">
+  <h2>Renovação</h2>
+  {% if auto_renew == 'auto' %}<p><span class="tag tag-ok">Automática</span> <span class="small muted">detetado em: {{ auto_src }}</span></p>
+  <p class="small">{{ AUTO_RENEW_HELP['auto'] }}</p>
+  {% else %}<p><span class="tag tag-off">Manual</span></p><p class="small">{{ AUTO_RENEW_HELP['manual'] }}</p>{% endif %}
+</section>
+<section class="card">
+  <h2>Avaliação externa (SSL Labs)</h2>
+  {% if ext %}
+    {% if ext.status == 'READY' %}
+    <p><span class="grade grade-{{ 'ok' if ext.grade in ('A+','A','A-') else ('mid' if ext.grade in ('B','M') else 'bad') }}">{{ ext.grade or '?' }}</span>
+       <span class="small muted">avaliado em {{ ext.test_time|dtt if ext.test_time else ext.checked_at|dtt }}{% if ext.has_warnings %} · com avisos{% endif %}</span></p>
+    {% if ext.endpoints|length > 1 %}<table class="compact">{% for e in ext.endpoints %}<tr><td class="mono small">{{ e.ip }}</td><td>{{ e.grade or e.estado }}</td></tr>{% endfor %}</table>{% endif %}
+    {% else %}<p class="muted">{{ ext.status }}: {{ ext.status_message }}</p>{% endif %}
+    <p class="small"><a href="{{ ssllabs_report(cn) }}" rel="noopener noreferrer" target="_blank">Abrir o relatório completo no SSL Labs</a></p>
+  {% elif ssllabs_on %}<p class="muted small">Ainda não avaliado. Só são avaliados nomes externos (acessíveis da internet).</p>
+  {% else %}<p class="muted small">Desligado. Para obter a nota A–F deste nome vista da internet, registe um email da organização no SSL Labs e defina <span class="mono">CERTWATCH_SSLLABS_EMAIL</span> (ver README).</p>{% endif %}
+</section>
+</div>
+
+
 {% for e in eps %}
 <section class="card">
   <div class="head">
@@ -87,27 +134,6 @@
   </table>
 </section>
 {% endif %}
-
-<div class="grid2">
-<section class="card">
-  <h2>Renovação</h2>
-  {% if auto_renew == 'auto' %}<p><span class="tag tag-ok">Automática</span> <span class="small muted">detetado em: {{ auto_src }}</span></p>
-  <p class="small">{{ AUTO_RENEW_HELP['auto'] }}</p>
-  {% else %}<p><span class="tag tag-off">Manual</span></p><p class="small">{{ AUTO_RENEW_HELP['manual'] }}</p>{% endif %}
-</section>
-<section class="card">
-  <h2>Avaliação externa (SSL Labs)</h2>
-  {% if ext %}
-    {% if ext.status == 'READY' %}
-    <p><span class="grade grade-{{ 'ok' if ext.grade in ('A+','A','A-') else ('mid' if ext.grade in ('B','M') else 'bad') }}">{{ ext.grade or '?' }}</span>
-       <span class="small muted">avaliado em {{ ext.test_time|dtt if ext.test_time else ext.checked_at|dtt }}{% if ext.has_warnings %} · com avisos{% endif %}</span></p>
-    {% if ext.endpoints|length > 1 %}<table class="compact">{% for e in ext.endpoints %}<tr><td class="mono small">{{ e.ip }}</td><td>{{ e.grade or e.estado }}</td></tr>{% endfor %}</table>{% endif %}
-    {% else %}<p class="muted">{{ ext.status }}: {{ ext.status_message }}</p>{% endif %}
-    <p class="small"><a href="{{ ssllabs_report(cn) }}" rel="noopener noreferrer" target="_blank">Abrir o relatório completo no SSL Labs</a></p>
-  {% elif ssllabs_on %}<p class="muted small">Ainda não avaliado. Só são avaliados nomes externos (acessíveis da internet).</p>
-  {% else %}<p class="muted small">Desligado. Para obter a nota A–F deste nome vista da internet, registe um email da organização no SSL Labs e defina <span class="mono">CERTWATCH_SSLLABS_EMAIL</span> (ver README).</p>{% endif %}
-</section>
-</div>
 
 <section class="card">
   <h2>Registos na CMDB <small>(só nome, validade e emissor são usados)</small></h2>

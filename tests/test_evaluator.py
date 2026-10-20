@@ -169,7 +169,7 @@ def test_end_to_end(env, pki):
         assert "Cadeia completa e confiável" in c.get("/testes", auth=auth).text
         t1 = c.get("/testes", params={"teste": "cadeia.confianca"}, auth=auth).text
         assert "app-chain.exemplo.pt" in t1 and "Como corrigir" in t1 and "app-ok.exemplo.pt" not in t1
-        assert "Exemplo Teste Issuing CA" in c.get("/arvore", auth=auth).text
+        assert c.get("/arvore", auth=auth).status_code == 404               # página retirada na 0.5
         cert_page = c.get(f"/cert/{ok_sha}", auth=auth).text
         assert "Exemplo Teste Root CA" in cert_page and "127.0.0.1" in cert_page
         det = c.get("/certificados/detalhe", params={"cn": "app-weak.exemplo.pt"}, auth=auth).text

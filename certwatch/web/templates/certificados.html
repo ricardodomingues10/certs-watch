@@ -1,5 +1,5 @@
 {% extends "base.html" %}
-{% from "_macros.html" import sev, days, type_chip, scope_chip, state %}
+{% from "_macros.html" import sev, days, type_chip, scope_chip, state, ticket_cell %}
 {% block title %}Certificados{% endblock %}
 {% block crumb %}Inventário{% endblock %}
 {% block page_title %}Certificados <small>{{ rows|length }} de {{ total }}</small>{% endblock %}
@@ -8,7 +8,7 @@
 {% block content %}
 
 <form class="filters" method="get">
-  <input type="search" id="f-q" name="q" value="{{ q }}" placeholder="nome, emissor ou API" aria-label="Pesquisar">
+  <input type="search" id="f-q" name="q" value="{{ q }}" placeholder="nome, emissor, API ou n.º de pedido" aria-label="Pesquisar">
   <select id="f-estado" name="estado" aria-label="Estado">
     <option value="">Qualquer estado</option>
     {% for k, l in STATE_LABELS.items() %}<option value="{{ k }}" {{ 'selected' if estado == k }}>{{ l }}</option>{% endfor %}
@@ -26,6 +26,10 @@
     <option value="auto" {{ 'selected' if renovacao == 'auto' }}>Renovação automática (Let's Encrypt)</option>
     <option value="manual" {{ 'selected' if renovacao == 'manual' }}>Renovação manual</option>
   </select>
+  {% if smax_on %}<select id="f-pedido" name="pedido" aria-label="Pedido SMAX">
+    <option value="">Com ou sem pedido SMAX</option>
+    {% for k, l in ticket_filters.items() %}<option value="{{ k }}" {{ 'selected' if pedido == k }}>{{ l }}</option>{% endfor %}
+  </select>{% endif %}
   <select id="f-dias" name="dias" aria-label="Prazo">
     <option value="">Qualquer prazo</option>
     {% for v, l in [('-1','Expirados'),('7','≤ 7 dias'),('20','≤ 20 dias'),('30','≤ 30 dias'),('90','≤ 90 dias')] %}
@@ -33,27 +37,27 @@
     {% endfor %}
   </select>
   <button>Filtrar</button>
-  {% if q or dias or estado or tipo or ambito or renovacao %}<a href="/certificados">limpar filtros</a>{% endif %}
+  {% if q or dias or estado or tipo or ambito or renovacao or pedido %}<a href="/certificados">limpar filtros</a>{% endif %}
 </form>
 
 <div class="card flush scroll">
 <table>
   <thead>
-    <tr><th>Estado</th><th>Certificado</th><th>Tipo</th><th>Âmbito</th><th>Situação</th><th>Prazo</th><th>Emissor</th><th title="{{ AUTO_RENEW_HELP['auto'] }}">Renovação automática</th><th>Origem</th></tr>
+    <tr><th>Estado</th><th>Certificado</th><th>Tipo</th><th>Âmbito</th><th>Situação</th><th>Prazo</th>{% if smax_on %}<th>Pedido SMAX</th>{% endif %}<th>Emissor</th><th title="{{ AUTO_RENEW_HELP['auto'] }}">Renovação automática</th></tr>
   </thead>
   <tbody>
   {% for r in rows %}
     <tr>
       <td>{{ state(r.state) }}</td>
       <td><a href="/certificados/detalhe?cn={{ r.cn|urlencode }}">{{ r.common_name }}</a>
-        {% if r.apis %}<div class="small muted">API: {{ r.apis|join(', ') }}</div>{% endif %}</td>
+        <div class="small muted">{% if r.in_cmdb %}CMDB{% if r.registos > 1 %} ({{ r.registos }} registos){% endif %}{% endif %}{% if r.apis %}{{ ' · ' if r.in_cmdb }}API: {{ r.apis|join(', ') }}{% endif %}{% if not r.in_cmdb and not r.apis %}adicionado à mão{% endif %}</div></td>
       <td>{{ type_chip(r.type) }}</td>
       <td>{{ scope_chip(r.scope) }}</td>
       <td>{{ r.summary }}{% if r.findings > 1 %} <span class="muted small">(+{{ r.findings - 1 }})</span>{% endif %}</td>
       <td>{{ days(r.dias) }} <div class="small muted">{{ (r.live_not_after or r.cmdb_valid_to)|dt }} · {{ r.fonte_data }}</div></td>
+      {% if smax_on %}<td>{{ ticket_cell(r.smax, r.dias) }}</td>{% endif %}
       <td class="small">{{ r.live_issuer or r.issuers|join(', ') or '—' }}</td>
       <td>{% if r.renovacao == 'auto' %}<span class="tag tag-ok" title="{{ AUTO_RENEW_HELP['auto'] }} Detetado em: {{ r.renovacao_fonte }}.">Sim</span>{% else %}<span class="muted" title="{{ AUTO_RENEW_HELP['manual'] }}">Não</span>{% endif %}</td>
-      <td class="small">{% if r.in_cmdb %}CMDB{% if r.registos > 1 %} ({{ r.registos }}){% endif %}{% endif %}{% if r.apis %}{{ ' · ' if r.in_cmdb }}APIs{% endif %}{% if not r.in_cmdb and not r.apis %}manual{% endif %}</td>
     </tr>
   {% else %}
     <tr><td colspan="9" class="muted">Sem resultados.</td></tr>

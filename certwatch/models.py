@@ -241,3 +241,23 @@ class SslLabsResult(Base):
     endpoints: Mapped[list] = mapped_column(JSON, default=list)
     test_time: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     checked_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+class SmaxTicket(Base):
+    """Ticket do SMAX (change de certificado), copiado na última leitura."""
+
+    __tablename__ = "smax_tickets"
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    display_label: Mapped[str] = mapped_column(String(512), default="")
+    endpoint: Mapped[str] = mapped_column(String(253), default="", index=True)   # nome normalizado
+    environment: Mapped[str] = mapped_column(String(32), default="")
+    cert_expiry: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    cert_type: Mapped[str] = mapped_column(String(128), default="")
+    phase: Mapped[str] = mapped_column(String(64), default="")
+    priority: Mapped[str] = mapped_column(String(64), default="")
+    owner_group: Mapped[str] = mapped_column(String(256), default="")
+    owner_person: Mapped[str] = mapped_column(String(256), default="")
+    last_update: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    scheduled_end: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    fetched_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)

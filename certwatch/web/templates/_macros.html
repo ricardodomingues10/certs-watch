@@ -65,3 +65,17 @@
   {% if v and maxv %}<rect class="hb-fill" x="0" y="0" width="{{ (v / maxv * 1000)|round(2) }}" height="10" rx="5"/>{% endif %}
 </svg>
 {%- endmacro %}
+
+{# Pedido SMAX de um certificado (resumo vindo de tickets.link). dias: dias até expirar, para destacar a falta de pedido. #}
+{% macro ticket_cell(t, dias=None) -%}
+{% if t and t.main %}
+  {% set m = t.main %}
+  <a class="ticket {{ 'ticket-open' if m.aberto else 'ticket-closed' }}" href="{{ m.url }}" target="_blank" rel="noopener noreferrer" title="{{ m.titulo }}">{{ m.id }}</a>
+  <div class="small muted">{{ m.fase or '—' }}{% if m.ambiente %} · {{ m.ambiente }}{% endif %}</div>
+  {% if t.state == 'outra_data' %}<span class="tag tag-run" title="{{ TICKET_HELP['outra_data'] }}">outra data</span>{% endif %}
+  {% if t.state == 'fechado' %}<span class="tag tag-off" title="{{ TICKET_HELP['fechado'] }}">fechado</span>{% endif %}
+  {% if t.open|length > 1 %}<span class="tag tag-err" title="Pedidos abertos: {{ t.open|map(attribute='id')|join(', ') }}">{{ t.open|length }} abertos</span>{% endif %}
+{% elif dias is not none and -30 <= dias <= 30 %}
+  <span class="tag tag-err" title="{{ TICKET_HELP['sem_pedido'] }}">sem pedido</span>
+{% else %}<span class="muted">—</span>{% endif %}
+{%- endmacro %}

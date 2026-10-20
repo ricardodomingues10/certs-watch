@@ -139,7 +139,7 @@ def collect_findings(session: Session, settings: Settings, now: datetime) -> dic
         eps = snap.ep_by_cn.get(cn, [])
         if kind == "wildcard" and not eps:
             c.add("WILDCARD_SEM_ENDPOINT", "info", cn, f"cn:{cn}", cn,
-                  sugestao="Adicionar em Endpoints os servidores que usam este wildcard")
+                  sugestao="Adicionar em Servidores os servidores que usam este wildcard")
 
         matched: set[str] = set()
         for ep in eps:

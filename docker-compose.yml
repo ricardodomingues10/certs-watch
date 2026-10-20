@@ -8,11 +8,11 @@ name: certwatch
 
 x-app: &app
   build: .
-  image: certwatch:0.4.3
+  image: certwatch:0.5.0
   network_mode: host
   restart: unless-stopped
   env_file: .env
-  secrets: [db_password, ucmdb_user, ucmdb_password, admin_password]
+  secrets: [db_password, ucmdb_user, ucmdb_password, admin_password, smax_user, smax_password]
   volumes:
     - ./trust:/app/trust:ro
     - ./import:/app/import:ro
@@ -67,6 +67,11 @@ secrets:
     file: ./secrets/ucmdb_password
   admin_password:
     file: ./secrets/admin_password
+  # SMAX (opcional): se não for usado, criar os ficheiros vazios (touch secrets/smax_user secrets/smax_password)
+  smax_user:
+    file: ./secrets/smax_user
+  smax_password:
+    file: ./secrets/smax_password
 
 volumes:
   pgdata:

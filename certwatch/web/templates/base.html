@@ -19,8 +19,7 @@
     {{ navlink('/', 'Painel', p == '/') }}
 
     <h4>Inventário</h4>
-    {{ navlink('/certificados', 'Certificados', p.startswith('/certificados')) }}
-    {{ navlink('/arvore', 'Árvore de confiança', p.startswith('/arvore') or p.startswith('/cert/')) }}
+    {{ navlink('/certificados', 'Certificados', p.startswith('/certificados') or p.startswith('/cert/')) }}
     {{ navlink('/apis', 'APIs', p.startswith('/apis')) }}
     {{ navlink('/endpoints', 'Servidores', p.startswith('/endpoints')) }}
 

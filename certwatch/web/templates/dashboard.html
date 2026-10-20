@@ -1,5 +1,5 @@
 {% extends "base.html" %}
-{% from "_macros.html" import sev, days, type_chip, scope_chip, state, stackbar, hbar %}
+{% from "_macros.html" import sev, days, type_chip, scope_chip, state, stackbar, hbar, ticket_cell %}
 {% block title %}Painel{% endblock %}
 {% block page_title %}Painel{% endblock %}
 {% block lede %}O que está bem, o que precisa de ação e o que falta configurar.{% endblock %}
@@ -33,6 +33,7 @@
     <span><a href="/certificados"><b>{{ s.total }}</b> certificados</a></span>
     <span><a href="/testes"><b>{{ s.ep_tls_ok }}</b> de {{ s.ep_total }} servidores verificados</a></span>
     <span><a href="/certificados?dias=30"><b>{{ soon30 }}</b> expiram em 30 dias</a></span>
+    {% if smax_on %}<span><a href="/certificados?dias=30&pedido=nao_em_curso"><b class="{{ 'bad' if soon30_sem_pedido }}">{{ soon30_sem_pedido }}</b> destes sem pedido em curso</a></span>{% endif %}
     <span><a href="/findings"><b>{{ n_open }}</b> alertas abertos</a></span>
     <span><a href="/descoberta"><b>{{ nav.ct_por_triar }}</b> encontrados na internet por triar</a></span>
     <span><a href="/reconciliacao"><b>{{ nav.reconc_dif }}</b> diferenças na reconciliação</a></span>
@@ -45,7 +46,7 @@
     <section class="card flush">
       <h2>Precisam de ação</h2>
       <div class="scroll"><table>
-        <thead><tr><th>Certificado</th><th>Tipo</th><th>Problema</th><th>Prazo</th><th>Gravidade</th></tr></thead>
+        <thead><tr><th>Certificado</th><th>Tipo</th><th>Problema</th><th>Prazo</th>{% if smax_on %}<th>Pedido SMAX</th>{% endif %}<th>Gravidade</th></tr></thead>
         <tbody>
         {% for r in urgent %}
           <tr>
@@ -53,10 +54,11 @@
             <td>{{ type_chip(r.type) }} {{ scope_chip(r.scope) }}</td>
             <td>{{ r.summary }}</td>
             <td>{{ days(r.dias) }}</td>
+            {% if smax_on %}<td>{{ ticket_cell(r.smax, r.dias) }}</td>{% endif %}
             <td>{{ sev(r.max_sev) }}</td>
           </tr>
         {% else %}
-          <tr><td colspan="5"><div class="empty"><b>Nada em falha</b>Os certificados com alertas altos ou críticos aparecem aqui.</div></td></tr>
+          <tr><td colspan="6"><div class="empty"><b>Nada em falha</b>Os certificados com alertas altos ou críticos aparecem aqui.</div></td></tr>
         {% endfor %}
         </tbody>
       </table></div>

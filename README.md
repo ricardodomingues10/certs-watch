@@ -8,19 +8,20 @@ Aplicação autónoma de gestão de certificados X.509 de uma organização. Nã
 3. Cruza a CMDB com a realidade e gera alertas com ciclo de vida (aberto → aceite com prazo → resolvido automaticamente).
 4. Importa a lista de APIs e segredos da UCMDB (opcional): nome, aplicação, data de expiração, "expirado?", localização e data de registo, sem nunca importar os segredos em si.
 5. Classifica cada certificado por tipo (Hostname, Wildcard, IP, API, CA, outro) e âmbito (interno/externo).
-6. Mostra a árvore de certificados (raiz → intermédias → certificados finais) e uma aba de testes por camada, com o que significa cada falha e como corrigir.
+6. Mostra uma aba de testes por camada, com o que significa cada falha e como corrigir.
 7. Procura na internet (Certificate Transparency: crt.sh, Cert Spotter, ctlogs.dev) os certificados emitidos para os domínios da organização e mostra os que não estão na CMDB, para triagem.
 8. Reconcilia ficheiros de exportação da CA1, CA2, AVI e Azure AD colocados numa diretoria com a CMDB: certificados e segredos novos, datas alteradas e registos em falta.
 9. Identifica os certificados com renovação automática (Let's Encrypt) e só alerta quando a renovação falhou.
 10. Pede (opcional) ao Qualys SSL Labs a nota A+–F dos nomes externos, vista a partir da internet.
+11. Lê (opcional, só leitura) os pedidos de certificados do SMAX e mostra, para cada certificado, o número do pedido com link para o SMAX.
 
-Fora desta versão: tickets ITSM, escrita na UCMDB, email.
+Fora desta versão: abertura de tickets no SMAX, escrita na UCMDB, email.
 
 ---
 
 ## 1. Instalação no servidor de testes
 
-Requisitos: Docker com o plugin `compose`, e acesso a `docker.io` e PyPI para o build. Se o servidor não tiver acesso, ver a secção 12.
+Requisitos: Docker com o plugin `compose`, e acesso a `docker.io` e PyPI para o build. Se o servidor não tiver acesso, ver a secção 13.
 
 ```bash
 sudo git clone https://github.com/ricardodomingues10/certs-watch.git /opt/certwatch
@@ -36,8 +37,9 @@ mkdir -p secrets && chmod 700 secrets
 openssl rand -base64 32 | tr -d '\n' > secrets/db_password
 printf '%s' 'conta-servico-ucmdb'      > secrets/ucmdb_user
 printf '%s' 'PASSWORD_DA_CONTA'        > secrets/ucmdb_password
+touch secrets/smax_user secrets/smax_password                   # preencher só se usar o SMAX (secção 7)
 openssl rand -base64 18 | tr -d '\n' > secrets/admin_password   # login da interface (utilizador: admin)
-S='secrets/db_password secrets/ucmdb_user secrets/ucmdb_password secrets/admin_password'
+S='secrets/db_password secrets/ucmdb_user secrets/ucmdb_password secrets/admin_password secrets/smax_user secrets/smax_password'
 sudo chown 10001:10001 $S && sudo chmod 400 $S     # o contentor corre como UID 10001
 ```
 
@@ -97,12 +99,11 @@ A navegação lateral está agrupada por tarefa: **Inventário** (o que existe),
 | Detalhe | Todos os testes do servidor por camada, com **o que significa e como corrigir** cada falha; cadeia; registos CMDB; alertas |
 | Testes | Resumo de cada teste, notas externas do SSL Labs e matriz servidor × teste; clicar num teste mostra os servidores com problemas e a correção |
 | Como testamos | Explicação de cada teste, de como é feito e de como se corrige |
-| Árvore | Raízes → intermédias → certificados finais, com onde cada um está instalado e quantos registos CMDB indicam cada CA |
 | APIs e segredos | Lista de APIs da CMDB: aplicação, localização, expiração, "Expirado?" (e se está desatualizado), registo; vistas e CSV |
 | Na internet | Certificados públicos dos domínios da organização, comparados com a CMDB; decidir adicionar, investigar ou ignorar; exportar CSV |
 | Reconciliação | Exportações CA1/CA2/AVI comparadas com a CMDB e com o servidor, e Azure comparado com a lista de APIs; CSV |
 | Alertas | Lista filtrável; **aceitar risco** (justificação obrigatória e prazo até 1 ano) ou reabrir |
-| Endpoints | Alvos de verificação; adicionar endpoints manuais (ex.: servidores que usam um wildcard) |
+| Servidores | Alvos de verificação; adicionar servidores à mão (ex.: os que usam um wildcard) |
 | Jobs | Executar jobs, histórico de execuções e auditoria |
 
 API só de leitura (mesma autenticação): `GET /api/inventario`, `GET /api/testes`, `GET /api/findings?status=aberto|aceite|resolvido`.
@@ -180,13 +181,32 @@ Na execução diária são avaliados até `CERTWATCH_SSLLABS_MAX_HOSTS` nomes ex
 
 **Termos da Qualys:** o uso é gratuito para testar a própria infraestrutura; o uso comercial (por exemplo, incluir a avaliação num produto vendido) exige autorização expressa da Qualys, e os resultados não podem ser publicados sem autorização do dono do site.
 
-## 7. Classificação
+## 7. Pedidos no SMAX (só leitura)
+
+A aplicação lê os pedidos (changes) de certificados do SMAX e liga-os a cada certificado pelo **endpoint** e pela **data de expiração** do certificado a renovar, guardados nos campos personalizados do pedido (`UserOptions`). Não cria nem altera pedidos.
+
+1. Conta de serviço SMAX só de leitura nos segredos `secrets/smax_user` e `secrets/smax_password` (dono 10001, modo 400).
+2. No `.env`: `CERTWATCH_SMAX_URL`, `CERTWATCH_SMAX_TENANT`, `CERTWATCH_SMAX_FILTER` (o modelo de change dos certificados) e os nomes dos campos personalizados `CERTWATCH_SMAX_FIELD_*`.
+3. `docker compose up -d`; a leitura corre na execução diária ou em **Execuções → Ler pedidos do SMAX**.
+
+Situações de cada certificado:
+
+| Situação | Significa |
+|---|---|
+| Pedido em curso | Há um pedido aberto com o mesmo endpoint e a mesma data de expiração |
+| Pedido aberto para outra data | Há um pedido aberto para o nome, mas para outro certificado (anterior por fechar, ou data errada no pedido) |
+| Só pedidos fechados | Já houve pedidos, todos fechados |
+| Sem pedido | Nenhum pedido para o nome; destacado a vermelho quando faltam 30 dias ou menos |
+
+Onde aparece: coluna **Pedido SMAX** em Certificados (filtro "Sem pedido em curso", pesquisa pelo número do pedido, exportação CSV com o link), secção **Pedidos no SMAX** no topo do detalhe de cada certificado (todos os pedidos, abertos e fechados), e no Painel ("expiram em 30 dias … destes sem pedido em curso" e coluna Pedido em "Precisam de ação"). O número do pedido abre o SMAX (`CERTWATCH_SMAX_TICKET_URL`).
+
+## 8. Classificação
 
 - **Tipo**: API (está na lista de APIs) · Wildcard · Endereço IP · Hostname · Autoridade (CA) · Outro.
 - **Âmbito**: interno se o nome termina num sufixo de `CERTWATCH_INTERNAL_SUFFIXES`, se o IP (ou o IP para onde o nome resolve) é privado, ou se o emissor contém um padrão de `CERTWATCH_INTERNAL_ISSUER_PATTERNS`. Os restantes nomes são externos.
 - **Estado**: Falha (alerta alto ou crítico) · Atenção (alerta médio ou baixo) · OK (verificado sem alertas) · Por verificar · Só CMDB (sem servidor para testar, ex.: CAs).
 
-## 8. Regras (alertas)
+## 9. Regras (alertas)
 
 | Tipo | Severidade | Quando |
 |---|---|---|
@@ -215,7 +235,7 @@ Na execução diária são avaliados até `CERTWATCH_SSLLABS_MAX_HOSTS` nomes ex
 
 ---
 
-## 9. Segurança da própria aplicação
+## 10. Segurança da própria aplicação
 
 - A interface escuta só em localhost; o acesso é por túnel SSH. Autenticação HTTP Basic, proteção CSRF (cookie `SameSite=Strict` + token), CSP restritiva, `X-Frame-Options: DENY` e redirecionamentos apenas para caminhos locais.
 - Os segredos ficam em ficheiros montados (`/run/secrets`), nunca em variáveis de ambiente nem no código.
@@ -230,7 +250,7 @@ Na execução diária são avaliados até `CERTWATCH_SSLLABS_MAX_HOSTS` nomes ex
 
 ---
 
-## 10. Operação
+## 11. Operação
 
 ```bash
 docker compose logs --tail 100 worker                     # o que o worker está a fazer
@@ -243,7 +263,7 @@ Atualizar: `git pull && docker compose up -d --build`. O esquema da base de dado
 
 ---
 
-## 11. Desenvolvimento e testes
+## 12. Desenvolvimento e testes
 
 ```bash
 python -m venv .venv && . .venv/bin/activate
@@ -256,12 +276,12 @@ Os testes levantam servidores TLS reais em localhost com uma PKI de teste (chain
 
 ---
 
-## 12. Servidor sem acesso à internet
+## 13. Servidor sem acesso à internet
 
 Fazer o build numa máquina com acesso e transferir a imagem:
 
 ```bash
-docker compose build && docker save certwatch:0.4.3 postgres:16-alpine | gzip > certwatch-images.tar.gz
+docker compose build && docker save certwatch:0.5.0 postgres:16-alpine | gzip > certwatch-images.tar.gz
 # no servidor:
 gunzip -c certwatch-images.tar.gz | docker load && docker compose up -d --no-build
 ```

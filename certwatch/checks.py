@@ -55,7 +55,7 @@ CHECKS: tuple[CheckDef, ...] = (
         "O nome não existe ou o DNS deste servidor não o conhece. Pode ser um serviço desativado ou um registo errado na CMDB.",
         ("Confirmar com a equipa de sistemas se o serviço ainda existe.",
          "Se foi desativado, marcar o certificado como inativo na CMDB.",
-         "Se existe com outro nome, corrigir o CommonName na CMDB ou adicionar o endpoint certo em Endpoints."),
+         "Se existe com outro nome, corrigir o CommonName na CMDB ou adicionar o endpoint certo em Servidores."),
     ),
     CheckDef(
         "rede.porta", "rede", "Porta aceita ligações",
@@ -64,7 +64,7 @@ CHECKS: tuple[CheckDef, ...] = (
         "O servidor não respondeu: está desligado, a porta é outra, ou uma firewall bloqueia o servidor do certwatch.",
         ("Verificar se o serviço está ativo e em que porta escuta.",
          "Pedir abertura de firewall do servidor certwatch para esse destino e porta.",
-         "Se a porta não é a 443, adicionar o endpoint com a porta correta em Endpoints."),
+         "Se a porta não é a 443, adicionar o endpoint com a porta correta em Servidores."),
     ),
     CheckDef(
         "tls.handshake", "tls", "Ligação TLS estabelecida",

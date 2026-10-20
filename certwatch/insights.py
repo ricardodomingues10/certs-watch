@@ -60,6 +60,8 @@ def build_inventory(session: Session, settings: Settings, now: datetime, snap: S
         if a.host:
             api_by_host[a.host].append(a)
 
+    from .tickets import link as ticket_link, tickets_by_endpoint
+    tickets = tickets_by_endpoint(session)
     rows = []
     for cn in sorted(set(snap.by_cn) | set(snap.ep_by_cn)):
         recs = snap.by_cn.get(cn, [])
@@ -107,6 +109,7 @@ def build_inventory(session: Session, settings: Settings, now: datetime, snap: S
             "dias": days,
             "fonte_data": "live" if live_cert else ("cmdb" if latest else "—"),
             "renovacao": "auto" if (cmdb_auto or live_auto) else "manual",
+            "smax": ticket_link(tickets.get(cn, []), effective, settings),
             "renovacao_fonte": ", ".join(x for x, ok in (("CMDB", cmdb_auto), ("servidor", live_auto)) if ok),
             "findings": len(fl),
             "max_sev": max((f.severity for f in fl), key=lambda x: SEV_RANK[x], default=None),
