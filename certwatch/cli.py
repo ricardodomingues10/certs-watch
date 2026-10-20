@@ -7,6 +7,7 @@
   python -m certwatch.cli ct-test DOMINIO             (testa as fontes de Certificate Transparency)
   python -m certwatch.cli ssllabs-register --nome N --apelido A --email E --organizacao O
   python -m certwatch.cli ssllabs-test HOST           (avaliação SSL Labs de um nome, 1-2 minutos)
+  python -m certwatch.cli smax-test                   (login no SMAX e primeiros pedidos, sem mostrar segredos)
 """
 from __future__ import annotations
 
@@ -60,7 +61,38 @@ def main(argv: list[str] | None = None) -> int:
     reg.add_argument("--organizacao", required=True)
     sl = sub.add_parser("ssllabs-test")
     sl.add_argument("host")
+    sub.add_parser("smax-test")
     a = p.parse_args(argv)
+
+    if a.cmd == "smax-test":
+        from .collectors import smax
+        st = get_settings()
+        print(f"URL: {st.smax_url or '(vazio)'}  tenant: {st.smax_tenant or '(vazio)'}  entidade: {st.smax_entity}")
+        print(f"utilizador: {'(vazio)' if not st.smax_user else st.smax_user[:2] + '…' + f' ({len(st.smax_user)} caracteres)'}"
+              f"  password: {'(vazia)' if not st.smax_password else f'{len(st.smax_password)} caracteres'}")
+        print(f"filtro: {st.smax_filter or '(sem filtro)'}  verificar TLS: {st.smax_verify_tls}")
+        if not smax.configured(st):
+            print("SMAX não configurado.", file=sys.stderr)
+            return 2
+        with smax.client(st) as cl:
+            try:
+                token = smax.login(cl, st)
+            except smax.SmaxError as exc:
+                print(f"LOGIN: FALHOU — {exc}")
+                return 1
+            print(f"LOGIN: ok (token com {len(token)} caracteres)")
+            from dataclasses import replace
+            try:
+                tickets = smax.fetch_tickets(replace(st, smax_max_tickets=5), cl)
+            except smax.SmaxError as exc:
+                print(f"CONSULTA: FALHOU — {exc}")
+                return 1
+        print(f"CONSULTA: ok, {len(tickets)} pedidos na primeira página (amostra)")
+        for t in tickets[:5]:
+            print(f"   {t['id']} | {t['phase']} | endpoint: {t['endpoint'] or '(vazio)'} | expira: {t['cert_expiry']} | {t['environment']}")
+        if tickets and not any(t["endpoint"] for t in tickets):
+            print("Nenhum pedido com endpoint: confirme CERTWATCH_SMAX_FIELD_ENDPOINT.")
+        return 0
 
     if a.cmd == "ssllabs-register":
         from .collectors import ssllabs

@@ -75,6 +75,20 @@ def test_login_failure(env):
         raise AssertionError("devia falhar")
     except smax.SmaxError as exc:
         assert "HTTP 401" in str(exc)
+    # 500 com motivo: o motivo aparece na mensagem, a password nunca
+    c = httpx.Client(base_url="https://smax.test", transport=httpx.MockTransport(
+        lambda r: httpx.Response(500, json={"message": "Bad credentials for p'\"w"})))
+    try:
+        smax.fetch_tickets(settings(env), c)
+        raise AssertionError("devia falhar")
+    except smax.SmaxError as exc:
+        assert "Bad credentials" in str(exc) and "p'\"w" not in str(exc) and "utilizador de integração" in str(exc)
+    c = httpx.Client(base_url="https://smax.test", transport=httpx.MockTransport(
+        lambda r: httpx.Response(500, text="<html><body><h1>HTTP Status 500</h1><p>Internal error</p></body></html>")))
+    try:
+        smax.fetch_tickets(settings(env), c)
+    except smax.SmaxError as exc:
+        assert "HTTP Status 500 Internal error" in str(exc)
 
 
 def test_links_pages_filter_and_export(env, monkeypatch):

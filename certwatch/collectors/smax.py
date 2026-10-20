@@ -93,6 +93,20 @@ def _user_options(raw) -> dict:
         return {}
 
 
+def _reason(r: httpx.Response) -> str:
+    """Motivo devolvido pelo SMAX numa resposta de erro (texto curto, sem HTML)."""
+    try:
+        data = r.json()
+        if isinstance(data, dict):
+            for k in ("message", "error_description", "errorMessage", "error", "msg"):
+                if data.get(k):
+                    return str(data[k])[:300]
+        return str(data)[:300]
+    except ValueError:
+        text = re.sub(r"<[^>]+>", " ", r.text or "")
+        return re.sub(r"\s+", " ", text).strip()[:300]
+
+
 def login(c: httpx.Client, settings: Settings) -> str:
     try:
         r = c.post("/auth/authentication-endpoint/authenticate/login", params={"TENANTID": settings.smax_tenant},
@@ -100,7 +114,11 @@ def login(c: httpx.Client, settings: Settings) -> str:
     except httpx.HTTPError as exc:
         raise SmaxError(f"Erro de comunicação com o SMAX: {exc}") from exc
     if r.status_code != 200:
-        raise SmaxError(f"Autenticação no SMAX falhou: HTTP {r.status_code}")
+        reason = _reason(r).replace(settings.smax_password or "\0", "***")
+        hint = (" Possíveis causas: utilizador ou password errados, conta bloqueada, ou a conta não é um "
+                "utilizador de integração no SMAX (as contas com SSO não fazem login pela API).") if r.status_code in (401, 403, 500) else ""
+        raise SmaxError(f"Autenticação no SMAX falhou: HTTP {r.status_code}"
+                        f"{' — resposta do SMAX: ' + reason if reason else ''}.{hint}")
     token = r.text.strip().strip('"')
     if not token or len(token) < 20 or " " in token:
         raise SmaxError("Autenticação no SMAX sem token na resposta")
@@ -150,7 +168,8 @@ def fetch_tickets(settings: Settings, c: httpx.Client | None = None) -> list[dic
             except httpx.HTTPError as exc:
                 raise SmaxError(f"Erro de comunicação com o SMAX: {exc}") from exc
             if r.status_code != 200:
-                raise SmaxError(f"Consulta de {settings.smax_entity} no SMAX falhou: HTTP {r.status_code}")
+                raise SmaxError(f"Consulta de {settings.smax_entity} no SMAX falhou: HTTP {r.status_code}"
+                                f" — {_reason(r)}")
             data = r.json() or {}
             ents = data.get("entities") or []
             for e in ents:
