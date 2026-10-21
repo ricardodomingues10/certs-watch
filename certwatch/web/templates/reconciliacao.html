@@ -6,6 +6,7 @@
 {% block actions %}
 <form method="post" action="/jobs/ingest_imports"><input type="hidden" name="csrf" value="{{ csrf }}"><input type="hidden" name="next" value="/jobs"><button class="primary">Ler a diretoria agora</button></form>
 <a class="button" href="/reconciliacao/exportar?estado={{ estado }}">Exportar esta vista (CSV)</a>
+<a class="button" href="/cmdb-final" title="Gerar o CMDB_Final.xlsx e os certs_update.csv a partir destas exportações">Atualizar a CMDB</a>
 {% endblock %}
 {% block content %}
 <div class="grid g2">

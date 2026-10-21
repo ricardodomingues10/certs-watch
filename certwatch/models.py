@@ -7,7 +7,7 @@ from __future__ import annotations
 
 from datetime import datetime
 
-from sqlalchemy import JSON, Boolean, DateTime, Float, ForeignKey, Integer, String, Text, UniqueConstraint
+from sqlalchemy import JSON, Boolean, DateTime, Float, ForeignKey, Integer, LargeBinary, String, Text, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column
 
 from .db import Base, utcnow
@@ -325,3 +325,76 @@ class SmaxComment(Base):
     body: Mapped[str] = mapped_column(Text, default="")
     privacy: Mapped[str] = mapped_column(String(32), default="")
     origin: Mapped[str] = mapped_column(String(32), default="")
+
+
+# ------------------------------------------------------------------ CMDB final (CMDB_Final.xlsx e certs_update)
+class FinalInput(Base):
+    """Ficheiro de uma fonte (CA1, CA2, AVI...) carregado pela interface. Também guarda ficheiros CMDB_Final
+    carregados só para comparação (source = "CMDB_FINAL")."""
+
+    __tablename__ = "final_inputs"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    source: Mapped[str] = mapped_column(String(32), index=True)
+    name: Mapped[str] = mapped_column(String(255))
+    sha256: Mapped[str] = mapped_column(String(64))
+    size: Mapped[int] = mapped_column(Integer, default=0)
+    data: Mapped[bytes | None] = mapped_column(LargeBinary, nullable=True, deferred=True)
+    uploaded_by: Mapped[str] = mapped_column(String(128), default="")
+    uploaded_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, index=True)
+
+
+class FinalRun(Base):
+    """Uma geração dos ficheiros: CMDB lida pela API + fontes -> CMDB_Final.xlsx, certs_update.csv e
+    certs_update_sem_cabecalho.csv."""
+
+    __tablename__ = "final_runs"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, index=True)
+    created_by: Mapped[str] = mapped_column(String(128), default="")
+    # a_gerar | pronto | bloqueado (CSV recusados pelas validações) | erro
+    status: Mapped[str] = mapped_column(String(16), default="a_gerar", index=True)
+    finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    error: Mapped[str] = mapped_column(Text, default="")
+    summary: Mapped[dict] = mapped_column(JSON, default=dict)
+    inputs: Mapped[dict] = mapped_column(JSON, default=dict)
+    columns: Mapped[dict] = mapped_column(JSON, default=dict)
+    changes: Mapped[list] = mapped_column(JSON, default=list)
+    problems: Mapped[list] = mapped_column(JSON, default=list)     # relatório de erros das fontes e da CMDB
+    live: Mapped[list] = mapped_column(JSON, default=list)         # regressões e decisão da verificação TLS
+    validation: Mapped[list] = mapped_column(JSON, default=list)   # motivos de bloqueio dos CSV
+    xlsx: Mapped[bytes | None] = mapped_column(LargeBinary, nullable=True, deferred=True)
+    csv: Mapped[bytes | None] = mapped_column(LargeBinary, nullable=True, deferred=True)
+    csv_sem: Mapped[bytes | None] = mapped_column(LargeBinary, nullable=True, deferred=True)
+    published_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    published_by: Mapped[str] = mapped_column(String(128), default="")
+
+
+class FinalPublish(Base):
+    """Publicação de ficheiros de uma geração na pasta de rede, com cópia do que lá estava antes."""
+
+    __tablename__ = "final_publishes"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    run_id: Mapped[int] = mapped_column(ForeignKey("final_runs.id", ondelete="CASCADE"), index=True)
+    at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, index=True)
+    by: Mapped[str] = mapped_column(String(128), default="")
+    folder: Mapped[str] = mapped_column(String(512), default="")
+    ok: Mapped[bool] = mapped_column(Boolean, default=False)
+    result: Mapped[list] = mapped_column(JSON, default=list)
+
+
+class FinalPublishFile(Base):
+    __tablename__ = "final_publish_files"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    publish_id: Mapped[int] = mapped_column(ForeignKey("final_publishes.id", ondelete="CASCADE"), index=True)
+    name: Mapped[str] = mapped_column(String(255))
+    sha256: Mapped[str] = mapped_column(String(64), default="")
+    size: Mapped[int] = mapped_column(Integer, default=0)
+    ok: Mapped[bool] = mapped_column(Boolean, default=False)
+    error: Mapped[str] = mapped_column(Text, default="")
+    previous: Mapped[bytes | None] = mapped_column(LargeBinary, nullable=True, deferred=True)
+    previous_sha256: Mapped[str] = mapped_column(String(64), default="")
+    previous_mtime: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)

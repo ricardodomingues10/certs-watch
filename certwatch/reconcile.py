@@ -99,15 +99,20 @@ def _decode(data: bytes) -> str:
 
 
 def read_table(path: Path) -> tuple[list[str], list[list]]:
-    if path.suffix.lower() in (".xlsx", ".xlsm"):
+    return read_table_bytes(path.read_bytes(), path.suffix)
+
+
+def read_table_bytes(data: bytes, suffix: str) -> tuple[list[str], list[list]]:
+    """Cabeçalho e linhas de um CSV ou Excel (o tipo vem da extensão: .xlsx/.xlsm ou texto)."""
+    if suffix.lower() in (".xlsx", ".xlsm"):
         from openpyxl import load_workbook
-        wb = load_workbook(path, read_only=True, data_only=True)
+        wb = load_workbook(io.BytesIO(data), read_only=True, data_only=True)
         try:
             rows = [list(r) for r in wb.worksheets[0].iter_rows(values_only=True)]
         finally:
             wb.close()
     else:
-        text = _decode(path.read_bytes())
+        text = _decode(data)
         sample = text[:8192]
         try:
             dialect = csv.Sniffer().sniff(sample, delimiters=",;\t|")

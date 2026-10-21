@@ -1,4 +1,4 @@
-# certwatch 0.8
+# certwatch 0.9
 
 Aplicação autónoma de gestão de certificados X.509 de uma organização. Não depende do n8n.
 
@@ -16,8 +16,9 @@ Aplicação autónoma de gestão de certificados X.509 de uma organização. Nã
 11. Lê (opcional) os pedidos de certificados do SMAX e mostra, para cada certificado, o número do pedido com link para o SMAX.
 12. Cria (opcional) pedidos de renovação no SMAX para um certificado, para os selecionados ou para todos os de uma vista filtrada, com revisão e confirmação.
 13. Distingue o **site** (onde está instalado) do **certificado** (o que se renova): um wildcard ou um certificado com vários nomes pode servir muitos sites, e os pedidos são sempre feitos para o certificado.
+14. **Atualiza a CMDB** com a lógica do workflow n8n de reconciliação: lê a CMDB pela API e as exportações CA1, CA2 e AVI, gera o `CMDB_Final.xlsx`, o `certs_update.csv` e o `certs_update_sem_cabecalho.csv`, publica-os na pasta de rede lida pela UCMDB e compara um CMDB_Final com a CMDB atual (data, Issuer e IssuerName).
 
-Fora desta versão: escrita na UCMDB, email.
+Fora desta versão: escrita direta na UCMDB pela API (a atualização é feita pela integração que lê os ficheiros), email.
 
 ---
 
@@ -165,6 +166,59 @@ Copie os ficheiros exportados para a diretoria `import/` da aplicação. O iníc
 **Azure AD** (`azure*.csv`, colunas `EnterpriseApplication;AppRegistration;AppId;CredentialType;KeyId;StartDate;EndDate;DaysRemaining;Status`): cada credencial (Secret ou Certificate) é procurada **nas duas listas da CMDB**, a lista de APIs e os certificados, pelo nome da App Registration ou da Enterprise Application (sem o sufixo de identificador que a CMDB às vezes acrescenta) e pela data de fim. A página e o CSV indicam em que lista foi encontrada. Segredos da CMDB com localização "AzureAD…" que não aparecem na exportação ficam como **só na CMDB**.
 
 Resultados: **novo** (não existe na CMDB), **data mais recente** (renovado; atualizar a CMDB), **data mais antiga** (confirmar no servidor), **só na CMDB** (quando `CERTWATCH_IMPORT_ISSUERS` diz qual é o emissor de cada CA) e **igual**. Quando o servidor foi verificado, a data que ele apresenta é mostrada ao lado para desempatar.
+
+## 5.1 Atualizar a CMDB (CMDB_Final e certs_update)
+
+Página **Atualizar a CMDB**. Faz o mesmo que o workflow n8n "Reconciliação de Certificados", com cliques:
+
+1. **Fontes**: CA1, CA2 e AVI (`CERTWATCH_FINAL_SOURCES`). Usa o ficheiro mais recente de cada fonte, seja o da diretoria `import/` (mesmos prefixos da reconciliação) ou o carregado na página.
+2. **Gerar ficheiros**: lê a CMDB pela REST API (o TQL de `CERTWATCH_UCMDB_TQL`) com **todos** os atributos e aplica as regras do workflow. A página mostra o resultado: alterações (antes → depois), certificados novos, decisões da verificação no servidor e relatório de erros.
+3. **Publicar na pasta de rede**: escreve os três ficheiros na pasta, depois de confirmação. O que lá estava fica guardado no certwatch e pode ser descarregado. Só a geração mais recente pode ser publicada, e só se não estiver bloqueada.
+4. **Comparar com a CMDB**: compara um CMDB_Final (de uma geração, o que está na pasta de rede ou um carregado, incluindo o do n8n) com a CMDB atual, linha a linha, pelo Global Id ou, nas linhas novas, pelo CommonName. Mostra as diferenças de data de validade (ao dia), Issuer e IssuerName. Antes de publicar, mostra o que vai mudar. Depois de a UCMDB importar o `certs_update`, mostra o que ficou por aplicar.
+
+**Regras**: são as do workflow.
+- Datas ao dia, sem trocar dia e mês.
+- Procura pelo CommonName. Se o CommonName estiver vazio, usa Name, Display Label ou Hostname, e o CommonName é preenchido na mesma linha.
+- Ficam de fora:
+  - linhas sem CommonName;
+  - datas ilegíveis;
+  - pedidos não emitidos;
+  - certificados expirados;
+  - nomes sem domínio.
+- Linhas da CMDB que já existem: são atualizados ValidTo e SerialNumber na linha de data mais próxima.
+- Certificados novos: linha com `Global Id = x`, com o emissor de `CERTWATCH_IMPORT_ISSUERS` para CA1/CA2 ou o `Issuer_CommonName` no AVI.
+- Fonte com data anterior à CMDB: decide o certificado apresentado na porta 443.
+- A Description regista o que mudou, a começar por "Changed with n8n" (`CERTWATCH_FINAL_DESCRIPTION`).
+- Os CSV levam só o delta: 26 colunas fixas, separador `|`, CRLF, UTF-8 sem BOM.
+- Os CSV são recusados se um certificado novo não tiver Issuer, IssuerName e SerialNumber, ou se `IssuerName + SerialNumber` se repetir. Nesse caso o Excel continua disponível.
+- O Excel não leva as colunas Created By, Created Time e Is Candidate For Deletion. Cores: verde para linhas novas, amarelo para alteradas, vermelho para expiradas.
+
+**Diferenças em relação ao workflow**:
+- A verificação no servidor usa o scan do certwatch, se tiver menos de `CERTWATCH_FINAL_LIVE_MAX_AGE_H` horas, ou uma ligação na hora, em vez do OpenSSL. A Description diz "Validado via TLS" (`CERTWATCH_FINAL_LIVE_MARKER`).
+- Uma data vazia na fonte vai para o relatório de erros.
+- ValidTo e SerialNumber só contam como alterados se mudarem de facto: mesmo dia, ou mesmo número escrito de outra forma, não conta.
+
+Com os mesmos dados, os ficheiros gerados são iguais byte a byte aos do workflow.
+
+**Emissores das CAs**: os certificados novos de CA1/CA2 precisam de emissor (chave primária IssuerName + SerialNumber). Defina-o no `.env` com o texto usado pelo workflow: `CERTWATCH_IMPORT_ISSUERS=CA1=<nome da CA01>;CA2=<nome da CA02>`.
+
+**Colunas**: os atributos da UCMDB passam a colunas com os cabeçalhos do export (`[Digital Certificate] : CommonName`). Se o layout do TQL só tiver alguns atributos, os restantes são pedidos à REST API (`CERTWATCH_FINAL_ENRICH=auto`). A correspondência atributo → coluna é automática (`issuer_name` → IssuerName, `responsabilidade_instalacao` → Responsabilidade de instalação). Para corrigir: na geração, separador **Colunas**, descarregue o modelo `cmdb-colunas.csv`, ajuste-o e coloque-o em `import/`. Em cada linha fica `atributo;coluna`; a coluna vazia exclui o atributo e a ordem das linhas é a ordem das colunas.
+
+### Pasta de rede
+
+A pasta é montada no servidor e passada ao container em `/app/publicar`. No `.env`:
+
+```
+CERTWATCH_PUBLISH_HOST_DIR=/caminho/da/montagem/no/servidor
+CERTWATCH_PUBLISH_GID=          # opcional: grupo com escrita na montagem
+```
+
+O certwatch corre com o uid 10001 e precisa de **escrita** na pasta. Para ver como está montada: `stat -c '%u %g %a' /caminho/da/montagem`. Há duas formas de dar escrita:
+- **Montagem própria para o certwatch** (recomendado). Por exemplo, no `/etc/fstab`, com as credenciais num ficheiro só legível pelo root:
+  `//servidor/partilha/caminho /mnt/certwatch-usc cifs credentials=/root/.smb-certwatch,uid=10001,gid=10001,file_mode=0640,dir_mode=0750,vers=3.0,_netdev 0 0`
+- **Reutilizar a montagem existente**: tem de ter escrita para um grupo (`dir_mode=0775,file_mode=0664,gid=<g>`); nesse caso defina `CERTWATCH_PUBLISH_GID=<g>`.
+
+Depois de `docker compose up -d`, use **Testar escrita** na página: cria e apaga um ficheiro temporário. Os ficheiros são escritos com um nome temporário e depois renomeados, e a escrita é verificada pelo SHA-256.
 
 ## 6. Renovação automática e avaliação externa
 

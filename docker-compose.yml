@@ -8,7 +8,7 @@ name: certwatch
 
 x-app: &app
   build: .
-  image: certwatch:0.8.0
+  image: certwatch:0.9.0
   network_mode: host
   restart: unless-stopped
   env_file: .env
@@ -16,6 +16,9 @@ x-app: &app
   volumes:
     - ./trust:/app/trust:ro
     - ./import:/app/import:ro
+    # Pasta de rede da UCMDB (montada no servidor). Sem CERTWATCH_PUBLISH_HOST_DIR usa ./publicar
+    - ${CERTWATCH_PUBLISH_HOST_DIR:-./publicar}:/app/publicar
+  group_add: ["${CERTWATCH_PUBLISH_GID:-10001}"]
   read_only: true
   tmpfs: [/tmp]
   security_opt: ["no-new-privileges:true"]

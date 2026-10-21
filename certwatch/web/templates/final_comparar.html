@@ -1,0 +1,87 @@
+{% extends "base.html" %}
+{% block title %}Comparar com a CMDB{% endblock %}
+{% block crumb %}<a href="/cmdb-final">Atualizar a CMDB</a>{% endblock %}
+{% block page_title %}Comparar com a CMDB atual{% endblock %}
+{% block lede %}Compara um CMDB_Final com a CMDB de agora, linha a linha (pelo Global Id; nas linhas novas, pelo CommonName): a data de validade, ao dia, o Issuer e o IssuerName. Antes de publicar, mostra o que vai mudar. Depois de a UCMDB importar o certs_update, mostra o que ficou por aplicar.{% endblock %}
+{% block actions %}
+<form method="post" action="/jobs/ingest_cmdb"><input type="hidden" name="csrf" value="{{ csrf }}"><input type="hidden" name="next" value="/cmdb-final/comparar?origem={{ origem|urlencode }}"><button title="Pede ao worker uma nova leitura da CMDB; recarregue a página daqui a uns segundos">Ler a CMDB agora</button></form>
+{% if counts %}<a class="button" href="/cmdb-final/comparar/exportar?origem={{ origem|urlencode }}&amp;vista={{ vista }}{{ '&q=' ~ q|urlencode if q }}{{ '&marcadas=1' if marcadas }}">Exportar esta vista (CSV)</a>{% endif %}
+{% endblock %}
+{% block content %}
+<div class="grid2">
+<section class="card">
+  <h2>Ficheiro a comparar</h2>
+  {% if choices %}
+  <form class="filters flat" method="get">
+    <select name="origem" aria-label="Ficheiro">{% for k, lbl in choices %}<option value="{{ k }}" {{ 'selected' if k == origem }}>{{ lbl }}</option>{% endfor %}</select>
+    <button>Comparar</button>
+  </form>
+  {% else %}<p class="small">Ainda não há nenhum CMDB_Final: gere um em <a href="/cmdb-final">Atualizar a CMDB</a> ou carregue um ficheiro.</p>{% endif %}
+  <form class="upload mt" method="post" action="/cmdb-final/comparar/carregar" enctype="multipart/form-data">
+    <input type="hidden" name="csrf" value="{{ csrf }}">
+    <input type="file" name="ficheiro" accept=".xlsx,.xlsm" required aria-label="CMDB_Final.xlsx">
+    <button>Carregar outro CMDB_Final</button>
+  </form>
+  <p class="small muted">Serve também o ficheiro gerado pelo n8n.</p>
+</section>
+<section class="card">
+  <h2>CMDB atual</h2>
+  <p class="small">{% if cmdb_at %}Lida pelo certwatch em <b>{{ cmdb_at|dtt }}</b> (cada geração lê-a de novo). Para comparar com o estado de agora, use "Ler a CMDB agora" e recarregue.{% else %}Ainda não lida.{% endif %}</p>
+  <p class="small muted">O certwatch só guarda CIs com CommonName. Um CI sem CommonName aparece como "Não existe na CMDB", com essa explicação.</p>
+</section>
+</div>
+
+{% if err %}<div class="note bad">{{ err }}</div>{% endif %}
+
+{% if counts %}
+{% set ndif = counts.diferencas %}
+<section class="verdict {{ 'v-warn' if ndif else 'v-ok' }}" aria-label="Resumo">
+  <p class="say">{% if ndif %}<b class="warn">{{ ndif }} diferença{{ 's' if ndif != 1 }}</b> entre {{ label }} e a CMDB{% if counts.data or counts.issuer or counts.issuer_name %}: {{ counts.data }} na data, {{ counts.issuer }} no Issuer e {{ counts.issuer_name }} no IssuerName{% endif %}.{% else %}<b class="ok">{{ label }} coincide com a CMDB</b> na data, no Issuer e no IssuerName.{% endif %}</p>
+  <div class="facts">
+    <span><b>{{ counts.iguais }}</b> iguais</span>
+    <a href="?origem={{ origem|urlencode }}&amp;vista=nao_existe"><b>{{ counts.nao_existe }}</b> não existem na CMDB</a>
+    <a href="?origem={{ origem|urlencode }}&amp;vista=so_na_cmdb"><b>{{ counts.so_na_cmdb }}</b> só na CMDB</a>
+  </div>
+</section>
+
+<nav class="tabs" aria-label="Vistas">
+  {% for k, lbl in COMPARE_VIEWS.items() %}
+  <a href="?origem={{ origem|urlencode }}&amp;vista={{ k }}{{ '&marcadas=1' if marcadas }}" class="{{ 'on' if vista == k }}" title="{{ COMPARE_HELP.get(k, '') }}">{{ lbl }} <span class="n">{{ counts[k] }}</span></a>
+  {% endfor %}
+</nav>
+{% if COMPARE_HELP.get(vista) %}<p class="muted">{{ COMPARE_HELP[vista] }}</p>{% endif %}
+
+<form class="filters" method="get">
+  <input type="hidden" name="origem" value="{{ origem }}"><input type="hidden" name="vista" value="{{ vista }}">
+  <input type="search" name="q" value="{{ q }}" placeholder="CommonName, Global Id ou emissor" aria-label="Filtrar">
+  <label class="small"><input type="checkbox" name="marcadas" value="1" {{ 'checked' if marcadas }}> Só as linhas marcadas no ficheiro como novas ou alteradas</label>
+  <button>Filtrar</button>
+</form>
+
+<div class="card flush scroll">
+<table>
+  <thead><tr><th>Certificado</th><th>Situação</th><th>Validade</th><th>Issuer</th><th>IssuerName</th></tr></thead>
+  <tbody>
+  {% for r in rows %}
+  <tr>
+    <td><span class="mono">{{ r.cn or r.c_cn or '(sem nome)' }}</span>
+      <div class="small muted">Global Id {{ r.global_id or '—' }}{{ ' · linha ' ~ r.linha if r.linha }}</div>
+      {% if r.cor %}<span class="tag {{ {'novo': 'tag-ok', 'alterado': 'tag-run', 'expirado': 'tag-err'}[r.cor] }}" title="Cor da linha no ficheiro">{{ r.cor }} no ficheiro</span>{% endif %}</td>
+    <td>{% if r.estado == 'igual' %}<span class="tag tag-ok">igual</span>
+        {% elif r.estado == 'diferente' %}<span class="tag tag-run">diferente</span>
+        {% elif r.estado == 'nao_existe' %}<span class="tag tag-err">não existe na CMDB</span>{% if r.motivo %}<div class="small muted motivo">{{ r.motivo }}</div>{% endif %}
+        {% else %}<span class="tag tag-off">só na CMDB</span>{% endif %}</td>
+    <td class="{{ 'dif' if 'data' in r.dif }}"><div class="pair dates"><span>ficheiro</span><span>{{ r.f_validto.strftime('%d-%m-%Y') if r.f_validto else (r.f_validto_raw or '—') }}</span>
+      <span>CMDB</span><span>{{ r.c_validto.strftime('%d-%m-%Y') if r.c_validto else '—' }}</span></div></td>
+    <td class="{{ 'dif' if 'issuer' in r.dif }}"><div class="pair"><span>ficheiro</span><span>{{ r.f_issuer or '—' }}</span><span>CMDB</span><span>{{ r.c_issuer or '—' }}</span></div></td>
+    <td class="{{ 'dif' if 'issuer_name' in r.dif }}"><div class="pair"><span>ficheiro</span><span>{{ r.f_issuer_name or '—' }}</span><span>CMDB</span><span>{{ r.c_issuer_name or '—' }}</span></div></td>
+  </tr>
+  {% else %}
+  <tr><td colspan="5"><div class="empty"><b>Nada nesta vista</b>{{ 'Experimente outra vista ou limpe o filtro.' if q or marcadas else '' }}</div></td></tr>
+  {% endfor %}
+  </tbody>
+</table>
+</div>
+{% if n_rows > rows|length %}<p class="small muted">A mostrar {{ rows|length }} de {{ n_rows }}. Exporte para ver todas.</p>{% endif %}
+{% endif %}
+{% endblock %}

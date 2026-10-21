@@ -1,0 +1,119 @@
+{% extends "base.html" %}
+{% block title %}Atualizar a CMDB{% endblock %}
+{% block crumb %}Operação{% endblock %}
+{% block page_title %}Atualizar a CMDB{% endblock %}
+{% block lede %}Reconstrói a CMDB com as alterações de {{ settings.final_sources|join(', ') }} e gera os ficheiros para a UCMDB, com a mesma lógica do workflow do n8n: o <span class="mono nowrap">CMDB_Final.xlsx</span>, o <span class="mono nowrap">certs_update.csv</span> e o <span class="mono nowrap">certs_update_sem_cabecalho.csv</span>. Depois de rever as alterações, publique-os na pasta de rede.{% endblock %}
+{% set missing = settings.final_sources|reject('in', inputs)|list %}
+{% set busy = latest and latest.status == 'a_gerar' %}
+{% block actions %}
+<form method="post" action="/cmdb-final/gerar"><input type="hidden" name="csrf" value="{{ csrf }}">
+  <button class="primary" {{ 'disabled' if missing or busy }} title="{{ 'Falta: ' ~ missing|join(', ') if missing else ('A gerar a versão #' ~ latest.id if busy else 'Lê a CMDB pela API e as fontes, e gera os três ficheiros') }}">Gerar ficheiros</button></form>
+<a class="button" href="/cmdb-final/comparar">Comparar com a CMDB</a>
+{% endblock %}
+{% block content %}
+{% set pub_ok = folder.existe and folder.gravavel %}
+<ol class="flow" aria-label="Percurso">
+  <li class="{{ 'is-bad' if missing else 'is-ok' }}">
+    <h3>Fontes</h3>
+    <span class="st">{% if missing %}Falta {{ missing|join(', ') }}{% else %}{{ inputs|length }} de {{ settings.final_sources|length }} ficheiros{% endif %}</span>
+    <span class="sub">{% for src in settings.final_sources %}{{ src }}{% if inputs.get(src) %}: {{ inputs[src].quando|dt }}{% endif %}{{ ' · ' if not loop.last }}{% endfor %}</span>
+  </li>
+  <li class="{{ 'is-ok' if cmdb_at else 'is-warn' }}">
+    <h3>CMDB</h3>
+    <span class="st">Lida pela API na geração</span>
+    <span class="sub">TQL <span class="mono">{{ settings.ucmdb_tql or '(não definido)' }}</span>{% if cmdb_at %}; última leitura {{ cmdb_at|dtt }}{% endif %}</span>
+  </li>
+  <li class="{{ {'pronto': 'is-ok', 'bloqueado': 'is-warn', 'erro': 'is-bad', 'a_gerar': 'is-run'}.get(latest.status, '') if latest else '' }}">
+    <h3>Ficheiros</h3>
+    {% if latest %}
+    <span class="st">#{{ latest.id }} {{ FINAL_STATES[latest.status]|lower }}</span>
+    <span class="sub"><a href="/cmdb-final/{{ latest.id }}">{{ latest.created_at|dtt }}</a>{% if latest.summary %}: {{ latest.summary.get('novos', 0) }} novos, {{ latest.summary.get('alterados', 0) }} alterados{% endif %}</span>
+    {% else %}<span class="st">Ainda não gerados</span><span class="sub">Use "Gerar ficheiros".</span>{% endif %}
+  </li>
+  <li class="{{ 'is-ok' if pub_ok else 'is-bad' }}">
+    <h3>Pasta de rede</h3>
+    <span class="st">{{ 'Montada, com escrita' if pub_ok else ('Sem permissão de escrita' if folder.existe else 'Não montada') }}</span>
+    <span class="sub">{% if last_pub %}Última publicação {{ last_pub.at|dtt }} por {{ last_pub.by }}{{ '' if last_pub.ok else ' (com erros)' }}{% else %}Ainda sem publicações{% endif %}</span>
+  </li>
+</ol>
+
+<div class="grid2">
+<section class="card" id="fontes">
+  <h2>Fontes</h2>
+  <p class="small muted">É usado o ficheiro mais recente de cada fonte: o carregado aqui ou o da diretoria <span class="mono">import/</span> (nome a começar por {% for src in settings.final_sources %}<span class="mono">{{ settings.import_sources.get(src, src|lower) }}</span>{{ ', ' if not loop.last }}{% endfor %}).</p>
+  <div class="scroll"><table class="compact">
+    <thead><tr><th>Fonte</th><th>Ficheiro em uso</th><th>Carregar outro</th></tr></thead>
+    {% for src in settings.final_sources %}{% set i = inputs.get(src) %}
+    <tr>
+      <td><b>{{ src }}</b>{% if src in ('CA1', 'CA2') %}<div class="small {{ 'muted' if issuers.get(src) else '' }}">{% if issuers.get(src) %}Emissor: {{ issuers[src] }}{% else %}<span class="tag tag-run" title="Os certificados novos desta CA ficam sem Issuer e os CSV são recusados">emissor por definir</span>{% endif %}</div>{% endif %}</td>
+      <td>{% if i %}<span class="mono small">{{ i.nome }}</span><div class="small muted">{{ 'carregado por ' ~ i.por if i.origem == 'carregado' else 'diretoria import/' }}, {{ i.quando|dtt }}</div>
+          {% else %}<span class="tag tag-err">em falta</span>{% endif %}</td>
+      <td><form class="upload" method="post" action="/cmdb-final/fonte/{{ src }}" enctype="multipart/form-data">
+        <input type="hidden" name="csrf" value="{{ csrf }}">
+        <input type="file" name="ficheiro" accept=".csv,.txt,.xlsx,.xlsm" required aria-label="Ficheiro de {{ src }}">
+        <button>Carregar</button></form></td>
+    </tr>
+    {% endfor %}
+  </table></div>
+  {% set sem_emissor = [] %}{% for k in ('CA1', 'CA2') if k in issuers and not issuers[k] %}{% set _ = sem_emissor.append(k) %}{% endfor %}
+  {% if sem_emissor %}<p class="small">Defina o emissor no <span class="mono">.env</span>, por exemplo <span class="mono">CERTWATCH_IMPORT_ISSUERS=CA1=…;CA2=…</span>, com o mesmo texto que o workflow usa para os certificados novos.</p>{% endif %}
+</section>
+
+<section class="card" id="pasta">
+  <h2>Pasta de rede</h2>
+  {% if request.query_params.get('teste') %}
+  <div class="note {{ '' if request.query_params.get('teste') == 'ok' else 'bad' }}">{{ 'Teste de escrita: ' }}{{ request.query_params.get('msg', '') }}</div>
+  {% endif %}
+  <dl class="kv">
+    <dt>Pasta no certwatch</dt><dd class="mono small">{{ folder.pasta }}</dd>
+    <dt>Estado</dt><dd>{% if pub_ok %}<span class="tag tag-ok">montada, com escrita</span>{% elif folder.existe %}<span class="tag tag-err">sem escrita</span>{% else %}<span class="tag tag-err">não montada</span>{% endif %}</dd>
+    {% if folder.dono %}<dt>Permissões</dt><dd class="small">{{ folder.dono }}</dd>{% endif %}
+  </dl>
+  {% if folder.detalhe %}<p class="small">{{ folder.detalhe }}</p>{% endif %}
+  {% if folder.existe %}
+  <table class="compact">
+    <thead><tr><th>Ficheiro na pasta</th><th class="num">Tamanho</th><th>Alterado</th></tr></thead>
+    {% for f in folder.ficheiros %}<tr><td class="mono small">{{ f.nome }}</td><td class="num small">{{ '%.1f KB'|format(f.tamanho / 1024) if f.tamanho is not none else '—' }}</td><td class="small">{{ f.alterado|dtt if f.alterado else ('erro: ' ~ f.erro if f.erro else 'não existe') }}</td></tr>{% endfor %}
+  </table>
+  {% endif %}
+  <form method="post" action="/cmdb-final/testar-pasta" class="mt"><input type="hidden" name="csrf" value="{{ csrf }}"><button>Testar escrita</button></form>
+  <p class="small muted">O teste cria e apaga um ficheiro temporário na pasta. A montagem é configurada no servidor (ver README, "Pasta de rede").</p>
+</section>
+</div>
+
+<section class="card flush">
+  <h2>Gerações</h2>
+  <div class="scroll"><table>
+    <thead><tr><th>Geração</th><th>Por</th><th>Estado</th><th class="num">Novos</th><th class="num">Alterados</th><th class="num opt">Expirados</th><th class="num opt">Erros nas fontes</th><th>Publicada</th></tr></thead>
+    <tbody>
+    {% set newest_ready = (runs|selectattr('status', 'in', ['pronto', 'bloqueado'])|first) %}
+    {% for r in runs %}{% set sm = r.summary or {} %}{% set superseded = r.status == 'pronto' and newest_ready and r.id != newest_ready.id %}
+    <tr>
+      <td><a href="/cmdb-final/{{ r.id }}"><b>#{{ r.id }}</b></a> <span class="small muted">{{ r.created_at|dtt }}</span></td>
+      <td class="small">{{ r.created_by }}</td>
+      <td>{% if superseded %}<span class="tag tag-off" title="Há uma geração mais recente; só a mais recente pode ser publicada">substituída</span>{% else %}<span class="tag {{ {'pronto': 'tag-ok', 'bloqueado': 'tag-run', 'erro': 'tag-err', 'a_gerar': 'tag-acc'}[r.status] }}">{{ FINAL_STATES[r.status] }}</span>{% endif %}</td>
+      <td class="num">{{ sm.get('novos', '—') }}</td><td class="num">{{ sm.get('alterados', '—') }}</td>
+      <td class="num opt">{{ sm.get('expirados', '—') }}</td><td class="num opt">{{ sm.get('erros', '—') }}</td>
+      <td class="small">{{ (r.published_at|dtt) ~ ' por ' ~ r.published_by if r.published_at else '—' }}</td>
+    </tr>
+    {% else %}
+    <tr><td colspan="8"><div class="empty"><b>Ainda não há gerações</b>Confirme as fontes e use "Gerar ficheiros". Nada é publicado sem a sua confirmação.</div></td></tr>
+    {% endfor %}
+    </tbody>
+  </table></div>
+</section>
+
+<details class="card">
+  <summary>Regras aplicadas</summary>
+  <ul class="small">
+    <li>As datas comparam-se ao dia. DD/MM/AAAA nunca é trocado por MM/DD; os seriais do Excel são convertidos diretamente.</li>
+    <li>Cada certificado das fontes é procurado na CMDB pelo CommonName. Se o CommonName da CMDB estiver vazio, usa-se Name, Display Label ou Hostname, e o CommonName é preenchido nessa mesma linha.</li>
+    <li>São postos de lado (relatório de erros): sem CommonName, data vazia ou ilegível, pedidos não emitidos, certificados já expirados e nomes sem domínio.</li>
+    <li>CommonName existente: atualiza ValidTo e SerialNumber na linha com a data mais próxima. CommonName novo: linha nova com Global Id = x; o emissor é o configurado para CA1/CA2 e, no AVI, o Issuer_CommonName.</li>
+    <li>Se a fonte tiver uma data anterior à da CMDB, decide o certificado que o servidor apresenta na porta 443 (verificação do certwatch com menos de {{ settings.final_live_max_age_h }} h, ou ligação na hora). Sem resposta, ou num wildcard, a CMDB não é alterada.</li>
+    <li>A Description regista o que mudou ("{{ settings.final_description }} - Data de expiracao alterado de … para …").</li>
+    <li>Os CSV levam só as linhas novas e alteradas, com separador |, CRLF e UTF-8 sem BOM. São recusados se um certificado novo não tiver Issuer, IssuerName e SerialNumber, ou se IssuerName + SerialNumber se repetir.</li>
+    <li>Diferenças em relação ao workflow: uma data vazia na fonte vai para o relatório de erros; ValidTo e SerialNumber só contam como alterados se mudarem de facto.</li>
+  </ul>
+</details>
+{% endblock %}

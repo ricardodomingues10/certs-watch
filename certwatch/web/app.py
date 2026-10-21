@@ -11,7 +11,7 @@ from pathlib import Path
 from urllib.parse import quote, urlencode
 from zoneinfo import ZoneInfo
 
-from fastapi import Depends, FastAPI, Form, HTTPException, Request
+from fastapi import Depends, FastAPI, File, Form, HTTPException, Request, UploadFile
 from fastapi.responses import JSONResponse, RedirectResponse, Response
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
@@ -30,8 +30,10 @@ from ..insights import STATE_LABELS, ancestry, build_inventory, check_matrix, ch
 from ..jobs import apis_configured, JOBS, enqueue
 from ..collectors.ct import SOURCE_LABELS
 from ..discovery import CT_STATE_HELP, CT_STATES, CT_TABS, TRIAGE_LABELS, classify_ct
-from ..models import ApiRecord, AuditLog, Certificate, CmdbRecord, CtCert, Endpoint, Finding, ImportFile, JobRun, ScanResult, SslLabsResult, TicketBatch, SmaxTicket
+from ..models import (ApiRecord, AuditLog, Certificate, CmdbRecord, CtCert, Endpoint, FinalInput, FinalPublish,
+                      FinalPublishFile, FinalRun, Finding, ImportFile, JobRun, ScanResult, SslLabsResult, TicketBatch, SmaxTicket)
 from .. import ticket_create as tc
+from .. import cmdb_final as cf
 from ..collectors.smax import ticket_url
 from ..tickets import TICKET_HELP, TICKET_STATES, TICKET_VIEWS, ticket_list, tickets_by_label, link as ticket_link, tickets_by_endpoint
 from ..reconcile import REC_HELP, REC_STATES, REC_TABS, scan_import_dir, reconcile
@@ -98,6 +100,8 @@ templates.env.globals.update(
     LAYERS=LAYERS, MONTHS=MONTHS, JOB_LABELS=JOB_LABELS, JOB_HELP=JOB_HELP,
     CT_STATES=CT_STATES, CT_TABS=CT_TABS, CT_SOURCE_LABELS=SOURCE_LABELS, CT_STATE_HELP=CT_STATE_HELP, TRIAGE_LABELS=TRIAGE_LABELS,
     REC_STATES=REC_STATES, REC_TABS=REC_TABS, REC_HELP=REC_HELP,
+    FINAL_FILES=cf.FILES, FINAL_FILE_LABELS=cf.FILE_LABELS, LIVE_LABELS=cf.LIVE_LABELS,
+    COMPARE_VIEWS=cf.COMPARE_VIEWS, COMPARE_HELP=cf.COMPARE_HELP,
 )
 
 _NAV_CACHE: dict = {"at": 0.0, "data": None}
@@ -222,6 +226,12 @@ def setup_checklist(s, settings, stats) -> list[dict]:
     items.append({"ok": True if files else None, "title": "Ficheiros de reconciliação",
                   "hint": (", ".join(f"{f.source}: {f.name}" for f in files) if files else
                            "Opcional: colocar exportações CA1*, CA2*, AVI* e Azure* na diretoria import/.")})
+    folder = cf.folder_status(settings)
+    items.append({"ok": True if folder["existe"] and folder["gravavel"] else (False if folder["existe"] else None),
+                  "title": "Pasta de rede para atualizar a CMDB",
+                  "hint": ("Montada, com escrita." if folder["existe"] and folder["gravavel"] else
+                           folder["detalhe"] if folder["existe"] else
+                           "Opcional: definir CERTWATCH_PUBLISH_HOST_DIR no .env (ver README 5.1).")})
     last = s.scalar(select(JobRun).where(JobRun.job == "pipeline", JobRun.requested_by == "agendador",
                                          JobRun.status.in_(("ok", "error"))).order_by(JobRun.id.desc()).limit(1))
     recent = last is not None and last.finished_at and as_utc(last.finished_at) > utcnow() - timedelta(hours=26)
@@ -926,6 +936,322 @@ def reconciliacao_exportar(estado: str = "diferencas", user: str = Depends(curre
                         [[r["source"], r["cn"], REC_STATES[r["state"]], fmt_dt(r["valid_to"]), fmt_dt(r["cmdb_valid_to"]),
                           fmt_dt(r["live_valid_to"]), "sim" if r["live_confirma"] else "", r["serial"], r["issuer"],
                           r["san"], " e ".join(r.get("onde") or []), r["file"], r["row_no"] or ""] for r in rows])
+
+
+# ------------------------------------------------------------------ CMDB final (CMDB_Final.xlsx, certs_update) e pasta de rede
+FINAL_STATES = {"a_gerar": "A gerar", "pronto": "Pronto a publicar", "bloqueado": "CSV bloqueados", "erro": "Com erro"}
+FINAL_VIEWS = {"alteracoes": "Alterações", "servidor": "Verificação no servidor", "erros": "Relatório de erros",
+               "colunas": "Colunas"}
+
+
+def _final_error(request: Request, user: str, message: str, back: str):
+    return render(request, "final_erro.html", user, message=message, back=back)
+
+
+def _run_or_404(s, run_id: int) -> FinalRun:
+    run = s.get(FinalRun, run_id)
+    if run is None:
+        raise HTTPException(404)
+    return run
+
+
+def _stale_runs(s) -> None:
+    for run in s.scalars(select(FinalRun).where(FinalRun.status == "a_gerar")):
+        if utcnow() - as_utc(run.created_at) > cf.STALE_AFTER:
+            run.status, run.error, run.finished_at = "erro", "Interrompido (o processo parou durante a geração).", utcnow()
+
+
+@app.get("/cmdb-final")
+def final_page(request: Request, user: str = Depends(current_user)):
+    settings = get_settings()
+    with session_scope() as s:
+        _stale_runs(s)
+        inputs = cf.current_inputs(s, settings)
+        runs = list(s.scalars(select(FinalRun).order_by(FinalRun.id.desc()).limit(30)))
+        for r in runs:
+            s.expunge(r)
+        last_pub = s.scalar(select(FinalPublish).order_by(FinalPublish.id.desc()).limit(1))
+        if last_pub is not None:
+            s.expunge(last_pub)
+        cmdb_at = s.scalar(select(CmdbRecord.last_seen).order_by(CmdbRecord.last_seen.desc()).limit(1))
+    folder = cf.folder_status(settings)
+    latest = runs[0] if runs else None
+    return render(request, "final.html", user, inputs=inputs, runs=runs, latest=latest, folder=folder,
+                  last_pub=last_pub, cmdb_at=cmdb_at, settings=settings, FINAL_STATES=FINAL_STATES,
+                  issuers={k: settings.import_issuers.get(k, "") for k in settings.final_sources})
+
+
+@app.post("/cmdb-final/gerar")
+def final_generate(request: Request, csrf: str = Form(""), user: str = Depends(current_user)):
+    check_csrf(request, csrf)
+    settings = get_settings()
+    try:
+        with session_scope() as s:
+            _stale_runs(s)
+            run = cf.start_run(s, user)
+            run_id = run.id
+            audit(s, user, "cmdb_final.gerar", f"geração {run_id}")
+    except cf.FinalError as exc:
+        return _final_error(request, user, str(exc), "/cmdb-final")
+    cf.generate_in_background(run_id, settings)
+    return RedirectResponse(f"/cmdb-final/{run_id}", status_code=303)
+
+
+@app.post("/cmdb-final/fonte/{source}")
+async def final_upload(request: Request, source: str, csrf: str = Form(""), ficheiro: UploadFile = File(...),
+                       user: str = Depends(current_user)):
+    check_csrf(request, csrf)
+    settings = get_settings()
+    source = source.upper()
+    if source not in settings.final_sources:
+        raise HTTPException(404)
+    name = Path(ficheiro.filename or "").name[:200]
+    data = await ficheiro.read(cf.MAX_UPLOAD + 1)
+    if Path(name).suffix.lower() not in cf.ALLOWED_EXT:
+        return _final_error(request, user, "Formato não aceite: use CSV ou Excel (.xlsx).", "/cmdb-final")
+    if len(data) > cf.MAX_UPLOAD:
+        return _final_error(request, user, f"Ficheiro demasiado grande (máximo {cf.MAX_UPLOAD // 1024 // 1024} MB).", "/cmdb-final")
+    try:
+        items, info = cf.read_source(source, name, data, utcnow().astimezone(_tz()).date())
+    except Exception as exc:   # ficheiro ilegível ou sem as colunas esperadas
+        return _final_error(request, user, f"Não foi possível usar o ficheiro de {source}: {exc}", "/cmdb-final")
+    if not items:
+        return _final_error(request, user, f"O ficheiro de {source} não tem linhas.", "/cmdb-final")
+    import hashlib
+    with session_scope() as s:
+        s.add(FinalInput(source=source, name=name, sha256=hashlib.sha256(data).hexdigest(), size=len(data), data=data,
+                         uploaded_by=user))
+        audit(s, user, "cmdb_final.carregar", f"{source}: {name}", linhas=len(items), validas=info["validas"])
+    return RedirectResponse("/cmdb-final", status_code=303)
+
+
+@app.post("/cmdb-final/testar-pasta")
+def final_test_folder(request: Request, csrf: str = Form(""), user: str = Depends(current_user)):
+    check_csrf(request, csrf)
+    ok, msg = cf.test_write(get_settings())
+    with session_scope() as s:
+        audit(s, user, "cmdb_final.testar_pasta", str(get_settings().publish_dir), ok=ok, detalhe=msg)
+    return RedirectResponse(f"/cmdb-final?teste={'ok' if ok else 'falhou'}&msg={quote(msg)}#pasta", status_code=303)
+
+
+@app.get("/cmdb-final/comparar")
+def final_compare(request: Request, origem: str = "", vista: str = "diferencas", q: str = "", marcadas: int = 0,
+                  user: str = Depends(current_user)):
+    settings = get_settings()
+    vista = vista if vista in cf.COMPARE_VIEWS else "diferencas"
+    try:
+        label, origem, data, choices = _compare_source(origem, settings)
+    except cf.FinalError as exc:
+        return _final_error(request, user, str(exc), "/cmdb-final")
+    rows, counts, cmdb_at, err = [], {}, None, ""
+    if data is not None:
+        try:
+            final_rows = cf.read_final_xlsx(data)
+            with session_scope() as s:
+                recs = list(s.scalars(select(CmdbRecord).where(CmdbRecord.active.is_(True))))
+                cmdb_at = s.scalar(select(CmdbRecord.last_seen).order_by(CmdbRecord.last_seen.desc()).limit(1))
+                for r in recs:
+                    s.expunge(r)
+            all_rows, counts = cf.compare_with_cmdb(final_rows, recs, _tz())
+            rows = cf.filter_compare(all_rows, vista, q, bool(marcadas))
+        except cf.FinalError as exc:
+            err = str(exc)
+        except Exception as exc:   # ficheiro que não é um Excel válido
+            err = f"Não foi possível ler o ficheiro: {exc}"
+    return render(request, "final_comparar.html", user, rows=rows[:3000], n_rows=len(rows), counts=counts, vista=vista,
+                  q=q, marcadas=marcadas, origem=origem, label=label, choices=choices, cmdb_at=cmdb_at, err=err)
+
+
+def _compare_source(origem: str, settings) -> tuple[str, str, bytes | None, list[tuple[str, str]]]:
+    """Ficheiro CMDB_Final a comparar: uma geração, o que está na pasta de rede ou um carregado."""
+    with session_scope() as s:
+        runs = list(s.execute(select(FinalRun.id, FinalRun.created_at).where(FinalRun.xlsx.is_not(None))
+                              .order_by(FinalRun.id.desc()).limit(15)))
+        ups = list(s.execute(select(FinalInput.id, FinalInput.name, FinalInput.uploaded_at)
+                             .where(FinalInput.source == "CMDB_FINAL").order_by(FinalInput.id.desc()).limit(5)))
+        choices = [(f"geracao:{r.id}", f"Geração #{r.id} de {fmt_dt(r.created_at, True)}") for r in runs]
+        folder_file = settings.publish_dir / cf.FILES["xlsx"]
+        if folder_file.is_file():
+            choices.append(("pasta", f"{cf.FILES['xlsx']} na pasta de rede"))
+        choices += [(f"carregado:{u.id}", f"Carregado: {u.name} ({fmt_dt(u.uploaded_at, True)})") for u in ups]
+        if not origem:
+            origem = choices[0][0] if choices else ""
+        if not origem:
+            return "", "", None, choices
+        kind, _, ident = origem.partition(":")
+        if kind == "geracao" and ident.isdigit():
+            run = s.get(FinalRun, int(ident))
+            if run is None or run.xlsx is None:
+                raise cf.FinalError("Essa geração já não tem o ficheiro (só se guardam as mais recentes).")
+            return f"CMDB_Final.xlsx da geração #{run.id}", origem, run.xlsx, choices
+        if kind == "pasta":
+            try:
+                return f"{cf.FILES['xlsx']} na pasta de rede", origem, folder_file.read_bytes(), choices
+            except OSError as exc:
+                raise cf.FinalError(f"Não foi possível ler o ficheiro da pasta de rede: {exc}")
+        if kind == "carregado" and ident.isdigit():
+            up = s.get(FinalInput, int(ident))
+            if up is None or up.source != "CMDB_FINAL" or up.data is None:
+                raise HTTPException(404)
+            return f"{up.name} (carregado)", origem, up.data, choices
+    raise HTTPException(404)
+
+
+@app.post("/cmdb-final/comparar/carregar")
+async def final_compare_upload(request: Request, csrf: str = Form(""), ficheiro: UploadFile = File(...),
+                               user: str = Depends(current_user)):
+    check_csrf(request, csrf)
+    name = Path(ficheiro.filename or "").name[:200]
+    data = await ficheiro.read(cf.MAX_UPLOAD + 1)
+    if Path(name).suffix.lower() not in (".xlsx", ".xlsm") or len(data) > cf.MAX_UPLOAD:
+        return _final_error(request, user, "Carregue um ficheiro Excel (.xlsx) até 25 MB.", "/cmdb-final/comparar")
+    try:
+        cf.read_final_xlsx(data)
+    except Exception as exc:
+        return _final_error(request, user, f"O ficheiro não pode ser comparado: {exc}", "/cmdb-final/comparar")
+    import hashlib
+    with session_scope() as s:
+        up = FinalInput(source="CMDB_FINAL", name=name, sha256=hashlib.sha256(data).hexdigest(), size=len(data),
+                        data=data, uploaded_by=user)
+        s.add(up)
+        s.flush()
+        uid = up.id
+    return RedirectResponse(f"/cmdb-final/comparar?origem=carregado:{uid}", status_code=303)
+
+
+@app.get("/cmdb-final/comparar/exportar")
+def final_compare_export(origem: str = "", vista: str = "diferencas", q: str = "", marcadas: int = 0,
+                         user: str = Depends(current_user)):
+    settings = get_settings()
+    label, origem, data, _ = _compare_source(origem, settings)
+    if data is None:
+        raise HTTPException(404)
+    with session_scope() as s:
+        recs = list(s.scalars(select(CmdbRecord).where(CmdbRecord.active.is_(True))))
+        for r in recs:
+            s.expunge(r)
+    rows, _ = cf.compare_with_cmdb(cf.read_final_xlsx(data), recs, _tz())
+    rows = cf.filter_compare(rows, vista if vista in cf.COMPARE_VIEWS else "diferencas", q, bool(marcadas))
+    estado = {"igual": "Igual", "diferente": "Diferente", "nao_existe": "Não existe na CMDB", "so_na_cmdb": "Só na CMDB"}
+    d = lambda v: v.strftime("%d-%m-%Y") if v else ""
+    return csv_response(f"comparacao-cmdb-{vista}.csv",
+                        ["Linha no ficheiro", "CommonName", "Global Id", "Marcação no ficheiro", "Situação", "Diferenças",
+                         "ValidTo no ficheiro", "ValidTo na CMDB", "Issuer no ficheiro", "Issuer na CMDB",
+                         "IssuerName no ficheiro", "IssuerName na CMDB"],
+                        [[r["linha"] or "", r["cn"], r["global_id"], r["cor"] or "", estado[r["estado"]],
+                          ", ".join({"data": "data", "issuer": "Issuer", "issuer_name": "IssuerName"}[x] for x in r["dif"]),
+                          d(r["f_validto"]) or str(r["f_validto_raw"] or ""), d(r["c_validto"]), r["f_issuer"], r["c_issuer"],
+                          r["f_issuer_name"], r["c_issuer_name"]] for r in rows])
+
+
+@app.get("/cmdb-final/{run_id}")
+def final_run(request: Request, run_id: int, vista: str = "alteracoes", tipo: str = "", q: str = "",
+              user: str = Depends(current_user)):
+    settings = get_settings()
+    vista = vista if vista in FINAL_VIEWS else "alteracoes"
+    with session_scope() as s:
+        _stale_runs(s)
+        run = _run_or_404(s, run_id)
+        newest = s.scalar(select(FinalRun.id).where(FinalRun.status.in_(("pronto", "bloqueado")))
+                          .order_by(FinalRun.id.desc()).limit(1))
+        pubs = list(s.scalars(select(FinalPublish).where(FinalPublish.run_id == run_id).order_by(FinalPublish.id.desc())))
+        pub_files = {p.id: list(s.execute(select(FinalPublishFile.id, FinalPublishFile.name, FinalPublishFile.ok,
+                                                 FinalPublishFile.error, FinalPublishFile.previous_sha256,
+                                                 FinalPublishFile.previous_mtime)
+                                          .where(FinalPublishFile.publish_id == p.id))) for p in pubs}
+        sizes = {k: len(v) if v else 0 for k, v in (("xlsx", run.xlsx), ("csv", run.csv), ("csv_sem", run.csv_sem))}
+        s.expunge(run)
+        for p in pubs:
+            s.expunge(p)
+    changes = run.changes or []
+    if tipo in ("novo", "alterado"):
+        changes = [c for c in changes if c["tipo"] == tipo]
+    if q:
+        changes = [c for c in changes if q.lower() in (c["cn"] or "").lower() or q.lower() in (c["global_id"] or "").lower()]
+    folder = cf.folder_status(settings) if run.status == "pronto" else None
+    return render(request, "final_run.html", user, run=run, vista=vista, views=FINAL_VIEWS, changes=changes[:3000],
+                  n_changes=len(changes), tipo=tipo, q=q, newest=newest, pubs=pubs, pub_files=pub_files, sizes=sizes,
+                  folder=folder, FINAL_STATES=FINAL_STATES, settings=settings,
+                  age_min=(utcnow() - as_utc(run.created_at)).total_seconds() / 60)
+
+
+@app.get("/cmdb-final/{run_id}/ficheiro/{key}")
+def final_download(run_id: int, key: str, user: str = Depends(current_user)):
+    if key not in cf.FILES:
+        raise HTTPException(404)
+    with session_scope() as s:
+        run = _run_or_404(s, run_id)
+        data = cf.run_file(run, key)
+        if data is None:
+            raise HTTPException(404, "Ficheiro não disponível nesta geração.")
+        audit(s, user, "cmdb_final.descarregar", f"geração {run_id}: {cf.FILES[key]}")
+    media = ("application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" if key == "xlsx"
+             else "text/csv; charset=utf-8")
+    name = cf.FILES[key]
+    return Response(data, media_type=media, headers={"Content-Disposition": f'attachment; filename="{name}"'})
+
+
+@app.get("/cmdb-final/{run_id}/exportar/{what}")
+def final_export(run_id: int, what: str, user: str = Depends(current_user)):
+    with session_scope() as s:
+        run = _run_or_404(s, run_id)
+        changes, problems, live, columns = run.changes or [], run.problems or [], run.live or [], run.columns or {}
+    if what == "alteracoes":
+        return csv_response(f"cmdb-final-{run_id}-alteracoes.csv",
+                            ["Linha", "Tipo", "CommonName", "Global Id", "Fonte", "Campo", "Antes", "Depois", "Validado no servidor", "Description"],
+                            [[c["linha"], c["tipo"], c["cn"], c["global_id"], c.get("fonte", ""), f["campo"], f["antes"], f["depois"],
+                              "sim" if c["servidor"] else "", c["descricao"]]
+                             for c in changes for f in (c.get("campos") or [{"campo": "(linha nova)", "antes": "", "depois": ""}])])
+    if what == "erros":
+        return csv_response(f"cmdb-final-{run_id}-erros.csv", ["Fonte", "Linha", "Referência", "CommonName", "Data", "Data na CMDB", "Erro"],
+                            [[p["fonte"], p.get("linha", ""), p.get("ref", ""), p["cn"], p["data"], p["cmdb"], p["erro"]] for p in problems])
+    if what == "servidor":
+        return csv_response(f"cmdb-final-{run_id}-servidor.csv",
+                            ["CommonName", "Fonte", "Data na fonte", "Data na CMDB", "Decisão", "Data no servidor", "Série no servidor",
+                             "Emissor no servidor", "Origem", "Detalhe"],
+                            [[x["cn"], x["fonte"], x["data_fonte"], x["data_cmdb"], x["decisao_texto"], x.get("data_servidor", ""),
+                              x.get("serie_servidor", ""), x.get("emissor_servidor", ""), x.get("origem", ""), x.get("detalhe", "")] for x in live])
+    if what == "colunas":
+        # Modelo do ficheiro import/cmdb-colunas.csv com o mapeamento usado nesta geração
+        buf = io.StringIO()
+        buf.write("atributo;coluna\r\n")
+        for m in columns.get("mapeamento", []):
+            buf.write(f"{m['atributo']};{m['coluna']}\r\n")
+        return Response(buf.getvalue().encode("utf-8"), media_type="text/csv; charset=utf-8",
+                        headers={"Content-Disposition": 'attachment; filename="cmdb-colunas.csv"'})
+    raise HTTPException(404)
+
+
+@app.post("/cmdb-final/{run_id}/publicar")
+async def final_publish(request: Request, run_id: int, user: str = Depends(current_user)):
+    form = await request.form()
+    check_csrf(request, form.get("csrf"))
+    keys = [str(k) for k in form.getlist("ficheiro")]
+    if form.get("confirmo") != "1":
+        raise HTTPException(400, "Confirmação em falta.")
+    settings = get_settings()
+    try:
+        with session_scope() as s:
+            run = _run_or_404(s, run_id)
+            pub = cf.publish(s, settings, run, keys, user)
+            audit(s, user, "cmdb_final.publicar", f"geração {run_id}", pasta=str(settings.publish_dir),
+                  ficheiros=[r["nome"] for r in pub.result], ok=pub.ok)
+    except cf.FinalError as exc:
+        return _final_error(request, user, str(exc), f"/cmdb-final/{run_id}")
+    return RedirectResponse(f"/cmdb-final/{run_id}#publicacoes", status_code=303)
+
+
+@app.get("/cmdb-final/publicacao/{file_id}/anterior")
+def final_previous(file_id: int, user: str = Depends(current_user)):
+    with session_scope() as s:
+        f = s.get(FinalPublishFile, file_id)
+        if f is None or f.previous is None:
+            raise HTTPException(404)
+        data, name = f.previous, f.name
+        audit(s, user, "cmdb_final.descarregar_anterior", name, publicacao=f.publish_id)
+    stem, dot, ext = name.rpartition(".")
+    media = ("application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" if ext == "xlsx" else "text/csv; charset=utf-8")
+    return Response(data, media_type=media, headers={"Content-Disposition": f'attachment; filename="{stem}_anterior.{ext}"'})
 
 
 # ------------------------------------------------------------------ API (só leitura)

@@ -175,6 +175,17 @@ class Settings:
     admin_password: str | None = None
     cookie_secure: bool = False
 
+    # CMDB final (CMDB_Final.xlsx e certs_update*.csv) e publicação na pasta de rede
+    final_sources: list[str] = field(default_factory=lambda: ["CA1", "CA2", "AVI"])
+    final_enrich: str = "auto"                     # auto | query | ci | off
+    final_header_prefix: str = "[Digital Certificate] : "
+    final_description: str = "Changed with n8n"
+    final_live_marker: str = "Validado via TLS"
+    final_live_max_age_h: int = 24
+    final_columns_file: str = "cmdb-colunas"
+    final_keep_runs: int = 20
+    publish_dir: Path = Path("/app/publicar")
+
     @staticmethod
     def from_env() -> "Settings":
         db_url = _env("CERTWATCH_DATABASE_URL")
@@ -274,6 +285,15 @@ class Settings:
             admin_user=_env("CERTWATCH_ADMIN_USER", "admin"),
             admin_password=_secret("admin_password", "CERTWATCH_ADMIN_PASSWORD"),
             cookie_secure=_env("CERTWATCH_COOKIE_SECURE", "false").lower() == "true",
+            final_sources=[x.upper() for x in _str_list(_env("CERTWATCH_FINAL_SOURCES", "CA1,CA2,AVI"))],
+            final_enrich=_env("CERTWATCH_FINAL_ENRICH", "auto").lower(),
+            final_header_prefix=_env("CERTWATCH_FINAL_HEADER_PREFIX", "[Digital Certificate] : "),
+            final_description=_env("CERTWATCH_FINAL_DESCRIPTION", "Changed with n8n"),
+            final_live_marker=_env("CERTWATCH_FINAL_LIVE_MARKER", "Validado via TLS"),
+            final_live_max_age_h=int(_env("CERTWATCH_FINAL_LIVE_MAX_AGE_H", "24")),
+            final_columns_file=_env("CERTWATCH_FINAL_COLUMNS_FILE", "cmdb-colunas").lower(),
+            final_keep_runs=int(_env("CERTWATCH_FINAL_KEEP_RUNS", "20")),
+            publish_dir=Path(_env("CERTWATCH_PUBLISH_DIR", "/app/publicar")),
         )
 
 

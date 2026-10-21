@@ -1,0 +1,206 @@
+{% extends "base.html" %}
+{% block title %}Geração #{{ run.id }}{% endblock %}
+{% block head %}{% if run.status == 'a_gerar' %}<meta http-equiv="refresh" content="4">{% endif %}{% endblock %}
+{% block crumb %}<a href="/cmdb-final">Atualizar a CMDB</a>{% endblock %}
+{% block page_title %}Geração #{{ run.id }} <small><span class="tag {{ {'pronto': 'tag-ok', 'bloqueado': 'tag-run', 'erro': 'tag-err', 'a_gerar': 'tag-acc'}[run.status] }}">{{ FINAL_STATES[run.status] }}</span></small>{% endblock %}
+{% block lede %}Pedida por {{ run.created_by }} em {{ run.created_at|dtt }}{% if run.finished_at %}, concluída às {{ run.finished_at|dtt|replace(run.finished_at|dt ~ ' ', '') }}{% endif %}.{% if run.published_at %} Publicada em {{ run.published_at|dtt }} por {{ run.published_by }}.{% endif %}{% endblock %}
+{% block actions %}
+{% if sizes.xlsx %}<a class="button" href="/cmdb-final/comparar?origem=geracao:{{ run.id }}">Comparar com a CMDB</a>{% endif %}
+{% endblock %}
+{% block content %}
+{% set sm = run.summary or {} %}
+{% if run.status == 'a_gerar' %}
+<div class="note">A ler a CMDB pela API e os ficheiros das fontes. Os certificados com data anterior à da CMDB são verificados no servidor. Esta página atualiza-se sozinha.</div>
+{% elif run.status == 'erro' %}
+<div class="note bad"><b>A geração falhou.</b> {{ run.error }}</div>
+{% endif %}
+{% if run.status == 'bloqueado' %}
+<div class="note warn"><b>Os CSV não foram gerados.</b> O Excel está disponível para análise, mas nada pode ser publicado.
+  <ul class="small">{% for v in run.validation %}<li>{{ v }}</li>{% endfor %}</ul>
+  <span class="small">Certificados novos de CA1/CA2 ficam sem emissor quando <span class="mono">CERTWATCH_IMPORT_ISSUERS</span> não está definido no .env.</span></div>
+{% endif %}
+
+{% if sm %}
+<section class="verdict {{ 'v-ok' if run.status == 'pronto' else 'v-warn' }}" aria-label="Resumo">
+  {% set n = sm.get('novos', 0) + sm.get('alterados', 0) %}
+  <p class="say">{% if n %}<b>{{ n }} alteraç{{ 'ões' if n != 1 else 'ão' }}</b> para a UCMDB: {{ sm.get('novos', 0) }} certificado{{ 's' if sm.get('novos', 0) != 1 }} novo{{ 's' if sm.get('novos', 0) != 1 }} e {{ sm.get('alterados', 0) }} alterado{{ 's' if sm.get('alterados', 0) != 1 }}.{% else %}<b class="ok">A CMDB já coincide com as fontes.</b> Os CSV só têm o cabeçalho.{% endif %}</p>
+  <div class="facts">
+    <span><b>{{ sm.get('cmdb_linhas', 0) }}</b> linhas lidas da CMDB</span>
+    <span><b>{{ sm.get('final_linhas', 0) }}</b> linhas no CMDB_Final</span>
+    <span><b>{{ sm.get('expirados', 0) }}</b> {{ 'expirada' if sm.get('expirados', 0) == 1 else 'expiradas' }} (a vermelho)</span>
+    <span><b>{{ sm.get('coincidentes', 0) }}</b> {{ 'certificado das fontes já igual' if sm.get('coincidentes', 0) == 1 else 'certificados das fontes já iguais' }} à CMDB</span>
+    <a href="?vista=servidor"><b>{{ sm.get('regressoes', 0) }}</b> com data anterior à CMDB, {{ sm.get('regressoes_atualizadas', 0) }} {{ 'atualizado' if sm.get('regressoes_atualizadas', 0) == 1 else 'atualizados' }} com o servidor</a>
+    <a href="?vista=erros"><b>{{ sm.get('erros', 0) }}</b> linhas no relatório de erros</a>
+  </div>
+</section>
+{% endif %}
+
+{% if run.status in ('pronto', 'bloqueado') %}
+<div class="grid2">
+<section class="card">
+  <h2>Ficheiros</h2>
+  <table class="compact">
+    {% for k, name in FINAL_FILES.items() %}
+    <tr><td><span class="mono">{{ name }}</span><div class="small muted">{{ FINAL_FILE_LABELS[k] }}</div></td>
+      <td class="num small">{{ '%.1f KB'|format(sizes[k] / 1024) if sizes[k] else '' }}</td>
+      <td>{% if sizes[k] or (k != 'xlsx' and run.status == 'pronto') %}<a class="button" href="/cmdb-final/{{ run.id }}/ficheiro/{{ k }}">Descarregar</a>{% else %}<span class="muted small">não gerado</span>{% endif %}</td></tr>
+    {% endfor %}
+  </table>
+  <p class="small muted">Fontes usadas:
+    {% for src, i in (run.inputs or {}).items() %}<b>{{ src }}</b> <span class="mono">{{ i.ficheiro }}</span> ({{ i.validas }} de {{ i.linhas }} linhas válidas){{ '; ' if not loop.last else '.' }}{% endfor %}</p>
+</section>
+
+<section class="card" id="publicar">
+  <h2>Publicar na pasta de rede</h2>
+  {% if run.status != 'pronto' %}
+  <p class="small">Só uma geração pronta, sem bloqueios, pode ser publicada.</p>
+  {% elif newest != run.id %}
+  <div class="note warn">Existe uma geração mais recente (<a href="/cmdb-final/{{ newest }}">#{{ newest }}</a>). Só a mais recente pode ser publicada.</div>
+  {% elif not (folder.existe and folder.gravavel) %}
+  <div class="note bad">{{ folder.detalhe or 'A pasta de rede não está disponível.' }}</div>
+  {% else %}
+  {% if age_min > 120 %}<div class="note warn small">Gerada há {{ (age_min / 60)|round|int }} horas: a CMDB ou as fontes podem ter mudado entretanto. Se tiver dúvidas, gere de novo antes de publicar.</div>{% endif %}
+  <form method="post" action="/cmdb-final/{{ run.id }}/publicar" class="confirm-form">
+    <input type="hidden" name="csrf" value="{{ csrf }}">
+    <p class="small">Destino: <span class="mono">{{ folder.pasta }}</span>. Os ficheiros com o mesmo nome são substituídos; o que lá estava fica guardado no certwatch.</p>
+    <div class="filechecks">
+      {% for f in folder.ficheiros %}
+      <label><input type="checkbox" name="ficheiro" value="{{ f.chave }}" checked> <span><span class="mono">{{ f.nome }}</span>
+        <span class="small muted">{{ '— substitui o de ' ~ (f.alterado|dtt) if f.alterado else '— novo na pasta' }}</span></span></label>
+      {% endfor %}
+    </div>
+    <label><input type="checkbox" name="confirmo" value="1" required> Revi as alterações e confirmo a publicação.</label>
+    <div class="confirm-actions"><button class="primary">Publicar na pasta de rede</button></div>
+  </form>
+  {% endif %}
+</section>
+</div>
+{% endif %}
+
+{% if sm %}
+<nav class="tabs" aria-label="Detalhe">
+  {% set nviews = {'alteracoes': (run.changes or [])|length, 'servidor': (run.live or [])|length, 'erros': (run.problems or [])|length,
+                   'colunas': ((run.columns or {}).get('sem_correspondencia') or [])|length} %}
+  {% for k, label in views.items() %}
+  <a href="?vista={{ k }}" class="{{ 'on' if vista == k }}">{{ label }} <span class="n">{{ nviews[k] if k != 'colunas' else ((nviews[k] ~ ' sem correspondência') if nviews[k] else '') }}</span></a>
+  {% endfor %}
+</nav>
+
+{% if vista == 'alteracoes' %}
+<form class="filters" method="get">
+  <input type="hidden" name="vista" value="alteracoes">
+  <select name="tipo" aria-label="Tipo"><option value="">Novos e alterados</option><option value="novo" {{ 'selected' if tipo == 'novo' }}>Só novos</option><option value="alterado" {{ 'selected' if tipo == 'alterado' }}>Só alterados</option></select>
+  <input type="search" name="q" value="{{ q }}" placeholder="CommonName ou Global Id" aria-label="Filtrar">
+  <button>Filtrar</button>
+  <a class="button" href="/cmdb-final/{{ run.id }}/exportar/alteracoes">Exportar (CSV)</a>
+</form>
+<div class="card flush scroll">
+<table>
+  <thead><tr><th>Certificado</th><th>Tipo</th><th>O que muda</th><th class="opt">Description</th></tr></thead>
+  <tbody>
+  {% for c in changes %}
+  <tr>
+    <td><span class="mono">{{ c.cn or '(sem CommonName)' }}</span><div class="small muted">Global Id {{ c.global_id or '—' }} · linha {{ c.linha }}</div></td>
+    <td>{% if c.tipo == 'novo' %}<span class="tag tag-ok">novo</span>{% else %}<span class="tag tag-run">alterado</span>{% endif %}
+        {% if c.servidor %}<div><span class="tag tag-acc" title="Dados confirmados no certificado que o servidor apresenta">servidor</span></div>{% endif %}</td>
+    <td><dl class="change">
+      {% if c.tipo == 'novo' %}
+        <dt>ValidTo</dt><dd><ins>{{ c.validto }}</ins></dd>
+        <dt>IssuerName</dt><dd>{% if c.issuer_name %}<ins>{{ c.issuer_name }}</ins>{% else %}<span class="tag tag-err">vazio</span>{% endif %}</dd>
+        <dt>SerialNumber</dt><dd class="mono">{% if c.serial %}<ins>{{ c.serial }}</ins>{% else %}<span class="tag tag-err">vazio</span>{% endif %}</dd>
+        <dt>Fonte</dt><dd>{{ c.fonte }}</dd>
+      {% else %}
+        {% for f in c.campos %}<dt>{{ f.campo }}</dt><dd><del>{{ f.antes or '(vazio)' }}</del> → <ins>{{ f.depois or '(vazio)' }}</ins></dd>{% endfor %}
+      {% endif %}
+    </dl></td>
+    <td class="opt"><div class="desc">{{ c.descricao }}</div></td>
+  </tr>
+  {% else %}
+  <tr><td colspan="4"><div class="empty"><b>Sem alterações{{ ' nesta vista' if tipo or q }}</b>{{ 'A CMDB coincide com as fontes.' if not (tipo or q) }}</div></td></tr>
+  {% endfor %}
+  </tbody>
+</table>
+</div>
+{% if n_changes > changes|length %}<p class="small muted">A mostrar {{ changes|length }} de {{ n_changes }}. Exporte para ver todas.</p>{% endif %}
+
+{% elif vista == 'servidor' %}
+<p class="muted">Certificados em que a fonte tem uma data <b>anterior</b> à da CMDB. Para não fazer downgrade por engano, decide o certificado apresentado pelo servidor na porta 443.
+  <a href="/cmdb-final/{{ run.id }}/exportar/servidor">Exportar (CSV)</a></p>
+<div class="card flush scroll">
+<table>
+  <thead><tr><th>Certificado</th><th>Fonte</th><th>Na CMDB</th><th>Decisão</th><th>No servidor</th></tr></thead>
+  <tbody>
+  {% for x in run.live %}
+  <tr>
+    <td class="mono">{{ x.cn }}</td>
+    <td>{{ x.fonte }} <span class="small muted">{{ x.data_fonte }}</span></td>
+    <td class="small">{{ x.data_cmdb }}</td>
+    <td><span class="tag {{ 'tag-ok' if x.decisao == 'ATUALIZAR_COM_SERVIDOR' else 'tag-off' }}">{{ x.decisao_texto }}</span>{% if x.detalhe %}<div class="small muted">{{ x.detalhe }}</div>{% endif %}</td>
+    <td class="small">{% if x.data_servidor %}{{ x.data_servidor }} <span class="mono">{{ x.serie_servidor }}</span><div class="muted">{{ x.emissor_servidor }}</div>{% else %}—{% endif %}
+      {% if x.origem %}<div class="muted">{{ x.origem }}</div>{% endif %}</td>
+  </tr>
+  {% else %}
+  <tr><td colspan="5"><div class="empty"><b>Nenhuma fonte com data anterior à CMDB</b></div></td></tr>
+  {% endfor %}
+  </tbody>
+</table>
+</div>
+
+{% elif vista == 'erros' %}
+<p class="muted">Linhas das fontes postas de lado e avisos sobre datas da CMDB. Nada disto entra nos ficheiros. <a href="/cmdb-final/{{ run.id }}/exportar/erros">Exportar (CSV)</a></p>
+<div class="card flush scroll">
+<table>
+  <thead><tr><th>Fonte</th><th>Certificado</th><th>Data</th><th class="opt">Na CMDB</th><th>Motivo</th></tr></thead>
+  <tbody>
+  {% for p in run.problems[:2000] %}
+  <tr><td><b>{{ p.fonte }}</b>{% if p.linha %}<div class="small muted">linha {{ p.linha }}{{ ', ' ~ p.ref if p.ref }}</div>{% elif p.ref %}<div class="small muted">{{ p.ref }}</div>{% endif %}</td>
+    <td class="mono small">{{ p.cn or '—' }}</td><td class="small">{{ p.data or '—' }}</td><td class="small opt">{{ p.cmdb or '—' }}</td><td class="small">{{ p.erro }}</td></tr>
+  {% else %}
+  <tr><td colspan="5"><div class="empty"><b>Sem erros</b>Todas as linhas foram processadas.</div></td></tr>
+  {% endfor %}
+  </tbody>
+</table>
+</div>
+
+{% elif vista == 'colunas' %}
+{% set cd = run.columns or {} %}
+<div class="grid2">
+<section class="card">
+  <h2>Como foram lidas as colunas</h2>
+  <dl class="kv">
+    <dt>TQL</dt><dd class="mono">{{ cd.get('tql', '') }}</dd>
+    <dt>Atributos obtidos por</dt><dd>{{ {'tql': 'layout do TQL', 'topologyQuery': 'layout do TQL + consulta ad-hoc (topologyQuery)', 'ci': 'layout do TQL + leitura CI a CI'}.get(cd.get('metodo'), cd.get('metodo', '')) }}</dd>
+    <dt>Prefixo dos cabeçalhos</dt><dd class="mono">{{ cd.get('prefixo', '') }}</dd>
+    <dt>Ficheiro de colunas</dt><dd>{{ cd.get('ficheiro_colunas') or 'nenhum (correspondência automática)' }}</dd>
+  </dl>
+  {% if cd.get('avisos') %}<ul class="small">{% for a in cd.avisos %}<li>{{ a }}</li>{% endfor %}</ul>{% endif %}
+  {% if cd.get('sem_correspondencia') %}<div class="note warn small">Atributos sem coluna conhecida (entram com o nome interno): <span class="mono">{{ cd.sem_correspondencia|join(', ') }}</span>.</div>{% endif %}
+  {% if cd.get('colunas_vazias') %}<p class="small">Colunas do certs_update sem atributo na CMDB (ficam vazias): {{ cd.colunas_vazias|join(', ') }}.</p>{% endif %}
+  <p class="small muted">Para corrigir: descarregue o <a href="/cmdb-final/{{ run.id }}/exportar/colunas">modelo cmdb-colunas.csv</a>, ajuste a segunda coluna (nome da coluna sem o prefixo; vazio para não incluir) e coloque-o em <span class="mono">import/</span>. A ordem das linhas é a ordem das colunas no Excel.</p>
+</section>
+<section class="card flush">
+  <div class="scroll"><table class="compact">
+    <thead><tr><th>Atributo da UCMDB</th><th>Coluna</th><th class="num">Preenchidos</th><th>Como</th></tr></thead>
+    {% for m in cd.get('mapeamento', []) %}<tr><td class="mono small">{{ m.atributo }}</td><td class="small">{{ m.coluna or '—' }}</td>
+      <td class="num small">{{ (cd.get('preenchidas') or {}).get(m.coluna, '') }}</td><td class="small muted">{{ m.como }}</td></tr>{% endfor %}
+  </table></div>
+</section>
+</div>
+{% endif %}
+{% endif %}
+
+{% if pubs %}
+<section class="card" id="publicacoes">
+  <h2>Publicações</h2>
+  <table class="compact">
+    <thead><tr><th>Quando</th><th>Por</th><th>Ficheiros</th><th>Versão anterior</th></tr></thead>
+    {% for p in pubs %}
+    <tr><td class="small">{{ p.at|dtt }}</td><td class="small">{{ p.by }}</td>
+      <td class="small">{% for f in pub_files[p.id] %}<div>{% if f.ok %}<span class="tag tag-ok">ok</span>{% else %}<span class="tag tag-err">falhou</span>{% endif %} <span class="mono">{{ f.name }}</span>{% if f.error %} <span class="muted">{{ f.error }}</span>{% endif %}</div>{% endfor %}
+        <div class="muted">{{ p.folder }}</div></td>
+      <td class="small">{% for f in pub_files[p.id] if f.previous_sha256 %}<div><a href="/cmdb-final/publicacao/{{ f.id }}/anterior">{{ f.name }}</a>{% if f.previous_mtime %} <span class="muted">de {{ f.previous_mtime|dtt }}</span>{% endif %}</div>{% else %}<span class="muted">nada a substituir</span>{% endfor %}</td></tr>
+    {% endfor %}
+  </table>
+</section>
+{% endif %}
+{% endblock %}
