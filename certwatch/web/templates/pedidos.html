@@ -1,0 +1,28 @@
+{% extends "base.html" %}
+{% block title %}Pedidos SMAX{% endblock %}
+{% block crumb %}Operação{% endblock %}
+{% block page_title %}Pedidos SMAX{% endblock %}
+{% block lede %}Lotes de pedidos de renovação criados a partir da aplicação. Para criar, selecione certificados em <a href="/certificados">Certificados</a> (um, vários ou todos os de uma vista filtrada) ou use o botão no detalhe de um certificado.{% endblock %}
+{% block content %}
+{% if problems %}<div class="note warn"><b>A criação de pedidos não está disponível.</b><ul class="small">{% for p in problems %}<li>{{ p }}</li>{% endfor %}</ul></div>{% endif %}
+<div class="card flush scroll">
+<table>
+  <thead><tr><th>Lote</th><th>Criado</th><th>Estado</th><th class="num">Pedidos</th><th class="num">Criados</th><th class="num">Problemas</th><th>Confirmado por</th></tr></thead>
+  <tbody>
+  {% for b in batches %}{% set c = counts[b.id] %}
+    <tr>
+      <td><a href="/pedidos/{{ b.id }}"><b>Lote {{ b.id }}</b></a></td>
+      <td class="small">{{ b.created_at|dtt }}<div class="muted">{{ b.created_by }}</div></td>
+      <td><span class="tag {{ {'concluido': 'tag-ok', 'interrompido': 'tag-err', 'a_criar': 'tag-run', 'rascunho': 'tag-acc'}.get(b.status, 'tag-off') }}">{{ BATCH_STATES.get(b.status, b.status) }}</span></td>
+      <td class="num">{{ c.incluidos }}{% if c.total != c.incluidos %} <span class="muted small">de {{ c.total }}</span>{% endif %}</td>
+      <td class="num">{{ c.criados }}</td>
+      <td class="num">{% if c.problemas %}<b class="bad">{{ c.problemas }}</b>{% else %}0{% endif %}</td>
+      <td class="small">{{ b.confirmed_by or '—' }}{% if b.confirmed_at %}<div class="muted">{{ b.confirmed_at|dtt }}</div>{% endif %}</td>
+    </tr>
+  {% else %}
+    <tr><td colspan="7"><div class="empty"><b>Ainda não há lotes</b>Selecione certificados em Certificados e escolha "Preparar pedidos".</div></td></tr>
+  {% endfor %}
+  </tbody>
+</table>
+</div>
+{% endblock %}

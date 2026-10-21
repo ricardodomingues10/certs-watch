@@ -26,6 +26,7 @@ log = logging.getLogger(__name__)
 PAGE_SIZE = 500
 LAYOUT = ("Id,DisplayLabel,PhaseId,Priority,UserOptions,LastUpdateTime,ScheduledStartTime,ScheduledEndTime,"
           "OwnedByGroup,OwnedByGroup.Name,OwnedByPerson,OwnedByPerson.Name")
+LAYOUT_EXTRA = ",AffectsServiceComponent"      # Application ID dos pedidos (para sugerir valores ao criar)
 _ENV_CODES = {"NAME1_C": "DEV", "NAME2_C": "TST", "NAME3_C": "SIT", "NAME4_C": "UAT", "NAME5_C": "PRE", "NAME6_C": "PRD"}
 
 
@@ -146,6 +147,7 @@ def parse_entity(e: dict, settings: Settings) -> dict | None:
         "owner_person": str(((rp.get("OwnedByPerson") or {}).get("Name")) or "")[:256],
         "last_update": _ms(p.get("LastUpdateTime")),
         "scheduled_end": _ms(p.get("ScheduledEndTime")),
+        "service_component": str(p.get("AffectsServiceComponent") or "")[:64],
     }
 
 
@@ -159,14 +161,18 @@ def fetch_tickets(settings: Settings, c: httpx.Client | None = None) -> list[dic
         headers = {"Cookie": f"LWSSO_COOKIE_KEY={token}; TENANTID={settings.smax_tenant}", "Accept": "application/json"}
         out: list[dict] = []
         skip = 0
+        layout = LAYOUT + LAYOUT_EXTRA
         while skip < settings.smax_max_tickets:
-            params = {"layout": LAYOUT, "meta": "totalCount", "order": "Id desc", "size": str(PAGE_SIZE), "skip": str(skip)}
+            params = {"layout": layout, "meta": "totalCount", "order": "Id desc", "size": str(PAGE_SIZE), "skip": str(skip)}
             if settings.smax_filter:
                 params["filter"] = settings.smax_filter
             try:
                 r = c.get(f"/rest/{settings.smax_tenant}/ems/{settings.smax_entity}", params=params, headers=headers)
             except httpx.HTTPError as exc:
                 raise SmaxError(f"Erro de comunicação com o SMAX: {exc}") from exc
+            if r.status_code == 400 and skip == 0 and layout != LAYOUT:
+                layout = LAYOUT   # campo extra não aceite nesta instalação: continuar sem ele
+                continue
             if r.status_code != 200:
                 raise SmaxError(f"Consulta de {settings.smax_entity} no SMAX falhou: HTTP {r.status_code}"
                                 f" — {_reason(r)}")

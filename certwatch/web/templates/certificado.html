@@ -8,7 +8,13 @@
 
 {% if smax_on %}
 <section class="card" id="smax">
-  <h2>Pedidos no SMAX <small>{{ smax.open|length }} aberto(s), {{ smax.closed|length }} fechado(s)</small></h2>
+  <div class="card-head">
+    <h2>Pedidos no SMAX <small>{{ smax.open|length }} aberto(s), {{ smax.closed|length }} fechado(s)</small></h2>
+    {% if create_on %}<form method="post" action="/pedidos/novo">
+      <input type="hidden" name="csrf" value="{{ csrf }}"><input type="hidden" name="cn" value="{{ cn }}">
+      <input type="hidden" name="next" value="/certificados/detalhe?cn={{ cn|urlencode }}">
+      <button class="{{ 'primary' if smax.state != 'em_curso' }}">Preparar pedido de renovação</button></form>{% endif %}
+  </div>
   <p><span class="tag {{ 'tag-ok' if smax.state == 'em_curso' else ('tag-run' if smax.state == 'outra_data' else 'tag-err') }}">{{ smax.label }}</span>
      <span class="small muted">{{ TICKET_HELP[smax.state] }}</span></p>
   {% set all = smax.open + smax.closed %}

@@ -7,6 +7,8 @@
   <link rel="icon" href="/static/logo.svg" type="image/svg+xml">
   <link rel="preload" href="/static/fonts/public-sans-latin-wght-normal.woff2" as="font" type="font/woff2" crossorigin>
   <link rel="stylesheet" href="/static/style.css">
+  <script src="/static/app.js" defer></script>
+  {% block head %}{% endblock %}
 </head>
 <body>
 {% set p = request.url.path %}
@@ -39,6 +41,7 @@
     {{ navlink('/reconciliacao', 'Reconciliação', p.startswith('/reconciliacao'), nav.reconc_dif, 'warm') }}
 
     <h4>Operação</h4>
+    {{ navlink('/pedidos', 'Pedidos SMAX', p.startswith('/pedidos')) }}
     {{ navlink('/jobs', 'Execuções e auditoria', p.startswith('/jobs')) }}
     {{ navlink('/testes/como-funciona', 'Como funciona', p.startswith('/testes/como')) }}
   </nav>

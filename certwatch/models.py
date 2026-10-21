@@ -260,4 +260,51 @@ class SmaxTicket(Base):
     owner_person: Mapped[str] = mapped_column(String(256), default="")
     last_update: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     scheduled_end: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    service_component: Mapped[str] = mapped_column(String(64), default="")    # AffectsServiceComponent (Application ID)
     fetched_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+class TicketBatch(Base):
+    """Lote de pedidos SMAX a criar: rascunho -> a_criar -> concluido | interrompido (ou cancelado)."""
+
+    __tablename__ = "ticket_batches"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    created_by: Mapped[str] = mapped_column(String(128), default="")
+    status: Mapped[str] = mapped_column(String(16), default="rascunho", index=True)
+    confirmed_by: Mapped[str] = mapped_column(String(128), default="")
+    confirmed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    note: Mapped[str] = mapped_column(String(600), default="")
+
+
+class TicketDraft(Base):
+    """Um pedido de um lote: dados do certificado, campos pedidos ao utilizador e resultado da criação."""
+
+    __tablename__ = "ticket_drafts"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    batch_id: Mapped[int] = mapped_column(ForeignKey("ticket_batches.id", ondelete="CASCADE"), index=True)
+    position: Mapped[int] = mapped_column(Integer, default=0)
+    cn: Mapped[str] = mapped_column(String(253), index=True)
+    name: Mapped[str] = mapped_column(String(253), default="")
+    expiry: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    expiry_source: Mapped[str] = mapped_column(String(16), default="")
+    issuer: Mapped[str] = mapped_column(String(512), default="")
+    scope: Mapped[str] = mapped_column(String(16), default="")
+    include: Mapped[bool] = mapped_column(Boolean, default=True)
+    override_duplicate: Mapped[bool] = mapped_column(Boolean, default=False)
+    ambiente: Mapped[str] = mapped_column(String(16), default="")
+    tipo: Mapped[str] = mapped_column(String(64), default="")
+    app_id: Mapped[str] = mapped_column(String(32), default="")
+    responsavel: Mapped[str] = mapped_column(String(128), default="")
+    localizacao: Mapped[str] = mapped_column(String(256), default="")
+    prefill: Mapped[dict] = mapped_column(JSON, default=dict)      # de onde veio cada valor sugerido
+    warnings: Mapped[list] = mapped_column(JSON, default=list)
+    status: Mapped[str] = mapped_column(String(16), default="pendente")
+    ticket_id: Mapped[str] = mapped_column(String(64), default="")
+    http_status: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    detail: Mapped[dict] = mapped_column(JSON, default=dict)
+    payload: Mapped[dict] = mapped_column(JSON, default=dict)
+    done_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)

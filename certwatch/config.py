@@ -116,6 +116,17 @@ class Settings:
     smax_ticket_url: str
     smax_verify_tls: bool
     smax_max_tickets: int
+    # SMAX: criação de pedidos (desligada por omissão)
+    smax_create_enabled: bool
+    smax_change_model: str
+    smax_service: str
+    smax_data_domains: list[str]
+    smax_default_app_id: str
+    smax_default_responsible: str
+    smax_env_codes: dict[str, str]
+    smax_type_options: list[str]
+    smax_create_max: int
+    smax_description_sign: str
 
     # Avaliação externa Qualys SSL Labs (opcional; exige registo com email da organização)
     ssllabs_email: str
@@ -211,6 +222,17 @@ class Settings:
             smax_ticket_url=_env("CERTWATCH_SMAX_TICKET_URL", "{base}/saw/{entity}/{id}/general?TENANTID={tenant}"),
             smax_verify_tls=_env("CERTWATCH_SMAX_VERIFY_TLS", "true").lower() != "false",
             smax_max_tickets=int(_env("CERTWATCH_SMAX_MAX_TICKETS", "20000")),
+            smax_create_enabled=_env("CERTWATCH_SMAX_CREATE_ENABLED", "false").lower() == "true",
+            smax_change_model=_env("CERTWATCH_SMAX_CHANGE_MODEL", ""),
+            smax_service=_env("CERTWATCH_SMAX_SERVICE", ""),
+            smax_data_domains=[x.strip() for x in (_env("CERTWATCH_SMAX_DATA_DOMAINS", "") or "").split(",") if x.strip()],
+            smax_default_app_id=_env("CERTWATCH_SMAX_DEFAULT_APP_ID", ""),
+            smax_default_responsible=_env("CERTWATCH_SMAX_DEFAULT_RESPONSIBLE", ""),
+            smax_env_codes=_kv_map(_env("CERTWATCH_SMAX_ENV_CODES",
+                                        "DEV=Name1_c;TST=Name2_c;SIT=Name3_c;UAT=Name4_c;PRE=Name5_c;PPRD=Name5_c;PRD=Name6_c")),
+            smax_type_options=[x.strip() for x in (_env("CERTWATCH_SMAX_TYPE_OPTIONS", "Interno;Externo") or "").split(";") if x.strip()],
+            smax_create_max=int(_env("CERTWATCH_SMAX_CREATE_MAX", "50")),
+            smax_description_sign=_env("CERTWATCH_SMAX_DESCRIPTION_SIGN", "Obrigada"),
             ssllabs_email=_env("CERTWATCH_SSLLABS_EMAIL", ""),
             ssllabs_max_hosts=int(_env("CERTWATCH_SSLLABS_MAX_HOSTS", "25")),
             ssllabs_max_age_days=int(_env("CERTWATCH_SSLLABS_MAX_AGE_DAYS", "7")),

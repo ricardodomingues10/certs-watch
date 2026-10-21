@@ -94,6 +94,7 @@ _ADDED_COLUMNS = [
     ("api_records", "location", "VARCHAR(512) NOT NULL DEFAULT ''"),
     ("api_records", "cmdb_expired", "BOOLEAN"),
     ("api_records", "registered_at", "TIMESTAMP WITH TIME ZONE"),
+    ("smax_tickets", "service_component", "VARCHAR(64) NOT NULL DEFAULT ''"),
 ]
 
 

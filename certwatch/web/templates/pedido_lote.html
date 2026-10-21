@@ -1,0 +1,90 @@
+{% extends "base.html" %}
+{% block title %}Lote {{ b.id }}{% endblock %}
+{% block head %}{% if b.status == 'a_criar' %}<meta http-equiv="refresh" content="3">{% endif %}{% endblock %}
+{% block crumb %}<a href="/pedidos">Pedidos SMAX</a>{% endblock %}
+{% block page_title %}Lote {{ b.id }} <span class="tag {{ {'concluido': 'tag-ok', 'interrompido': 'tag-err', 'a_criar': 'tag-run', 'rascunho': 'tag-acc'}.get(b.status, 'tag-off') }}">{{ BATCH_STATES.get(b.status, b.status) }}</span>{% endblock %}
+{% block lede %}{% if b.status == 'rascunho' %}Preencha o que a CMDB não tem. Os valores já preenchidos são sugestões e indicam de onde vêm. Só os pedidos marcados são enviados; nada é criado no SMAX antes de rever e confirmar.{% elif b.status == 'a_criar' %}A criar os pedidos no SMAX, um de cada vez. Esta página atualiza-se sozinha.{% else %}Criado por {{ b.created_by }} em {{ b.created_at|dtt }}{% if b.confirmed_by %}, confirmado por {{ b.confirmed_by }} em {{ b.confirmed_at|dtt }}{% endif %}.{% endif %}{% endblock %}
+{% block actions %}
+{% if b.status == 'rascunho' %}
+<form method="post" action="/pedidos/{{ b.id }}/cancelar"><input type="hidden" name="csrf" value="{{ csrf }}"><button>Cancelar lote</button></form>
+{% elif b.status in ('interrompido', 'concluido') and drafts|selectattr('status', 'in', ['falhou', 'nao_tentado'])|list %}
+<form method="post" action="/pedidos/{{ b.id }}/repetir"><input type="hidden" name="csrf" value="{{ csrf }}"><button class="primary">Novo lote com os que falharam</button></form>
+{% endif %}
+{% endblock %}
+{% block content %}
+{% if problems and b.status == 'rascunho' %}<div class="note warn"><b>Não é possível criar pedidos agora.</b><ul class="small">{% for p in problems %}<li>{{ p }}</li>{% endfor %}</ul></div>{% endif %}
+{% if b.note and b.status == 'rascunho' %}<div class="note bad"><b>A última tentativa não enviou nada.</b> {{ b.note }}</div>{% endif %}
+
+{% if b.status == 'rascunho' %}
+<section class="card">
+  <h2>Valores para todos <small>aplica aos pedidos marcados</small></h2>
+  <form class="filters" method="post" action="/pedidos/{{ b.id }}/aplicar">
+    <input type="hidden" name="csrf" value="{{ csrf }}">
+    <select name="ambiente" aria-label="Ambiente"><option value="">Ambiente…</option>{% for e in envs %}<option>{{ e }}</option>{% endfor %}</select>
+    <select name="tipo" aria-label="Tipo"><option value="">Tipo…</option>{% for x in tipos %}<option>{{ x }}</option>{% endfor %}</select>
+    <input name="app_id" placeholder="Application ID" inputmode="numeric" aria-label="Application ID">
+    <input name="responsavel" placeholder="Responsabilidade de instalação" aria-label="Responsabilidade de instalação">
+    <input name="localizacao" placeholder="Localização" aria-label="Localização">
+    <label class="small"><input type="checkbox" name="so_vazios" value="1" checked> só onde está vazio</label>
+    <button>Aplicar</button>
+  </form>
+</section>
+
+<form method="post" action="/pedidos/{{ b.id }}/guardar">
+<input type="hidden" name="csrf" value="{{ csrf }}">
+<div class="selbar">
+  <span><b>{{ n_incl }}</b> pedido(s) marcado(s), <b class="{{ 'bad' if n_ok < n_incl }}">{{ n_ok }}</b> pronto(s)</span>
+  <span class="grow"></span>
+  <button name="acao" value="guardar">Guardar</button>
+  <button class="primary" name="acao" value="rever" {{ 'disabled' if problems }}>Guardar e rever</button>
+</div>
+<div class="card flush scroll">
+<table class="draft-table">
+  <thead><tr><th>Enviar</th><th>Certificado</th>{% for k in FIELDS %}<th>{{ FIELD_LABELS[k] }}</th>{% endfor %}</tr></thead>
+  <tbody>
+  {% for d in drafts %}{% set e = errors[d.id] %}
+    <tr class="{{ 'faded' if not d.include }}">
+      <td><input type="hidden" name="linha_{{ d.id }}" value="1">
+        <input type="checkbox" name="incluir_{{ d.id }}" value="1" {{ 'checked' if d.include }} aria-label="Enviar pedido para {{ d.name }}"></td>
+      <td class="draft-cert"><a class="mono" href="/certificados/detalhe?cn={{ d.cn|urlencode }}">{{ d.name }}</a>
+        <div class="small muted">expira {{ d.expiry|dt if d.expiry else '—' }} ({{ d.expiry_source }}){% if d.issuer %} · {{ d.issuer }}{% endif %}</div>
+        {% for w in d.warnings %}<div class="small warn-line">⚠ {{ w }}</div>{% endfor %}
+        {% if d.warnings and 'em curso' in d.warnings|join(' ') %}<label class="small"><input type="checkbox" name="duplicado_{{ d.id }}" value="1" {{ 'checked' if d.override_duplicate }}> criar mesmo assim</label>{% endif %}
+        {% if d.include and e.get('expiry') %}<div class="small err-line">{{ e.expiry }}</div>{% endif %}
+      </td>
+      <td>{% set k = 'ambiente' %}<select name="ambiente_{{ d.id }}" class="{{ 'invalid' if d.include and e.get(k) }}" aria-label="Ambiente"><option value=""></option>{% for x in envs %}<option {{ 'selected' if d.ambiente == x }}>{{ x }}</option>{% endfor %}</select>
+        {% if d.prefill.get(k) %}<div class="hint">{{ d.prefill[k] }}</div>{% endif %}</td>
+      <td>{% set k = 'tipo' %}<select name="tipo_{{ d.id }}" class="{{ 'invalid' if d.include and e.get(k) }}" aria-label="Tipo"><option value=""></option>{% for x in tipos %}<option {{ 'selected' if d.tipo == x }}>{{ x }}</option>{% endfor %}</select>
+        {% if d.prefill.get(k) %}<div class="hint">{{ d.prefill[k] }}</div>{% endif %}</td>
+      {% for k in ('app_id', 'responsavel', 'localizacao') %}
+      <td><input name="{{ k }}_{{ d.id }}" value="{{ d[k] }}" class="{{ 'invalid' if d.include and e.get(k) }} {{ 'narrow' if k == 'app_id' }}" aria-label="{{ FIELD_LABELS[k] }}"{% if k == 'app_id' %} inputmode="numeric"{% endif %}>
+        {% if d.include and e.get(k) %}<div class="err-line small">{{ e[k] }}</div>{% elif d.prefill.get(k) %}<div class="hint">{{ d.prefill[k] }}</div>{% endif %}</td>
+      {% endfor %}
+    </tr>
+  {% endfor %}
+  </tbody>
+</table>
+</div>
+</form>
+
+{% else %}
+{% set ind = drafts|selectattr('status', 'equalto', 'indeterminado')|list %}
+{% if ind %}<div class="note bad"><b>{{ ind|length }} pedido(s) com resultado indeterminado.</b> {{ DRAFT_HELP['indeterminado'] }}</div>{% endif %}
+<div class="card flush scroll">
+<table>
+  <thead><tr><th>Certificado</th><th>Estado</th><th>Pedido</th><th>Ambiente</th><th>Detalhe</th></tr></thead>
+  <tbody>
+  {% for d in drafts %}
+    <tr class="{{ 'faded' if d.status in ('excluido', 'nao_tentado') }}">
+      <td><a class="mono" href="/certificados/detalhe?cn={{ d.cn|urlencode }}">{{ d.name }}</a><div class="small muted">expira {{ d.expiry|dt if d.expiry else '—' }}</div></td>
+      <td><span class="tag {{ {'criado': 'tag-ok', 'falhou': 'tag-err', 'indeterminado': 'tag-err', 'a_enviar': 'tag-run', 'pendente': 'tag-run'}.get(d.status, 'tag-off') }}" title="{{ DRAFT_HELP.get(d.status, '') }}">{{ DRAFT_STATES.get(d.status, d.status) }}</span></td>
+      <td>{% if d.ticket_id %}<a class="ticket ticket-open" href="{{ ticket_url(d.ticket_id) }}" target="_blank" rel="noopener noreferrer">{{ d.ticket_id }}</a>{% else %}<span class="muted">—</span>{% endif %}</td>
+      <td class="small">{{ d.ambiente or '—' }} · {{ d.tipo or '—' }}</td>
+      <td class="small">{{ d.detail.get('motivo', '') }}{% if d.detail.get('texto') %}<details><summary>resposta do SMAX</summary><pre class="payload">{{ d.detail.texto }}</pre></details>{% endif %}{% if d.detail.get('erro') %}{{ d.detail.erro }}{% endif %}</td>
+    </tr>
+  {% endfor %}
+  </tbody>
+</table>
+</div>
+{% endif %}
+{% endblock %}

@@ -1,4 +1,4 @@
-# certwatch 0.4
+# certwatch 0.7
 
 Aplicação autónoma de gestão de certificados X.509 de uma organização. Não depende do n8n.
 
@@ -13,9 +13,10 @@ Aplicação autónoma de gestão de certificados X.509 de uma organização. Nã
 8. Reconcilia ficheiros de exportação da CA1, CA2, AVI e Azure AD colocados numa diretoria com a CMDB: certificados e segredos novos, datas alteradas e registos em falta.
 9. Identifica os certificados com renovação automática (Let's Encrypt) e só alerta quando a renovação falhou.
 10. Pede (opcional) ao Qualys SSL Labs a nota A+–F dos nomes externos, vista a partir da internet.
-11. Lê (opcional, só leitura) os pedidos de certificados do SMAX e mostra, para cada certificado, o número do pedido com link para o SMAX.
+11. Lê (opcional) os pedidos de certificados do SMAX e mostra, para cada certificado, o número do pedido com link para o SMAX.
+12. Cria (opcional) pedidos de renovação no SMAX para um certificado, para os selecionados ou para todos os de uma vista filtrada, com revisão e confirmação.
 
-Fora desta versão: abertura de tickets no SMAX, escrita na UCMDB, email.
+Fora desta versão: escrita na UCMDB, email.
 
 ---
 
@@ -181,7 +182,7 @@ Na execução diária são avaliados até `CERTWATCH_SSLLABS_MAX_HOSTS` nomes ex
 
 **Termos da Qualys:** o uso é gratuito para testar a própria infraestrutura; o uso comercial (por exemplo, incluir a avaliação num produto vendido) exige autorização expressa da Qualys, e os resultados não podem ser publicados sem autorização do dono do site.
 
-## 7. Pedidos no SMAX (só leitura)
+## 7. Pedidos no SMAX
 
 A aplicação lê os pedidos (changes) de certificados do SMAX e liga-os a cada certificado pelo **endpoint** e pela **data de expiração** do certificado a renovar, guardados nos campos personalizados do pedido (`UserOptions`). Não cria nem altera pedidos.
 
@@ -199,6 +200,22 @@ Situações de cada certificado:
 | Sem pedido | Nenhum pedido para o nome; destacado a vermelho quando faltam 30 dias ou menos |
 
 Onde aparece: coluna **Pedido SMAX** em Certificados (filtro "Sem pedido em curso", pesquisa pelo número do pedido, exportação CSV com o link), secção **Pedidos no SMAX** no topo do detalhe de cada certificado (todos os pedidos, abertos e fechados), e no Painel ("expiram em 30 dias … destes sem pedido em curso" e coluna Pedido em "Precisam de ação"). O número do pedido abre o SMAX (`CERTWATCH_SMAX_TICKET_URL`).
+
+### 7.1 Criar pedidos de renovação
+
+Ligar com `CERTWATCH_SMAX_CREATE_ENABLED=true` e os valores do modelo de change (`CERTWATCH_SMAX_CHANGE_MODEL`, `CERTWATCH_SMAX_SERVICE`, `CERTWATCH_SMAX_DATA_DOMAINS`, ver `.env.example`). A conta SMAX tem de poder criar changes nesse modelo.
+
+1. **Escolher**: em Certificados, marcar os certificados (ou "Preparar para os N desta vista", que usa os filtros ativos), ou no detalhe de um certificado "Preparar pedido de renovação". Máximo `CERTWATCH_SMAX_CREATE_MAX` por lote.
+2. **Preencher**: a CMDB só dá nome, validade e emissor; o lote pede ambiente, tipo de certificado, Application ID, responsabilidade de instalação e localização. Os valores são sugeridos a partir do último pedido do mesmo certificado (criado aqui ou já existente no SMAX), do âmbito e dos valores por omissão, e cada sugestão diz de onde vem. "Valores para todos" preenche o lote de uma vez. Ficam desmarcados à partida os certificados com pedido em curso e os de renovação automática.
+3. **Rever**: título e payload exatos de cada pedido.
+4. **Confirmar**: só com a caixa de confirmação e o número de pedidos certo. Depois:
+   - o lote passa a "A criar" numa única operação na base de dados, por isso um duplo clique ou dois utilizadores não criam pedidos repetidos;
+   - os pedidos do SMAX são relidos e são postos de lado os certificados que entretanto ganharam um pedido em curso, ou que já tiveram um pedido criado ou indeterminado noutro lote;
+   - os pedidos são criados um de cada vez (`POST /rest/{tenant}/ems/bulk`) e o lote para no primeiro erro;
+   - **indeterminado** (erro 5xx, tempo esgotado, resposta inesperada) nunca é repetido automaticamente: o pedido pode ter sido criado e tem de ser verificado no SMAX;
+   - "Novo lote com os que falharam" repete apenas os que falharam ou não foram tentados.
+
+Tudo fica na auditoria (quem criou, confirmou e cada pedido criado). As respostas do SMAX guardadas nunca incluem o token de sessão.
 
 ## 8. Classificação
 
@@ -281,7 +298,7 @@ Os testes levantam servidores TLS reais em localhost com uma PKI de teste (chain
 Fazer o build numa máquina com acesso e transferir a imagem:
 
 ```bash
-docker compose build && docker save certwatch:0.6.0 postgres:16-alpine | gzip > certwatch-images.tar.gz
+docker compose build && docker save certwatch:0.7.0 postgres:16-alpine | gzip > certwatch-images.tar.gz
 # no servidor:
 gunzip -c certwatch-images.tar.gz | docker load && docker compose up -d --no-build
 ```

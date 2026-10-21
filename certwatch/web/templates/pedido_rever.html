@@ -1,0 +1,34 @@
+{% extends "base.html" %}
+{% block title %}Rever lote {{ b.id }}{% endblock %}
+{% block crumb %}<a href="/pedidos">Pedidos SMAX</a> › <a href="/pedidos/{{ b.id }}">Lote {{ b.id }}</a>{% endblock %}
+{% block page_title %}Rever e confirmar{% endblock %}
+{% block lede %}Estes são os pedidos exatos que vão ser criados no SMAX. Antes de enviar, a aplicação relê os pedidos do SMAX e põe de lado os que já tenham um pedido em curso. Os pedidos são criados um de cada vez e o lote para no primeiro erro.{% endblock %}
+{% block content %}
+{% if problems %}<div class="note warn"><ul class="small">{% for p in problems %}<li>{{ p }}</li>{% endfor %}</ul></div>{% endif %}
+<div class="card flush scroll">
+<table>
+  <thead><tr><th>Título do pedido</th><th>Ambiente</th><th>Tipo</th><th>Application ID</th><th>Expiração</th><th>Payload</th></tr></thead>
+  <tbody>
+  {% for d, p in previews %}
+    <tr>
+      <td>{{ p.entities[0].properties.DisplayLabel }}</td>
+      <td>{{ d.ambiente }}</td><td>{{ d.tipo }}</td><td class="mono">{{ d.app_id }}</td>
+      <td class="nowrap">{{ d.expiry|dt }}</td>
+      <td><details><summary>ver</summary><pre class="payload">{{ json_pretty(p) }}</pre></details></td>
+    </tr>
+  {% endfor %}
+  </tbody>
+</table>
+</div>
+<section class="card confirm">
+  <form method="post" action="/pedidos/{{ b.id }}/criar" class="confirm-form">
+    <input type="hidden" name="csrf" value="{{ csrf }}">
+    <input type="hidden" name="n" value="{{ previews|length }}">
+    <label><input type="checkbox" name="confirmo" value="1" required> Confirmo a criação de <b>{{ previews|length }}</b> pedido(s) no SMAX.</label>
+    <div class="confirm-actions">
+      <a class="button" href="/pedidos/{{ b.id }}">Voltar e alterar</a>
+      <button class="primary" {{ 'disabled' if problems }}>Criar {{ previews|length }} pedido(s) no SMAX</button>
+    </div>
+  </form>
+</section>
+{% endblock %}

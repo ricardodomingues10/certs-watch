@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import csv
+import json
 import io
 import time
 from contextlib import asynccontextmanager
@@ -29,7 +30,9 @@ from ..insights import STATE_LABELS, ancestry, build_inventory, check_matrix, ch
 from ..jobs import apis_configured, JOBS, enqueue
 from ..collectors.ct import SOURCE_LABELS
 from ..discovery import CT_STATE_HELP, CT_STATES, CT_TABS, TRIAGE_LABELS, classify_ct
-from ..models import ApiRecord, AuditLog, Certificate, CmdbRecord, CtCert, Endpoint, Finding, ImportFile, JobRun, ScanResult, SslLabsResult
+from ..models import ApiRecord, AuditLog, Certificate, CmdbRecord, CtCert, Endpoint, Finding, ImportFile, JobRun, ScanResult, SslLabsResult, TicketBatch
+from .. import ticket_create as tc
+from ..collectors.smax import ticket_url
 from ..tickets import TICKET_HELP, TICKET_STATES, link as ticket_link, tickets_by_endpoint
 from ..reconcile import REC_HELP, REC_STATES, REC_TABS, scan_import_dir, reconcile
 from ..trust import local_trust_files
@@ -316,6 +319,7 @@ def certificados(request: Request, q: str = "", dias: str = "", estado: str = ""
     return render(request, "certificados.html", user, rows=rows, total=total, q=q, dias=dias,
                   estado=estado, tipo=tipo, ambito=ambito, renovacao=renovacao, pedido=pedido,
                   ticket_filters=TICKET_FILTERS, smax_on=smax_configured(get_settings()),
+                  create_on=tc.can_create(get_settings()),
                   export_qs=urlencode({k: v for k, v in dict(q=q, dias=dias, estado=estado, tipo=tipo, ambito=ambito,
                                                                  renovacao=renovacao, pedido=pedido).items() if v}))
 
@@ -372,7 +376,8 @@ def certificado_detalhe(request: Request, cn: str, user: str = Depends(current_u
         ext = s.scalar(select(SslLabsResult).where(SslLabsResult.host == cn))
         effective = leaf0.not_after if leaf0 else (recs[0].valid_to if recs else None)
         smax = ticket_link(tickets_by_endpoint(s).get(cn, []), effective, settings)
-    return render(request, "certificado.html", user, smax=smax, smax_on=smax_configured(settings), cn=cn, recs=recs, inactive=inactive, eps=ep_data, apis=apis,
+    return render(request, "certificado.html", user, smax=smax, smax_on=smax_configured(settings),
+                  create_on=tc.can_create(settings), cn=cn, recs=recs, inactive=inactive, eps=ep_data, apis=apis,
                   findings=findings, ctype=ctype, scope=scope, now=now, ext=ext, ssllabs_on=bool(settings.ssllabs_email),
                   auto_renew="auto" if (auto_cmdb or auto_live) else "manual",
                   auto_src=", ".join(x for x, ok in (("CMDB", auto_cmdb), ("servidor", auto_live)) if ok),
@@ -489,6 +494,156 @@ def apis_csv(vista: str = "", q: str = "", user: str = Depends(current_user)):
                  r["api"].url, r["api"].ucmdb_id] for r in rows]
     return csv_response("apis.csv", ["Nome", "Aplicação", "Localização", "Data de expiração", "Dias",
                                      "Expirado? (CMDB)", "Registo na CMDB", "URL", "UCMDB ID"], data)
+
+
+# ------------------------------------------------------------------ pedidos SMAX (criação)
+def _batch_or_404(s, batch_id: int):
+    b = s.get(TicketBatch, batch_id)
+    if b is None:
+        raise HTTPException(404, "Lote não encontrado")
+    return b
+
+
+@app.post("/pedidos/novo")
+async def pedidos_novo(request: Request, user: str = Depends(current_user)):
+    form = await request.form()
+    check_csrf(request, form.get("csrf"))
+    settings = get_settings()
+    if not tc.can_create(settings):
+        raise HTTPException(409, " ".join(tc.config_problems(settings)))
+    if form.get("modo") == "vista":
+        rows, _ = _inventory_filtered(*(str(form.get(k) or "") for k in ("q", "dias", "estado", "tipo", "ambito",
+                                                                          "renovacao", "pedido")))
+        cns = [r["cn"] for r in rows]
+    else:
+        cns = [str(c) for c in form.getlist("cn")]
+    try:
+        with session_scope() as s:
+            batch = tc.create_batch(s, cns, user, settings)
+            s.flush()
+            bid = batch.id
+    except tc.TicketError as exc:
+        return render(request, "pedido_erro.html", user, message=str(exc), back=safe_next(str(form.get("next") or ""), "/certificados"))
+    return RedirectResponse(f"/pedidos/{bid}", status_code=303)
+
+
+@app.get("/pedidos")
+def pedidos(request: Request, user: str = Depends(current_user)):
+    settings = get_settings()
+    with session_scope() as s:
+        batches = list(s.scalars(select(TicketBatch).order_by(TicketBatch.id.desc()).limit(100)))
+        counts = {}
+        for b in batches:
+            ds = tc.drafts_of(s, b.id)
+            counts[b.id] = {"total": len(ds), "incluidos": sum(1 for d in ds if d.include),
+                            "criados": sum(1 for d in ds if d.status == "criado"),
+                            "problemas": sum(1 for d in ds if d.status in ("falhou", "indeterminado"))}
+    return render(request, "pedidos.html", user, batches=batches, counts=counts, problems=tc.config_problems(settings),
+                  BATCH_STATES=tc.BATCH_STATES)
+
+
+@app.get("/pedidos/{batch_id}")
+def pedido_lote(request: Request, batch_id: int, user: str = Depends(current_user)):
+    settings = get_settings()
+    tc.mark_stale(batch_id)
+    with session_scope() as s:
+        b = _batch_or_404(s, batch_id)
+        drafts = tc.drafts_of(s, batch_id)
+        errors = {d.id: tc.validate(d, settings) for d in drafts}
+    chosen = [d for d in drafts if d.include]
+    return render(request, "pedido_lote.html", user, b=b, drafts=drafts, errors=errors,
+                  n_incl=len(chosen), n_ok=sum(1 for d in chosen if not errors[d.id]),
+                  envs=list(settings.smax_env_codes), tipos=settings.smax_type_options,
+                  FIELDS=tc.FIELDS, FIELD_LABELS=tc.FIELD_LABELS, BATCH_STATES=tc.BATCH_STATES,
+                  DRAFT_STATES=tc.DRAFT_STATES, DRAFT_HELP=tc.DRAFT_HELP, problems=tc.config_problems(settings),
+                  ticket_url=lambda i: ticket_url(settings, i))
+
+
+@app.post("/pedidos/{batch_id}/guardar")
+async def pedido_guardar(request: Request, batch_id: int, user: str = Depends(current_user)):
+    form = await request.form()
+    check_csrf(request, form.get("csrf"))
+    try:
+        with session_scope() as s:
+            b = _batch_or_404(s, batch_id)
+            tc.update_drafts(s, b, {k: str(v) for k, v in form.items()}, get_settings())
+    except tc.TicketError as exc:
+        raise HTTPException(409, str(exc))
+    dest = f"/pedidos/{batch_id}/rever" if form.get("acao") == "rever" else f"/pedidos/{batch_id}"
+    return RedirectResponse(dest, status_code=303)
+
+
+@app.post("/pedidos/{batch_id}/aplicar")
+async def pedido_aplicar(request: Request, batch_id: int, user: str = Depends(current_user)):
+    form = await request.form()
+    check_csrf(request, form.get("csrf"))
+    try:
+        with session_scope() as s:
+            b = _batch_or_404(s, batch_id)
+            tc.apply_all(s, b, {k: str(form.get(k) or "") for k in tc.FIELDS}, only_empty=form.get("so_vazios") == "1")
+    except tc.TicketError as exc:
+        raise HTTPException(409, str(exc))
+    return RedirectResponse(f"/pedidos/{batch_id}", status_code=303)
+
+
+@app.get("/pedidos/{batch_id}/rever")
+def pedido_rever(request: Request, batch_id: int, user: str = Depends(current_user)):
+    settings = get_settings()
+    with session_scope() as s:
+        b = _batch_or_404(s, batch_id)
+        drafts = [d for d in tc.drafts_of(s, batch_id) if d.include]
+    if b.status != "rascunho":
+        return RedirectResponse(f"/pedidos/{batch_id}", status_code=303)
+    if not drafts or any(tc.validate(d, settings) for d in drafts):
+        return RedirectResponse(f"/pedidos/{batch_id}", status_code=303)
+    previews = [(d, tc.build_payload(d, settings)) for d in drafts]
+    return render(request, "pedido_rever.html", user, b=b, previews=previews, problems=tc.config_problems(settings),
+                  json_pretty=lambda o: json.dumps(o, ensure_ascii=False, indent=2))
+
+
+@app.post("/pedidos/{batch_id}/criar")
+def pedido_criar(request: Request, batch_id: int, csrf: str = Form(""), confirmo: str = Form(""), n: str = Form(""),
+                 user: str = Depends(current_user)):
+    check_csrf(request, csrf)
+    settings = get_settings()
+    with session_scope() as s:
+        _batch_or_404(s, batch_id)
+        expected = sum(1 for d in tc.drafts_of(s, batch_id) if d.include)
+    if confirmo != "1" or n != str(expected):
+        raise HTTPException(400, "Confirmação em falta ou o número de pedidos mudou entretanto; reveja o lote.")
+    try:
+        tc.start(batch_id, user, settings)
+    except tc.TicketError as exc:
+        return render(request, "pedido_erro.html", user, message=str(exc), back=f"/pedidos/{batch_id}")
+    tc.execute_in_background(batch_id, user, settings)
+    invalidate_nav()
+    return RedirectResponse(f"/pedidos/{batch_id}", status_code=303)
+
+
+@app.post("/pedidos/{batch_id}/cancelar")
+def pedido_cancelar(request: Request, batch_id: int, csrf: str = Form(""), user: str = Depends(current_user)):
+    check_csrf(request, csrf)
+    with session_scope() as s:
+        b = _batch_or_404(s, batch_id)
+        if b.status != "rascunho":
+            raise HTTPException(409, "Só um rascunho pode ser cancelado.")
+        b.status, b.finished_at = "cancelado", utcnow()
+        audit(s, user, "pedidos.lote_cancelado", f"lote {batch_id}")
+    return RedirectResponse("/pedidos", status_code=303)
+
+
+@app.post("/pedidos/{batch_id}/repetir")
+def pedido_repetir(request: Request, batch_id: int, csrf: str = Form(""), user: str = Depends(current_user)):
+    check_csrf(request, csrf)
+    try:
+        with session_scope() as s:
+            b = _batch_or_404(s, batch_id)
+            new = tc.retry_batch(s, b, user, get_settings())
+            s.flush()
+            nid = new.id
+    except tc.TicketError as exc:
+        return render(request, "pedido_erro.html", user, message=str(exc), back=f"/pedidos/{batch_id}")
+    return RedirectResponse(f"/pedidos/{nid}", status_code=303)
 
 
 @app.get("/findings")

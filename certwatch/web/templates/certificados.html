@@ -40,14 +40,27 @@
   {% if q or dias or estado or tipo or ambito or renovacao or pedido %}<a href="/certificados">limpar filtros</a>{% endif %}
 </form>
 
+{% if create_on %}
+<form method="post" action="/pedidos/novo" id="selecao">
+<input type="hidden" name="csrf" value="{{ csrf }}">
+<input type="hidden" name="next" value="/certificados{{ '?' ~ export_qs if export_qs }}">
+{% for k, v in [('q', q), ('dias', dias), ('estado', estado), ('tipo', tipo), ('ambito', ambito), ('renovacao', renovacao), ('pedido', pedido)] %}<input type="hidden" name="{{ k }}" value="{{ v }}">{% endfor %}
+<div class="selbar">
+  <span>Pedidos SMAX: <b data-sel-count>0</b> selecionado(s)</span>
+  <span class="grow"></span>
+  <button name="modo" value="selecionados">Preparar para os selecionados</button>
+  <button name="modo" value="vista" {{ 'disabled' if not rows }}>Preparar para os {{ rows|length }} desta vista</button>
+</div>
+{% endif %}
 <div class="card flush scroll">
 <table>
   <thead>
-    <tr><th class="th-state">Estado</th><th>Certificado</th><th class="opt">Tipo</th><th class="opt">Âmbito</th><th class="opt-s">Situação</th><th>Prazo</th>{% if smax_on %}<th>Pedido SMAX</th>{% endif %}<th class="opt">Emissor</th><th class="opt" title="{{ AUTO_RENEW_HELP['auto'] }}">Renovação automática</th></tr>
+    <tr>{% if create_on %}<th class="th-check"><input type="checkbox" data-check-all aria-label="Selecionar todos"></th>{% endif %}<th class="th-state">Estado</th><th>Certificado</th><th class="opt">Tipo</th><th class="opt">Âmbito</th><th class="opt-s">Situação</th><th>Prazo</th>{% if smax_on %}<th>Pedido SMAX</th>{% endif %}<th class="opt">Emissor</th><th class="opt" title="{{ AUTO_RENEW_HELP['auto'] }}">Renovação automática</th></tr>
   </thead>
   <tbody>
   {% for r in rows %}
     <tr>
+      {% if create_on %}<td class="td-check"><input type="checkbox" name="cn" value="{{ r.cn }}" aria-label="Selecionar {{ r.common_name }}"></td>{% endif %}
       <td>{{ state(r.state) }}</td>
       <td><a href="/certificados/detalhe?cn={{ r.cn|urlencode }}">{{ r.common_name }}</a>
         <div class="small muted opt-s">{% if r.in_cmdb %}CMDB{% if r.registos > 1 %} ({{ r.registos }} registos){% endif %}{% endif %}{% if r.apis %}{{ ' · ' if r.in_cmdb }}API: {{ r.apis|join(', ') }}{% endif %}{% if not r.in_cmdb and not r.apis %}adicionado à mão{% endif %}</div></td>
@@ -60,9 +73,10 @@
       <td class="opt">{% if r.renovacao == 'auto' %}<span class="tag tag-ok" title="{{ AUTO_RENEW_HELP['auto'] }} Detetado em: {{ r.renovacao_fonte }}.">Sim</span>{% else %}<span class="muted" title="{{ AUTO_RENEW_HELP['manual'] }}">Não</span>{% endif %}</td>
     </tr>
   {% else %}
-    <tr><td colspan="9" class="muted">Sem resultados.</td></tr>
+    <tr><td colspan="10" class="muted">Sem resultados.</td></tr>
   {% endfor %}
   </tbody>
 </table>
 </div>
+{% if create_on %}</form>{% endif %}
 {% endblock %}
