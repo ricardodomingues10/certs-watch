@@ -171,10 +171,18 @@ Resultados: **novo** (não existe na CMDB), **data mais recente** (renovado; atu
 
 Página **Atualizar a CMDB**. Faz o mesmo que o workflow n8n "Reconciliação de Certificados", com cliques:
 
-1. **Fontes**: CA1, CA2 e AVI (`CERTWATCH_FINAL_SOURCES`). Usa o ficheiro mais recente de cada fonte, seja o da diretoria `import/` (mesmos prefixos da reconciliação) ou o carregado na página.
+1. **Fontes**: CA1, CA2 e AVI (`CERTWATCH_FINAL_SOURCES`). Usa o ficheiro mais recente de cada fonte, seja o da diretoria `import/` (mesmos prefixos da reconciliação) ou o carregado na página. Entram também os **certificados encontrados na internet** (`CERTWATCH_FINAL_CT=true`), como fonte `INTERNET`, depois do AVI:
+   - por nome, só o mais recente ainda válido;
+   - o emissor e o número de série são os do certificado;
+   - os marcados "Ignorar" na triagem ficam de fora.
 2. **Gerar ficheiros**: lê a CMDB pela REST API (o TQL de `CERTWATCH_UCMDB_TQL`) com **todos** os atributos e aplica as regras do workflow. A página mostra o resultado: alterações (antes → depois), certificados novos, decisões da verificação no servidor e relatório de erros.
-3. **Publicar na pasta de rede**: escreve os três ficheiros na pasta, depois de confirmação. O que lá estava fica guardado no certwatch e pode ser descarregado. Só a geração mais recente pode ser publicada, e só se não estiver bloqueada.
-4. **Comparar com a CMDB**: compara um CMDB_Final (de uma geração, o que está na pasta de rede ou um carregado, incluindo o do n8n) com a CMDB atual, linha a linha, pelo Global Id ou, nas linhas novas, pelo CommonName. Mostra as diferenças de data de validade (ao dia), Issuer e IssuerName. Antes de publicar, mostra o que vai mudar. Depois de a UCMDB importar o `certs_update`, mostra o que ficou por aplicar.
+3. **Escolher o que entra**: no separador **Alterações**, cada alteração tem uma caixa **Incluir**.
+   - Ao excluir uma linha nova, ela sai do Excel e dos CSV; ao excluir uma linha alterada, ela volta ao que está na CMDB.
+   - "Guardar seleção" refaz os três ficheiros e volta a validá-los. Excluir um certificado novo sem emissor desbloqueia os CSV.
+   - A escolha fica guardada para as gerações seguintes (mesmo CommonName e mesma nova data).
+   - Por omissão, as alterações vindas da internet só vêm incluídas se o certificado estiver marcado "Adicionar à CMDB" na página **Na internet**.
+4. **Publicar na pasta de rede**: escreve os três ficheiros na pasta, depois de confirmação. O que lá estava fica guardado no certwatch e pode ser descarregado. Só a geração mais recente pode ser publicada, e só se não estiver bloqueada.
+5. **Comparar com a CMDB**: compara um CMDB_Final (de uma geração, o que está na pasta de rede ou um carregado, incluindo o do n8n) com a CMDB atual, linha a linha, pelo Global Id ou, nas linhas novas, pelo CommonName. Mostra as diferenças de data de validade (ao dia), Issuer e IssuerName. Antes de publicar, mostra o que vai mudar. Depois de a UCMDB importar o `certs_update`, mostra o que ficou por aplicar.
 
 **Regras**: são as do workflow.
 - Datas ao dia, sem trocar dia e mês.

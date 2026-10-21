@@ -16,7 +16,7 @@
   <li class="{{ 'is-bad' if missing else 'is-ok' }}">
     <h3>Fontes</h3>
     <span class="st">{% if missing %}Falta {{ missing|join(', ') }}{% else %}{{ inputs|length }} de {{ settings.final_sources|length }} ficheiros{% endif %}</span>
-    <span class="sub">{% for src in settings.final_sources %}{{ src }}{% if inputs.get(src) %}: {{ inputs[src].quando|dt }}{% endif %}{{ ' · ' if not loop.last }}{% endfor %}</span>
+    <span class="sub">{% for src in settings.final_sources %}{{ src }}{% if inputs.get(src) %}: {{ inputs[src].quando|dt }}{% endif %}{{ ' · ' if not loop.last }}{% endfor %}{% if ct and ct.validas %} · internet: {{ ct.validas }}{% endif %}</span>
   </li>
   <li class="{{ 'is-ok' if cmdb_at else 'is-warn' }}">
     <h3>CMDB</h3>
@@ -54,7 +54,17 @@
         <button>Carregar</button></form></td>
     </tr>
     {% endfor %}
+    {% if ct is not none %}
+    <tr>
+      <td><b>Internet</b><div class="small muted">Certificate Transparency</div></td>
+      <td>{% if ct.validas %}<b>{{ ct.validas }}</b> certificado{{ 's' if ct.validas != 1 }} válido{{ 's' if ct.validas != 1 }}
+          <div class="small muted">{{ ct.triagem.adicionar }} marcado{{ 's' if ct.triagem.adicionar != 1 }} "Adicionar à CMDB", {{ ct.triagem.por_triar }} por triar, {{ ct.triagem.investigar }} a investigar{{ ', ' ~ ct.ignorados_na_triagem ~ ' ignorados' if ct.ignorados_na_triagem }}</div>
+          {% else %}<span class="muted small">Ainda não há certificados encontrados na internet.</span>{% endif %}</td>
+      <td class="small"><a href="/descoberta">Triar em Na internet</a></td>
+    </tr>
+    {% endif %}
   </table></div>
+  {% if ct is not none %}<p class="small muted">Os certificados da internet entram como fonte (o mais recente de cada nome; os marcados "Ignorar" ficam de fora). Só os marcados "Adicionar à CMDB" vêm incluídos por omissão; os outros aparecem na geração para escolher.</p>{% endif %}
   {% set sem_emissor = [] %}{% for k in ('CA1', 'CA2') if k in issuers and not issuers[k] %}{% set _ = sem_emissor.append(k) %}{% endfor %}
   {% if sem_emissor %}<p class="small">Defina o emissor no <span class="mono">.env</span>, por exemplo <span class="mono">CERTWATCH_IMPORT_ISSUERS=CA1=…;CA2=…</span>, com o mesmo texto que o workflow usa para os certificados novos.</p>{% endif %}
 </section>
@@ -113,6 +123,8 @@
     <li>Se a fonte tiver uma data anterior à da CMDB, decide o certificado que o servidor apresenta na porta 443 (verificação do certwatch com menos de {{ settings.final_live_max_age_h }} h, ou ligação na hora). Sem resposta, ou num wildcard, a CMDB não é alterada.</li>
     <li>A Description regista o que mudou ("{{ settings.final_description }} - Data de expiracao alterado de … para …").</li>
     <li>Os CSV levam só as linhas novas e alteradas, com separador |, CRLF e UTF-8 sem BOM. São recusados se um certificado novo não tiver Issuer, IssuerName e SerialNumber, ou se IssuerName + SerialNumber se repetir.</li>
+    <li>Certificados encontrados na internet: fonte extra, depois do AVI. Por nome, só o mais recente ainda válido; o emissor é o do certificado. Só os marcados "Adicionar à CMDB" vêm incluídos por omissão.</li>
+    <li>Cada alteração pode ser excluída na geração; a escolha fica guardada para as gerações seguintes (mesmo CommonName e mesma data).</li>
     <li>Diferenças em relação ao workflow: uma data vazia na fonte vai para o relatório de erros; ValidTo e SerialNumber só contam como alterados se mudarem de facto.</li>
   </ul>
 </details>

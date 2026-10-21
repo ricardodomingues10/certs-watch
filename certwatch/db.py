@@ -97,6 +97,7 @@ _ADDED_COLUMNS = [
     ("smax_tickets", "service_component", "VARCHAR(64) NOT NULL DEFAULT ''"),
     ("ticket_drafts", "via", "JSON"),
     ("ticket_drafts", "sites", "JSON"),
+    ("final_runs", "state", "BYTEA"),
 ]
 
 

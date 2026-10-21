@@ -177,6 +177,7 @@ class Settings:
 
     # CMDB final (CMDB_Final.xlsx e certs_update*.csv) e publicação na pasta de rede
     final_sources: list[str] = field(default_factory=lambda: ["CA1", "CA2", "AVI"])
+    final_ct: bool = True                          # incluir os certificados encontrados na internet
     final_enrich: str = "auto"                     # auto | query | ci | off
     final_header_prefix: str = "[Digital Certificate] : "
     final_description: str = "Changed with n8n"
@@ -286,6 +287,7 @@ class Settings:
             admin_password=_secret("admin_password", "CERTWATCH_ADMIN_PASSWORD"),
             cookie_secure=_env("CERTWATCH_COOKIE_SECURE", "false").lower() == "true",
             final_sources=[x.upper() for x in _str_list(_env("CERTWATCH_FINAL_SOURCES", "CA1,CA2,AVI"))],
+            final_ct=_env("CERTWATCH_FINAL_CT", "true").lower() != "false",
             final_enrich=_env("CERTWATCH_FINAL_ENRICH", "auto").lower(),
             final_header_prefix=_env("CERTWATCH_FINAL_HEADER_PREFIX", "[Digital Certificate] : "),
             final_description=_env("CERTWATCH_FINAL_DESCRIPTION", "Changed with n8n"),

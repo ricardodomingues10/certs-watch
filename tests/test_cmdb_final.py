@@ -389,8 +389,15 @@ def test_web_flow(settings, monkeypatch):
         assert c.get(f"{url}/ficheiro/xlsx", auth=AUTH).content[:2] == b"PK"
         for what in ("alteracoes", "erros", "servidor", "colunas"):
             assert c.get(f"{url}/exportar/{what}", auth=AUTH).status_code == 200
-        # publicar: sem confirmação é recusado; com confirmação escreve na pasta
+        # excluir uma alteração e voltar a incluí-la
         rid = url.rsplit("/", 1)[1]
+        assert 'name="incluir"' in c.get(url, auth=AUTH).text
+        r = c.post(f"{url}/selecao", data={"csrf": token, "k": ["1", "2"], "incluir": ["2"]}, auth=AUTH)
+        assert r.status_code == 200 and "7 alterações" in r.text and "1 excluída" in r.text
+        r = c.post(f"{url}/selecao", data={"csrf": token, "k": ["1"], "incluir": ["1"]}, auth=AUTH)
+        assert "8 alterações" in r.text
+        assert c.post(f"{url}/selecao", data={"csrf": token, "k": ["x"]}, auth=AUTH).status_code == 400
+        # publicar: sem confirmação é recusado; com confirmação escreve na pasta
         assert c.post(f"{url}/publicar", data={"csrf": token, "ficheiro": ["csv"]}, auth=AUTH).status_code == 400
         r = c.post(f"{url}/publicar", data={"csrf": token, "ficheiro": ["xlsx", "csv", "csv_sem"], "confirmo": "1"}, auth=AUTH)
         assert r.status_code == 200 and "nada a substituir" in r.text
@@ -456,3 +463,90 @@ def test_fetch_cmdb_completes_attributes(settings):
     assert table.diag["metodo"] == "ci" and calls["ci"] == 1 + len(CIS)
     assert table.rows[1][P + "Aplicação"] == "Portal"
     assert any("topologyQuery" in a for a in table.diag["avisos"])
+
+
+def _ct(session, name, not_after, triage="por_triar", serial="C1", issuer="R11", names=None):
+    from certwatch.models import CtCert
+    session.add(CtCert(primary_name=name, names=names or [name], issuer_cn=issuer, serial_hex=serial,
+                       not_before=not_after - (date(2027, 1, 1) - date(2026, 10, 1)),
+                       not_after=not_after, triage=triage, domain="exemplo.pt"))
+
+
+def _fetch(st):
+    import copy
+    return cf.build_cmdb_table(copy.deepcopy(CIS), st), []
+
+
+def test_internet_source_and_selection(settings):
+    (settings.import_dir / "ca1.csv").write_bytes(CA1)
+    (settings.import_dir / "ca2.xlsx").write_bytes(ca2_xlsx())
+    (settings.import_dir / "avi.csv").write_bytes(AVI)
+    utc = timezone.utc
+    with session_scope() as s:
+        _ct(s, "ct-novo.exemplo.pt", datetime(2027, 8, 1, 10, tzinfo=utc), "adicionar", "ab01", names=["ct-novo.exemplo.pt", "alt.exemplo.pt"])
+        _ct(s, "ct-triar.exemplo.pt", datetime(2027, 8, 2, tzinfo=utc), "por_triar", "ab02")
+        _ct(s, "ct-triar.exemplo.pt", datetime(2027, 2, 2, tzinfo=utc), "por_triar", "ab00")      # mais antigo: ignorado
+        _ct(s, "ct-ignorado.exemplo.pt", datetime(2027, 8, 3, tzinfo=utc), "ignorar", "ab03")
+        _ct(s, "velho.exemplo.pt", datetime(2025, 8, 3, tzinfo=utc), "adicionar", "ab04")          # expirado
+        _ct(s, "igual.exemplo.pt", datetime(2027, 12, 1, tzinfo=utc), "por_triar", "ab05")        # renovação de um que existe
+        items, info = cf.ct_source(s, settings, TODAY)
+        assert sorted(i.cn for i in items) == ["ct-novo.exemplo.pt", "ct-triar.exemplo.pt", "igual.exemplo.pt"]
+        assert info["triagem"] == {"adicionar": 1, "por_triar": 2, "investigar": 0} and info["ignorados_na_triagem"] == 1
+        assert next(i for i in items if i.cn == "ct-triar.exemplo.pt").serial == "AB02"
+        run_id = cf.start_run(s, "admin").id
+    cf.generate(run_id, settings, fetch=_fetch, live_factory=lambda s, st: live, today=TODAY)
+    with session_scope() as s:
+        run = s.get(FinalRun, run_id)
+        assert run.status == "pronto", run.error
+        ch = {c["cn"]: c for c in run.changes}
+        assert ch["ct-novo.exemplo.pt"]["incluir"] and ch["ct-novo.exemplo.pt"]["fonte"] == "INTERNET"
+        assert not ch["ct-triar.exemplo.pt"]["incluir"] and "Adicionar à CMDB" in ch["ct-triar.exemplo.pt"]["porque"]
+        assert ch["igual.exemplo.pt"]["tipo"] == "alterado" and not ch["igual.exemplo.pt"]["incluir"]
+        assert "ct-ignorado.exemplo.pt" not in ch and run.inputs["INTERNET"]["validas"] == 3
+        csv = run.csv.decode()
+        assert "ct-novo.exemplo.pt" in csv and "ct-triar.exemplo.pt" not in csv and "igual.exemplo.pt" not in csv
+        assert '"R11"|"R11"|"AB01"' in csv and '"INTERNET"' in csv                         # emissor do certificado
+        assert run.summary["novos"] == 5 and run.summary["novos_total"] == 6 and run.summary["excluidos"] == 2
+        final = {r["cn"]: r for r in cf.read_final_xlsx(run.xlsx)}
+        assert "ct-triar.exemplo.pt" not in final and final["igual.exemplo.pt"]["cor"] is None
+        assert final["igual.exemplo.pt"]["validto"] == "01-03-2027 12:00:00"                   # ficou como na CMDB
+
+        # incluir o "por triar" e excluir a renovação de renovado.exemplo.pt
+        keys = {c["cn"]: c["chave"] for c in run.changes}
+        shown = [keys["ct-triar.exemplo.pt"], keys["renovado.exemplo.pt"]]
+        assert cf.apply_selection(s, run, shown, {keys["ct-triar.exemplo.pt"]}, "ana") == 2
+        assert cf.apply_selection(s, run, shown, {keys["ct-triar.exemplo.pt"]}, "ana") == 0       # nada mudou
+        csv = run.csv.decode()
+        assert "ct-triar.exemplo.pt" in csv and "renovado.exemplo.pt" not in csv
+        final = {r["cn"]: r for r in cf.read_final_xlsx(run.xlsx)}
+        assert final["renovado.exemplo.pt"]["cor"] is None and final["renovado.exemplo.pt"]["validto"] == "10-11-2026 12:00:00"
+        assert run.summary["alterados"] == 3 and run.summary["excluidos"] == 2
+
+    # a escolha fica para a geração seguinte
+    with session_scope() as s:
+        run2 = cf.start_run(s, "admin").id
+    cf.generate(run2, settings, fetch=_fetch, live_factory=lambda s, st: live, today=TODAY)
+    with session_scope() as s:
+        run = s.get(FinalRun, run2)
+        ch = {c["cn"]: c for c in run.changes}
+        assert ch["ct-triar.exemplo.pt"]["incluir"] and "incluída por ana" in ch["ct-triar.exemplo.pt"]["porque"]
+        assert not ch["renovado.exemplo.pt"]["incluir"]
+        old = s.get(FinalRun, run_id)
+        with pytest.raises(cf.FinalError):                      # só a mais recente pode ser alterada
+            cf.apply_selection(s, old, [0], set(), "ana")
+
+
+def test_exclusion_unblocks(settings):
+    (settings.import_dir / "ca1.csv").write_bytes(CA1)
+    (settings.import_dir / "ca2.xlsx").write_bytes(ca2_xlsx())
+    (settings.import_dir / "avi.csv").write_bytes(AVI)
+    st = replace(settings, import_issuers={"CA1": "Corp CA01"}, final_ct=False)    # CA2 sem emissor -> bloqueado
+    with session_scope() as s:
+        run_id = cf.start_run(s, "admin").id
+    cf.generate(run_id, st, fetch=_fetch, live_factory=lambda s, st: live, today=TODAY)
+    with session_scope() as s:
+        run = s.get(FinalRun, run_id)
+        assert run.status == "bloqueado" and run.csv is None
+        bad = [c["chave"] for c in run.changes if c["fonte"] == "CA2"]
+        cf.apply_selection(s, run, bad, set(), "ana")
+        assert run.status == "pronto" and run.csv and not run.validation

@@ -369,6 +369,21 @@ class FinalRun(Base):
     csv_sem: Mapped[bytes | None] = mapped_column(LargeBinary, nullable=True, deferred=True)
     published_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     published_by: Mapped[str] = mapped_column(String(128), default="")
+    # CMDB reconstruída (JSON comprimido) para refazer os ficheiros quando se muda a seleção
+    state: Mapped[bytes | None] = mapped_column(LargeBinary, nullable=True, deferred=True)
+
+
+class FinalDecision(Base):
+    """Escolha de incluir ou não uma alteração nos ficheiros finais. Fica para as gerações seguintes
+    (a mesma alteração = mesmo CommonName e mesma nova data de expiração)."""
+
+    __tablename__ = "final_decisions"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    key: Mapped[str] = mapped_column(String(300), unique=True, index=True)
+    include: Mapped[bool] = mapped_column(Boolean, default=True)
+    by: Mapped[str] = mapped_column(String(128), default="")
+    at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 
 
 class FinalPublish(Base):

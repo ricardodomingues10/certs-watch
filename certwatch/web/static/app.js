@@ -1,9 +1,10 @@
 // certwatch — melhorias opcionais (a aplicação funciona sem JavaScript).
 document.addEventListener("DOMContentLoaded", () => {
-  // "Selecionar todos" numa tabela com checkboxes name="cn"
+  // "Selecionar todos" numa tabela com checkboxes (name="cn" ou o indicado em data-check-all)
   document.querySelectorAll("input[data-check-all]").forEach((all) => {
     const form = all.closest("form");
-    const boxes = () => Array.from(form.querySelectorAll('input[type=checkbox][name="cn"]'));
+    const name = all.dataset.checkAll || "cn";
+    const boxes = () => Array.from(form.querySelectorAll(`input[type=checkbox][name="${name}"]`));
     const count = form.querySelector("[data-sel-count]");
     const sync = () => {
       const n = boxes().filter((b) => b.checked).length;

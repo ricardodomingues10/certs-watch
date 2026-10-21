@@ -3,7 +3,7 @@
 {% block title %}Na internet{% endblock %}
 {% block crumb %}Descoberta{% endblock %}
 {% block page_title %}Certificados encontrados na internet{% endblock %}
-{% block lede %}Todas as autoridades públicas publicam os certificados que emitem em registos abertos (Certificate Transparency). Aqui aparecem os emitidos para os domínios da organização, comparados com a CMDB. Decida para cada um: adicionar à CMDB, investigar ou ignorar.{% endblock %}
+{% block lede %}Todas as autoridades públicas publicam os certificados que emitem em registos abertos (Certificate Transparency). Aqui aparecem os emitidos para os domínios da organização, comparados com a CMDB. Decida para cada um: adicionar à CMDB, investigar ou ignorar. Os marcados "Adicionar à CMDB" entram incluídos em <a href="/cmdb-final">Atualizar a CMDB</a>; os ignorados ficam de fora.{% endblock %}
 {% block actions %}
 {% if domains %}
 <form method="post" action="/jobs/ingest_ct"><input type="hidden" name="csrf" value="{{ csrf }}"><input type="hidden" name="next" value="/jobs"><button class="primary">Procurar agora</button></form>

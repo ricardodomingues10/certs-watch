@@ -100,7 +100,7 @@ templates.env.globals.update(
     LAYERS=LAYERS, MONTHS=MONTHS, JOB_LABELS=JOB_LABELS, JOB_HELP=JOB_HELP,
     CT_STATES=CT_STATES, CT_TABS=CT_TABS, CT_SOURCE_LABELS=SOURCE_LABELS, CT_STATE_HELP=CT_STATE_HELP, TRIAGE_LABELS=TRIAGE_LABELS,
     REC_STATES=REC_STATES, REC_TABS=REC_TABS, REC_HELP=REC_HELP,
-    FINAL_FILES=cf.FILES, FINAL_FILE_LABELS=cf.FILE_LABELS, LIVE_LABELS=cf.LIVE_LABELS,
+    FINAL_FILES=cf.FILES, FINAL_FILE_LABELS=cf.FILE_LABELS, LIVE_LABELS=cf.LIVE_LABELS, FINAL_SOURCE_LABELS=cf.SOURCE_LABELS,
     COMPARE_VIEWS=cf.COMPARE_VIEWS, COMPARE_HELP=cf.COMPARE_HELP,
 )
 
@@ -974,10 +974,11 @@ def final_page(request: Request, user: str = Depends(current_user)):
         if last_pub is not None:
             s.expunge(last_pub)
         cmdb_at = s.scalar(select(CmdbRecord.last_seen).order_by(CmdbRecord.last_seen.desc()).limit(1))
+        ct = cf.ct_source(s, settings, utcnow().astimezone(_tz()).date())[1] if settings.final_ct else None
     folder = cf.folder_status(settings)
     latest = runs[0] if runs else None
     return render(request, "final.html", user, inputs=inputs, runs=runs, latest=latest, folder=folder,
-                  last_pub=last_pub, cmdb_at=cmdb_at, settings=settings, FINAL_STATES=FINAL_STATES,
+                  last_pub=last_pub, cmdb_at=cmdb_at, settings=settings, FINAL_STATES=FINAL_STATES, ct=ct,
                   issuers={k: settings.import_issuers.get(k, "") for k in settings.final_sources})
 
 
@@ -1145,8 +1146,8 @@ def final_compare_export(origem: str = "", vista: str = "diferencas", q: str = "
 
 
 @app.get("/cmdb-final/{run_id}")
-def final_run(request: Request, run_id: int, vista: str = "alteracoes", tipo: str = "", q: str = "",
-              user: str = Depends(current_user)):
+def final_run(request: Request, run_id: int, vista: str = "alteracoes", tipo: str = "", q: str = "", fonte: str = "",
+              incluida: str = "", user: str = Depends(current_user)):
     settings = get_settings()
     vista = vista if vista in FINAL_VIEWS else "alteracoes"
     with session_scope() as s:
@@ -1160,18 +1161,26 @@ def final_run(request: Request, run_id: int, vista: str = "alteracoes", tipo: st
                                                  FinalPublishFile.previous_mtime)
                                           .where(FinalPublishFile.publish_id == p.id))) for p in pubs}
         sizes = {k: len(v) if v else 0 for k, v in (("xlsx", run.xlsx), ("csv", run.csv), ("csv_sem", run.csv_sem))}
+        can_edit = cf.editable(s, run)
         s.expunge(run)
         for p in pubs:
             s.expunge(p)
     changes = run.changes or []
+    all_changes = changes
     if tipo in ("novo", "alterado"):
         changes = [c for c in changes if c["tipo"] == tipo]
+    if fonte:
+        changes = [c for c in changes if c.get("fonte") == fonte]
+    if incluida in ("sim", "nao"):
+        changes = [c for c in changes if c.get("incluir", True) == (incluida == "sim")]
     if q:
         changes = [c for c in changes if q.lower() in (c["cn"] or "").lower() or q.lower() in (c["global_id"] or "").lower()]
     folder = cf.folder_status(settings) if run.status == "pronto" else None
     return render(request, "final_run.html", user, run=run, vista=vista, views=FINAL_VIEWS, changes=changes[:3000],
                   n_changes=len(changes), tipo=tipo, q=q, newest=newest, pubs=pubs, pub_files=pub_files, sizes=sizes,
-                  folder=folder, FINAL_STATES=FINAL_STATES, settings=settings,
+                  folder=folder, FINAL_STATES=FINAL_STATES, settings=settings, fonte=fonte, incluida=incluida,
+                  can_edit=can_edit, fontes=sorted({c.get("fonte") for c in all_changes if c.get("fonte")}),
+                  n_excl=sum(1 for c in all_changes if not c.get("incluir", True)),
                   age_min=(utcnow() - as_utc(run.created_at)).total_seconds() / 60)
 
 
@@ -1198,9 +1207,10 @@ def final_export(run_id: int, what: str, user: str = Depends(current_user)):
         changes, problems, live, columns = run.changes or [], run.problems or [], run.live or [], run.columns or {}
     if what == "alteracoes":
         return csv_response(f"cmdb-final-{run_id}-alteracoes.csv",
-                            ["Linha", "Tipo", "CommonName", "Global Id", "Fonte", "Campo", "Antes", "Depois", "Validado no servidor", "Description"],
-                            [[c["linha"], c["tipo"], c["cn"], c["global_id"], c.get("fonte", ""), f["campo"], f["antes"], f["depois"],
-                              "sim" if c["servidor"] else "", c["descricao"]]
+                            ["Linha", "Tipo", "Incluída nos ficheiros", "CommonName", "Global Id", "Fonte", "Campo", "Antes", "Depois",
+                             "Validado no servidor", "Description"],
+                            [[c["linha"] or "", c["tipo"], "sim" if c.get("incluir", True) else "não", c["cn"], c["global_id"],
+                              c.get("fonte", ""), f["campo"], f["antes"], f["depois"], "sim" if c["servidor"] else "", c["descricao"]]
                              for c in changes for f in (c.get("campos") or [{"campo": "(linha nova)", "antes": "", "depois": ""}])])
     if what == "erros":
         return csv_response(f"cmdb-final-{run_id}-erros.csv", ["Fonte", "Linha", "Referência", "CommonName", "Data", "Data na CMDB", "Erro"],
@@ -1220,6 +1230,28 @@ def final_export(run_id: int, what: str, user: str = Depends(current_user)):
         return Response(buf.getvalue().encode("utf-8"), media_type="text/csv; charset=utf-8",
                         headers={"Content-Disposition": 'attachment; filename="cmdb-colunas.csv"'})
     raise HTTPException(404)
+
+
+@app.post("/cmdb-final/{run_id}/selecao")
+async def final_selection(request: Request, run_id: int, user: str = Depends(current_user)):
+    form = await request.form()
+    check_csrf(request, form.get("csrf"))
+    try:
+        shown = [int(x) for x in form.getlist("k")]
+        chosen = {int(x) for x in form.getlist("incluir")}
+    except ValueError:
+        raise HTTPException(400, "Seleção inválida")
+    try:
+        with session_scope() as s:
+            run = _run_or_404(s, run_id)
+            n = cf.apply_selection(s, run, shown, chosen, user)
+            if n:
+                audit(s, user, "cmdb_final.selecao", f"geração {run_id}", alteradas=n,
+                      excluidas=sum(1 for c in run.changes if not c.get("incluir", True)))
+    except cf.FinalError as exc:
+        return _final_error(request, user, str(exc), f"/cmdb-final/{run_id}")
+    back = safe_next(str(form.get("next") or ""), f"/cmdb-final/{run_id}")
+    return RedirectResponse(back, status_code=303)
 
 
 @app.post("/cmdb-final/{run_id}/publicar")

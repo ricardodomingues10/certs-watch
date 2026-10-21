@@ -23,6 +23,7 @@ Diferenças deliberadas em relação ao workflow (para não estragar a CMDB):
 """
 from __future__ import annotations
 
+import gzip
 import hashlib
 import io
 import json
@@ -43,11 +44,15 @@ from sqlalchemy.orm import Session
 
 from .config import Settings
 from .db import as_utc, session_scope, utcnow
-from .models import Certificate, CmdbRecord, Endpoint, FinalInput, FinalPublish, FinalPublishFile, FinalRun, ScanResult
+from .models import (Certificate, CmdbRecord, CtCert, Endpoint, FinalDecision, FinalInput, FinalPublish, FinalPublishFile,
+                     FinalRun, ScanResult)
 from .normalize import norm_host, norm_serial
 from .reconcile import ALLOWED_EXT, _fix_mojibake, map_columns, norm_header, read_table_bytes, source_for
 
 log = logging.getLogger(__name__)
+
+INTERNET = "INTERNET"          # fonte: certificados encontrados na internet (Certificate Transparency)
+SOURCE_LABELS = {INTERNET: "Internet (CT)"}
 
 FILES = {"xlsx": "CMDB_Final.xlsx", "csv": "certs_update.csv", "csv_sem": "certs_update_sem_cabecalho.csv"}
 FILE_LABELS = {"xlsx": "CMDB final (Excel, todas as linhas)", "csv": "Atualização UCMDB (com cabeçalho)",
@@ -478,6 +483,7 @@ class SourceItem:
     date_status: str = "OK"
     raw_date: str = ""
     note: str = ""
+    triage: str = ""         # só na fonte INTERNET: triagem feita na página "Na internet"
 
 
 def read_source(source: str, filename: str, data: bytes, today: date) -> tuple[list[SourceItem], dict]:
@@ -529,6 +535,38 @@ def read_source(source: str, filename: str, data: bytes, today: date) -> tuple[l
     for x in out:
         if not x.keep:
             info["descartadas"][x.drop] = info["descartadas"].get(x.drop, 0) + 1
+    return out, info
+
+
+def ct_source(session: Session, settings: Settings, today: date) -> tuple[list[SourceItem], dict]:
+    """Certificados encontrados na internet (CT) como fonte: por nome, só o mais recente ainda válido.
+    Os marcados "Ignorar" na triagem não entram."""
+    latest: dict[str, CtCert] = {}
+    ignored = 0
+    for c in session.scalars(select(CtCert).where(CtCert.not_after.is_not(None))):
+        if c.triage == "ignorar":
+            ignored += 1
+            continue
+        name = (c.primary_name or (c.names or [""])[0] or "").strip().lower()
+        if not name:
+            continue
+        cur = latest.get(name)
+        if cur is None or as_utc(c.not_after) > as_utc(cur.not_after):
+            latest[name] = c
+    out = []
+    for n, (name, c) in enumerate(sorted(latest.items()), start=1):
+        day = as_utc(c.not_after).date()
+        it = SourceItem(source=INTERNET, row_no=n, cn=name, day=day, serial=(c.serial_hex or "").upper(),
+                        issuer=(c.issuer_cn or "").strip(), san=", ".join(c.names or []),
+                        ref=f"CT #{c.id}", triage=c.triage or "por_triar", raw_date=day.isoformat())
+        if day < today:
+            continue                       # expirados não interessam (nem para o relatório de erros)
+        if identifier_type(name) == "OUTRO":
+            it.keep, it.drop = False, "NAO_E_DOMINIO"
+        out.append(it)
+    info = {"ficheiro": "certificados encontrados na internet", "linhas": len(out),
+            "validas": sum(1 for x in out if x.keep), "ignorados_na_triagem": ignored,
+            "triagem": {t: sum(1 for x in out if x.keep and x.triage == t) for t in ("adicionar", "por_triar", "investigar")}}
     return out, info
 
 
@@ -585,6 +623,7 @@ class Result:
     live: list[dict]
     summary: dict
     originals: dict[int, dict]
+    row_src: dict[int, dict] = field(default_factory=dict)
 
 
 def _identity(row: dict, t: CmdbTable) -> tuple[str, str | None]:
@@ -641,7 +680,8 @@ def reconcile_final(table: CmdbTable, sources: dict[str, list[SourceItem]], sett
                                  "cmdb": cmdb_date_text(it.cn), "erro": " - ".join(parts) or "OK"})
 
     # --- comparação (CA1, CA2... e depois AVI, pela ordem configurada)
-    ordered = [it for src in settings.final_sources for it in sources.get(src, []) if it.keep]
+    order = list(settings.final_sources) + [k for k in sources if k not in settings.final_sources]
+    ordered = [it for src in order for it in sources.get(src, []) if it.keep]
     enriched = []
     for it in ordered:
         cn = it.cn.lower().strip()
@@ -669,7 +709,7 @@ def reconcile_final(table: CmdbTable, sources: dict[str, list[SourceItem]], sett
     for e in falsos:
         it = e["it"]
         item = {"cn": it.cn, "day": it.day, "serial": it.serial, "issuer": it.issuer, "san": it.san,
-                "source": it.source, "live": False}
+                "source": it.source, "live": False, "triage": it.triage}
         regress = e["cmdb_day"] is not None and it.day is not None and it.day < e["cmdb_day"]
         if not regress:
             final_items.append(item)
@@ -732,6 +772,11 @@ def reconcile_final(table: CmdbTable, sources: dict[str, list[SourceItem]], sett
             return issuer_by_source[it["source"]]
         return (it["issuer"] or "").strip()
 
+    row_src: dict[int, dict] = {}
+
+    def note_src(i: int, it: dict) -> None:
+        row_src.setdefault(i, {"fonte": it["source"], "triagem": it.get("triage", "")})
+
     for it in final_items:
         cn = it["cn"].lower().strip()
         if not cn:
@@ -752,6 +797,8 @@ def reconcile_final(table: CmdbTable, sources: dict[str, list[SourceItem]], sett
                 set_field(target, H("CommonName"), it["cn"])
             set_valid_to(target, it["day"])
             set_serial(target, it["serial"])
+            if target in mods:
+                note_src(target, it)
             if it["live"]:
                 if (it["issuer"] or "").strip():
                     set_field(target, H("Issuer"), it["issuer"].strip())
@@ -760,6 +807,7 @@ def reconcile_final(table: CmdbTable, sources: dict[str, list[SourceItem]], sett
             modified.add(target)
         elif cn in new_by_cn:
             i = new_by_cn[cn]
+            note_src(i, it)
             set_valid_to(i, it["day"])
             set_serial(i, it["serial"])
             iss = resolve_issuer(it)
@@ -786,6 +834,7 @@ def reconcile_final(table: CmdbTable, sources: dict[str, list[SourceItem]], sett
             i = len(rows) - 1
             new_rows.add(i)
             new_by_cn[cn] = i
+            note_src(i, it)
             if it["live"]:
                 live_rows.add(i)
 
@@ -824,9 +873,10 @@ def reconcile_final(table: CmdbTable, sources: dict[str, list[SourceItem]], sett
     inv = {v: k for k, v in t.display.items()}
     for i in sorted(set(mods) | new_rows):
         row = rows[i]
-        entry = {"linha": i + 2, "tipo": "novo" if i in new_rows else "alterado",
+        src = row_src.get(i, {})
+        entry = {"chave": i, "linha": i + 2, "tipo": "novo" if i in new_rows else "alterado",
                  "cn": row.get(H("CommonName"), ""), "global_id": row.get(H("Global Id"), ""),
-                 "fonte": row.get(H("Localização"), "") if i in new_rows else "",
+                 "fonte": src.get("fonte", ""), "triagem": src.get("triagem", ""),
                  "servidor": i in live_rows, "descricao": row.get(H("Description"), ""),
                  "validto": row.get(H("ValidTo"), ""), "issuer": row.get(H("Issuer"), ""),
                  "issuer_name": row.get(H("IssuerName"), ""), "serial": row.get(H("SerialNumber"), "")}
@@ -846,7 +896,8 @@ def reconcile_final(table: CmdbTable, sources: dict[str, list[SourceItem]], sett
         "erros": len(problems), "fontes": src_counts, "hoje": today.isoformat(),
     }
     return Result(table=t, mods=mods, new_rows=new_rows, live_rows=live_rows, expired_rows=expired,
-                  changes=changes, problems=problems, live=live_rows_info, summary=summary, originals=originals)
+                  changes=changes, problems=problems, live=live_rows_info, summary=summary, originals=originals,
+                  row_src=row_src)
 
 
 # ------------------------------------------------------------------ saídas
@@ -930,6 +981,131 @@ def build_csv(rows: list[dict[str, str]], header: bool = True) -> bytes:
     return ("\r\n".join(lines) + "\r\n").encode("utf-8") if lines else b""
 
 
+# ------------------------------------------------------------------ seleção: incluir ou não cada alteração
+def decision_key(change: dict) -> str:
+    """A mesma alteração em gerações diferentes: mesmo CommonName e mesma nova data de expiração."""
+    day = parse_day(change.get("validto")).day
+    return f"{(change.get('cn') or '').strip().lower()}|{day.isoformat() if day else ''}"
+
+
+def default_include(change: dict, decisions: dict) -> tuple[bool, str]:
+    d = decisions.get(decision_key(change))
+    if d is not None:
+        return d.include, f"{'incluída' if d.include else 'excluída'} por {d.by} em {as_utc(d.at):%d-%m-%Y}"
+    if change.get("fonte") == INTERNET and change.get("triagem") != "adicionar":
+        return False, 'encontrado na internet e ainda não marcado "Adicionar à CMDB"'
+    return True, ""
+
+
+def pack_state(res: Result) -> bytes:
+    t = res.table
+    data = {"headers": t.headers, "display": t.display, "rows": t.rows, "ids": t.ids,
+            "originals": {str(i): res.originals[i] for i in res.mods if i not in res.new_rows},
+            "new": sorted(res.new_rows), "mods": {str(i): c for i, c in res.mods.items()},
+            "today": res.summary["hoje"]}
+    return gzip.compress(json.dumps(data, ensure_ascii=False).encode("utf-8"))
+
+
+def unpack_state(blob: bytes) -> dict:
+    return json.loads(gzip.decompress(blob).decode("utf-8"))
+
+
+@dataclass
+class Materialized:
+    table: CmdbTable
+    new_rows: set[int]
+    mods: dict[int, list[str]]
+    expired_rows: set[int]
+    line_of: dict[int, int]
+
+
+def materialize(state: dict, excluded: set[int]) -> Materialized:
+    """CMDB final sem as alterações excluídas: linhas novas excluídas saem, linhas alteradas voltam ao original."""
+    today = date.fromisoformat(state["today"])
+    new = set(state["new"])
+    mods = {int(k): v for k, v in state["mods"].items()}
+    originals = {int(k): v for k, v in state["originals"].items()}
+    rows, ids, m_new, m_mods, line_of = [], [], set(), {}, {}
+    for i, row in enumerate(state["rows"]):
+        if i in excluded:
+            if i in new:
+                continue
+            row = originals.get(i, row)
+        j = len(rows)
+        rows.append(row)
+        ids.append(state["ids"][i] if i < len(state["ids"]) else "")
+        line_of[i] = j + 2
+        if i not in excluded:
+            if i in new:
+                m_new.add(j)
+            elif i in mods:
+                m_mods[j] = mods[i]
+    display = state["display"]
+    vt = display["ValidTo"]
+    expired = {j for j, r in enumerate(rows) if (d := parse_day(r.get(vt)).day) is not None and d < today}
+    return Materialized(CmdbTable(headers=state["headers"], display=display, rows=rows, ids=ids),
+                        m_new, m_mods, expired, line_of)
+
+
+def build_outputs(state: dict, changes: list[dict]) -> tuple[bytes, bytes | None, bytes | None, list[str], dict]:
+    excluded = {c["chave"] for c in changes if not c.get("incluir", True)}
+    m = materialize(state, excluded)
+    for c in changes:
+        c["linha"] = m.line_of.get(c["chave"])
+    delta = _delta_rows(m)
+    problems = validate_delta(delta)
+    csv = csv_sem = None
+    if not problems:
+        csv, csv_sem = build_csv(delta, True), build_csv(delta, False)
+    counts = {"novos": len(m.new_rows), "alterados": len(m.mods), "excluidos": len(excluded), "delta": len(delta),
+              "final_linhas": len(m.table.rows), "expirados": len(m.expired_rows)}
+    return build_xlsx(m), csv, csv_sem, problems, counts
+
+
+def editable(session: Session, run: FinalRun) -> bool:
+    if run.status not in ("pronto", "bloqueado") or run.state is None:
+        return False
+    newest = session.scalar(select(FinalRun.id).where(FinalRun.status.in_(("pronto", "bloqueado")))
+                            .order_by(FinalRun.id.desc()).limit(1))
+    return newest == run.id
+
+
+def apply_selection(session: Session, run: FinalRun, shown: list[int], chosen: set[int], actor: str) -> int:
+    """Grava a escolha (incluir/excluir) das alterações mostradas e refaz os ficheiros. Devolve quantas mudaram."""
+    if not editable(session, run):
+        raise FinalError("Só a geração mais recente, pronta ou bloqueada, pode ser alterada. Gere de novo.")
+    changes = [dict(c) for c in (run.changes or [])]
+    by_key = {c["chave"]: c for c in changes}
+    changed = 0
+    for k in shown:
+        c = by_key.get(k)
+        if c is None:
+            continue
+        inc = k in chosen
+        if c.get("incluir", True) == inc:
+            continue
+        c["incluir"] = inc
+        c["porque"] = f"{'incluída' if inc else 'excluída'} por {actor} em {utcnow():%d-%m-%Y}"
+        changed += 1
+        key = decision_key(c)
+        d = session.scalar(select(FinalDecision).where(FinalDecision.key == key))
+        if d is None:
+            d = FinalDecision(key=key)
+            session.add(d)
+        d.include, d.by, d.at = inc, actor, utcnow()
+    if not changed:
+        return 0
+    xlsx, csv, csv_sem, problems, counts = build_outputs(unpack_state(run.state), changes)
+    run.changes = changes
+    run.xlsx, run.csv, run.csv_sem = xlsx, csv, csv_sem
+    run.validation = problems
+    run.status = "bloqueado" if problems else "pronto"
+    run.summary = {**(run.summary or {}), **counts}
+    if run.published_at is not None:          # os ficheiros mudaram depois de publicados
+        run.published_at, run.published_by = None, ""
+    return changed
+
+
 # ------------------------------------------------------------------ verificação no servidor
 def make_live_lookup(session: Session, settings: Settings) -> LiveLookup:
     """Certificado apresentado em host:443: usa o scan do certwatch se for recente, senão liga-se na hora."""
@@ -989,25 +1165,30 @@ def generate(run_id: int, settings: Settings, fetch: Callable | None = None,
                 sources[src] = items
                 src_info[src] = {**rinfo, "origem": info["origem"], "quando": info["quando"].isoformat(),
                                  "sha256": hashlib.sha256(data).hexdigest()}
+            if settings.final_ct:
+                ct_items, ct_info = ct_source(s, settings, today)
+                if ct_items:
+                    sources[INTERNET] = ct_items
+                    src_info[INTERNET] = {**ct_info, "origem": "internet"}
             res = reconcile_final(table, sources, settings, (live_factory or make_live_lookup)(s, settings), today)
-        xlsx = build_xlsx(res)
-        delta = _delta_rows(res)
-        problems = validate_delta(delta)
+            decisions = {d.key: d for d in s.scalars(select(FinalDecision))}
+            for c in res.changes:
+                c["incluir"], c["porque"] = default_include(c, decisions)
+        state = pack_state(res)
+        xlsx, csv, csv_sem, problems, counts = build_outputs(unpack_state(state), res.changes)
         with session_scope() as s:
             run = s.get(FinalRun, run_id)
-            run.summary = {**res.summary, "delta": len(delta)}
+            run.summary = {**res.summary, **counts, "novos_total": len(res.new_rows),
+                           "alterados_total": len([i for i in res.mods if i not in res.new_rows])}
             run.inputs = src_info
             run.columns = table.diag
             run.changes = res.changes
             run.problems = res.problems[:5000]
             run.live = res.live
             run.validation = problems
-            run.xlsx = xlsx
-            if problems:
-                run.status = "bloqueado"
-            else:
-                run.csv, run.csv_sem = build_csv(delta, True), build_csv(delta, False)
-                run.status = "pronto"
+            run.state = state
+            run.xlsx, run.csv, run.csv_sem = xlsx, csv, csv_sem
+            run.status = "bloqueado" if problems else "pronto"
             run.finished_at = utcnow()
             _prune(s, settings)
         _refresh_cmdb(records, settings)
@@ -1043,7 +1224,7 @@ def _prune(session: Session, settings: Settings) -> None:
     keep = max(settings.final_keep_runs, 1)
     ids = list(session.scalars(select(FinalRun.id).order_by(FinalRun.id.desc()).offset(keep)))
     if ids:
-        session.execute(update(FinalRun).where(FinalRun.id.in_(ids)).values(xlsx=None, csv=None, csv_sem=None))
+        session.execute(update(FinalRun).where(FinalRun.id.in_(ids)).values(xlsx=None, csv=None, csv_sem=None, state=None))
 
 
 def run_file(run: FinalRun, key: str) -> bytes | None:
