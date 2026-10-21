@@ -95,6 +95,8 @@ _ADDED_COLUMNS = [
     ("api_records", "cmdb_expired", "BOOLEAN"),
     ("api_records", "registered_at", "TIMESTAMP WITH TIME ZONE"),
     ("smax_tickets", "service_component", "VARCHAR(64) NOT NULL DEFAULT ''"),
+    ("ticket_drafts", "via", "JSON"),
+    ("ticket_drafts", "sites", "JSON"),
 ]
 
 

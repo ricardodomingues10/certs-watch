@@ -1,6 +1,6 @@
 {% extends "base.html" %}
 {% block title %}Rever lote {{ b.id }}{% endblock %}
-{% block crumb %}<a href="/pedidos">Pedidos SMAX</a> › <a href="/pedidos/{{ b.id }}">Lote {{ b.id }}</a>{% endblock %}
+{% block crumb %}<a href="/pedidos">Pedidos SMAX</a> › <a href="/pedidos/lotes">Lotes</a> › <a href="/pedidos/{{ b.id }}">Lote {{ b.id }}</a>{% endblock %}
 {% block page_title %}Rever e confirmar{% endblock %}
 {% block lede %}Estes são os pedidos exatos que vão ser criados no SMAX. Antes de enviar, a aplicação relê os pedidos do SMAX e põe de lado os que já tenham um pedido em curso. Os pedidos são criados um de cada vez e o lote para no primeiro erro.{% endblock %}
 {% block content %}
@@ -11,7 +11,7 @@
   <tbody>
   {% for d, p in previews %}
     <tr>
-      <td>{{ p.entities[0].properties.DisplayLabel }}</td>
+      <td>{{ p.entities[0].properties.DisplayLabel }}{% if d.sites and (d.sites|length > 1 or d.sites[0] != d.cn) %}<div class="small muted">instalado em {{ d.sites|length }} site(s)</div>{% endif %}</td>
       <td>{{ d.ambiente }}</td><td>{{ d.tipo }}</td><td class="mono">{{ d.app_id }}</td>
       <td class="nowrap">{{ d.expiry|dt }}</td>
       <td><details><summary>ver</summary><pre class="payload">{{ json_pretty(p) }}</pre></details></td>

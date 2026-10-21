@@ -19,6 +19,7 @@ from .classify import is_auto_renew
 from .checks import days_left, evaluate_endpoint, expiry_severity  # noqa: F401  (reexportados)
 from .config import Settings
 from .db import as_utc, utcnow
+from .normalize import norm_host
 from .models import ApiRecord, Certificate, CmdbRecord, Endpoint, Finding, ScanResult, SslLabsResult
 
 SEVERITIES = ("info", "baixa", "media", "alta", "critica")
@@ -90,6 +91,35 @@ class Snapshot:
     def leaf_for(self, sr: ScanResult | None) -> Certificate | None:
         return self.certs.get(sr.leaf_sha256) if sr and sr.leaf_sha256 else None
 
+    def latest_for(self, ep: Endpoint, leaf: Certificate | None) -> dict[str, CmdbRecord]:
+        """Registos da CMDB contra os quais o servidor é comparado: os do nome do site ou, se não houver,
+        os do certificado servido (ex.: site sem registo próprio, servido pelo wildcard registado)."""
+        own = self.latest_by_issuer(ep.expected_cn_norm)
+        if own or leaf is None:
+            return own
+        return self.latest_by_issuer(cert_cn(leaf))
+
+    def sites_by_cert_cn(self) -> dict[str, list[dict]]:
+        """Mapa de instalação: CN do certificado servido -> sites (host:porta) que o servem agora."""
+        out: dict[str, list[dict]] = defaultdict(list)
+        for ep in self.endpoints:
+            if not ep.enabled:
+                continue
+            sr = self.scan_for(ep)
+            leaf = self.leaf_for(sr)
+            if sr is None or sr.status != "ok" or leaf is None:
+                continue
+            out[cert_cn(leaf)].append({"host": ep.host, "port": ep.port, "site": ep.expected_cn_norm,
+                                       "sha256": leaf.sha256, "not_after": leaf.not_after, "endpoint_id": ep.id})
+        for v in out.values():
+            v.sort(key=lambda x: (x["host"], x["port"]))
+        return dict(out)
+
+
+def cert_cn(cert: Certificate) -> str:
+    """Nome que identifica o certificado: o CN, ou o primeiro nome DNS quando não há CN."""
+    return norm_host(cert.subject_cn or (cert.sans_dns or [""])[0])
+
 
 def load_snapshot(session: Session, include_disabled: bool = False) -> Snapshot:
     snap = Snapshot()
@@ -131,6 +161,8 @@ def collect_findings(session: Session, settings: Settings, now: datetime) -> dic
     c = _Collector()
     snap = load_snapshot(session)
 
+    served = snap.sites_by_cert_cn()
+    live_dates = {(cn, as_utc(s["not_after"]).date()) for cn, sites in served.items() for s in sites if s["not_after"]}
     all_cns = set(snap.by_cn) | set(snap.ep_by_cn)
     for cn in all_cns:
         recs = snap.by_cn.get(cn, [])
@@ -146,7 +178,8 @@ def collect_findings(session: Session, settings: Settings, now: datetime) -> dic
             sr = snap.scan_for(ep)
             if sr is None:
                 continue
-            ev = evaluate_endpoint(ep, sr, snap.leaf_for(sr), latest, settings, now)
+            leaf = snap.leaf_for(sr)
+            ev = evaluate_endpoint(ep, sr, leaf, latest or snap.latest_for(ep, leaf), settings, now)
             for ftype, sev, details in ev.findings:
                 c.add(ftype, sev, f"{ep.host}:{ep.port}", f"ep:{ep.id}", cn, ep.id, **details)
             if ev.matched_issuer is not None:
@@ -156,6 +189,8 @@ def collect_findings(session: Session, settings: Settings, now: datetime) -> dic
         for li, rec in latest.items():
             if li in matched or rec.valid_to is None:
                 continue
+            if (cn, as_utc(rec.valid_to).date()) in live_dates:
+                continue   # há sites a servir este certificado: os alertas vêm da verificação live
             dl = days_left(rec.valid_to, now)
             label = rec.issuer_name or rec.issuer or "(sem emissor)"
             if dl < -30:

@@ -54,6 +54,72 @@ def ticket_url(settings: Settings, ticket_id: str) -> str:
         return ""
 
 
+def discussions_url(settings: Settings, ticket_id: str) -> str:
+    try:
+        return settings.smax_discussions_url.format(base=settings.smax_url.rstrip("/"), tenant=settings.smax_tenant,
+                                                    entity=settings.smax_entity, id=ticket_id)
+    except (KeyError, IndexError, ValueError):
+        return ""
+
+
+def _text(html_body) -> str:
+    import html as _html
+    s = re.sub(r"<(br|/p|/div|/li)\s*/?>", "\n", str(html_body or ""), flags=re.I)
+    s = _html.unescape(re.sub(r"<[^>]+>", "", s))
+    return re.sub(r"\n{3,}", "\n\n", re.sub(r"[ \t\u00a0]+", " ", s)).strip()
+
+
+def fetch_comments(settings: Settings, ticket_ids: list[str], c: httpx.Client | None = None) -> tuple[list[dict], dict]:
+    """Comentários dos pedidos indicados (GET /rest/{tenant}/collaboration/comments/{entidade}/{id}).
+    Ignora os comentários do sistema. Devolve (comentários, resumo)."""
+    own = c is None
+    c = c or client(settings)
+    out: list[dict] = []
+    errors = 0
+    try:
+        token = login(c, settings)
+        headers = {"Cookie": f"LWSSO_COOKIE_KEY={token}; TENANTID={settings.smax_tenant}", "Accept": "application/json"}
+        for tid in ticket_ids[: settings.smax_comments_max]:
+            try:
+                r = c.get(f"/rest/{settings.smax_tenant}/collaboration/comments/{settings.smax_entity}/{tid}", headers=headers)
+            except httpx.HTTPError:
+                r = None
+            if r is None or r.status_code != 200:
+                errors += 1
+                if errors >= 5 and not out:
+                    break   # o endpoint não está acessível para esta conta: não insistir
+                continue
+            try:
+                data = r.json()
+            except ValueError:
+                continue
+            for x in data if isinstance(data, list) else (data or {}).get("comments", []) or []:
+                if not isinstance(x, dict) or x.get("IsSystem") or not x.get("Id"):
+                    continue
+                out.append({"id": str(x["Id"])[:64], "ticket_id": str(tid), "created_at": _ms(x.get("CreateTime")),
+                            "author_id": str(((x.get("Submitter") or {}).get("UserId")) or "")[:64],
+                            "body": _text(x.get("Body"))[:4000], "privacy": str(x.get("PrivacyType") or "")[:32],
+                            "origin": str(x.get("CommentFrom") or "")[:32], "author": ""})
+        # Nomes de quem comentou
+        names: dict[str, str] = {}
+        for uid in list({x["author_id"] for x in out if x["author_id"]})[:150]:
+            try:
+                r = c.get(f"/rest/{settings.smax_tenant}/ems/Person/{uid}", params={"layout": "Name"}, headers=headers)
+                data = r.json() if r.status_code == 200 else {}
+            except (httpx.HTTPError, ValueError):
+                data = {}
+            ents = data.get("entities") if isinstance(data, dict) else None
+            props = (ents[0] if ents else data if isinstance(data, dict) else {}).get("properties") or {}
+            if props.get("Name"):
+                names[uid] = str(props["Name"])[:256]
+        for x in out:
+            x["author"] = names.get(x["author_id"], "")
+        return out, {"pedidos": min(len(ticket_ids), settings.smax_comments_max), "comentarios": len(out), "erros": errors}
+    finally:
+        if own:
+            c.close()
+
+
 def norm_endpoint(value) -> str:
     s = str(value or "").replace(" ", " ").strip().lower()
     s = re.sub(r"^[a-z][a-z0-9+.-]*://", "", s)

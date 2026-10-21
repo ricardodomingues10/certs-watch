@@ -178,7 +178,7 @@ def test_full_flow_select_fill_review_create(smax_env):
         # Os pedidos novos aparecem já ligados aos certificados
         det = c.get("/certificados/detalhe", params={"cn": "www.exemplo.pt"}, auth=AUTH).text
         assert "Pedido em curso" in det and "5001" in det
-        assert "Lote " + str(bid) in c.get("/pedidos", auth=AUTH).text
+        assert "Lote " + str(bid) in c.get("/pedidos/lotes", auth=AUTH).text
     with session_scope() as db:
         b = db.get(TicketBatch, bid)
         assert b.status == "concluido" and b.confirmed_by == "admin"
@@ -286,7 +286,7 @@ def test_view_selection_limits_and_disabled(smax_env, monkeypatch):
         config.get_settings.cache_clear()
         assert 'name="cn"' not in c.get("/certificados", auth=AUTH).text
         assert c.post("/pedidos/novo", data={"csrf": token, "cn": ["www.exemplo.pt"]}, auth=AUTH).status_code == 409
-        assert "desligada" in c.get("/pedidos", auth=AUTH).text
+        assert "desligada" in c.get("/pedidos/lotes", auth=AUTH).text
 
 
 def test_stale_batch_marks_in_flight_as_indeterminate(smax_env):

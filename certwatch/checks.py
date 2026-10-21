@@ -251,7 +251,7 @@ def evaluate_endpoint(ep, sr, leaf, latest_by_issuer: dict, settings: Settings, 
     if leaf is None:
         for c in CHECKS:
             ev.results.setdefault(c.id, CheckResult(c.id, NT, "sem ligação TLS"))
-        if ep.consecutive_failures >= settings.unreachable_after:
+        if ep.consecutive_failures >= settings.unreachable_after and ep.source != "ct":
             ev.findings.append(("INALCANCAVEL", "baixa", {"estado": sr.status, "erro": sr.error,
                                                         "falhas_consecutivas": ep.consecutive_failures}))
         return ev

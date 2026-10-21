@@ -30,13 +30,13 @@ from ..insights import STATE_LABELS, ancestry, build_inventory, check_matrix, ch
 from ..jobs import apis_configured, JOBS, enqueue
 from ..collectors.ct import SOURCE_LABELS
 from ..discovery import CT_STATE_HELP, CT_STATES, CT_TABS, TRIAGE_LABELS, classify_ct
-from ..models import ApiRecord, AuditLog, Certificate, CmdbRecord, CtCert, Endpoint, Finding, ImportFile, JobRun, ScanResult, SslLabsResult, TicketBatch
+from ..models import ApiRecord, AuditLog, Certificate, CmdbRecord, CtCert, Endpoint, Finding, ImportFile, JobRun, ScanResult, SslLabsResult, TicketBatch, SmaxTicket
 from .. import ticket_create as tc
 from ..collectors.smax import ticket_url
-from ..tickets import TICKET_HELP, TICKET_STATES, link as ticket_link, tickets_by_endpoint
+from ..tickets import TICKET_HELP, TICKET_STATES, TICKET_VIEWS, ticket_list, tickets_by_label, link as ticket_link, tickets_by_endpoint
 from ..reconcile import REC_HELP, REC_STATES, REC_TABS, scan_import_dir, reconcile
 from ..trust import local_trust_files
-from ..normalize import split_api_name, is_ip, is_valid_hostname, norm_host, norm_issuer
+from ..normalize import norm_label, split_api_name, is_ip, is_valid_hostname, norm_host, norm_issuer
 from .security import check_csrf, current_user, security_middleware
 
 BASE = Path(__file__).parent
@@ -248,13 +248,15 @@ def dashboard(request: Request, user: str = Depends(current_user)):
     soon30 = sum(1 for r in inv if r["dias"] is not None and 0 <= r["dias"] <= 30)
     soon30_sem_pedido = sum(1 for r in inv if r["dias"] is not None and 0 <= r["dias"] <= 30
                             and r["smax"]["state"] != "em_curso")
+    with session_scope() as s:
+        _, tcounts = ticket_list(s, settings, "atrasados")
     # Renovações: certificados ativos (não expirados) e a situação do pedido no SMAX
     active = [r for r in inv if r["dias"] is not None and r["dias"] >= 0]
     renew = {"ativos": len(active),
              "em_curso": sum(1 for r in active if r["smax"]["state"] == "em_curso"),
              "outra_data": sum(1 for r in active if r["smax"]["state"] == "outra_data"),
              "sem": sum(1 for r in active if r["smax"]["state"] in ("fechado", "sem_pedido")),
-             "sem_30": soon30_sem_pedido}
+             "sem_30": soon30_sem_pedido, "atrasados": tcounts["atrasados"]}
     return render(request, "dashboard.html", user, s=stats, sev_counts=sev_counts, urgent=urgent, setup=setup,
                   last_jobs=last_jobs, n_apis=n_apis, n_open=len(open_findings), soon30=soon30,
                   soon30_sem_pedido=soon30_sem_pedido, smax_on=smax_configured(settings), renew=renew)
@@ -282,7 +284,12 @@ TICKET_FILTERS = {"em_curso": "Com pedido em curso", "nao_em_curso": "Sem pedido
                   "outra_data": "Pedido aberto para outra data", "fechado": "Só pedidos fechados", "sem_pedido": "Nenhum pedido"}
 
 
-def _inventory_filtered(q: str, dias: str, estado: str, tipo: str, ambito: str, renovacao: str, pedido: str = ""):
+CERT_FILTERS = {"proprio": "Com certificado próprio", "outro": "Servidos por outro certificado (wildcard ou vários nomes)",
+                "partilhado": "Certificados instalados em vários sites"}
+
+
+def _inventory_filtered(q: str, dias: str, estado: str, tipo: str, ambito: str, renovacao: str, pedido: str = "",
+                        servido: str = ""):
     with session_scope() as s:
         rows = build_inventory(s, get_settings(), utcnow())
     total = len(rows)
@@ -305,6 +312,12 @@ def _inventory_filtered(q: str, dias: str, estado: str, tipo: str, ambito: str, 
         rows = [r for r in rows if r["scope"] == ambito]
     if renovacao in AUTO_RENEW_LABELS:
         rows = [r for r in rows if r["renovacao"] == renovacao]
+    if servido == "proprio":
+        rows = [r for r in rows if not r["servido_por"]]
+    elif servido == "outro":
+        rows = [r for r in rows if r["servido_por"]]
+    elif servido == "partilhado":
+        rows = [r for r in rows if len({s["host"] for s in r["instalado_em"]}) > 1]
     if pedido == "nao_em_curso":
         rows = [r for r in rows if r["smax"]["state"] != "em_curso"]
     elif pedido in TICKET_STATES:
@@ -314,31 +327,35 @@ def _inventory_filtered(q: str, dias: str, estado: str, tipo: str, ambito: str, 
 
 @app.get("/certificados")
 def certificados(request: Request, q: str = "", dias: str = "", estado: str = "", tipo: str = "", ambito: str = "",
-                 renovacao: str = "", pedido: str = "", user: str = Depends(current_user)):
-    rows, total = _inventory_filtered(q, dias, estado, tipo, ambito, renovacao, pedido)
+                 renovacao: str = "", pedido: str = "", servido: str = "", user: str = Depends(current_user)):
+    rows, total = _inventory_filtered(q, dias, estado, tipo, ambito, renovacao, pedido, servido)
     return render(request, "certificados.html", user, rows=rows, total=total, q=q, dias=dias,
-                  estado=estado, tipo=tipo, ambito=ambito, renovacao=renovacao, pedido=pedido,
+                  estado=estado, tipo=tipo, ambito=ambito, renovacao=renovacao, pedido=pedido, servido=servido,
+                  cert_filters=CERT_FILTERS,
                   ticket_filters=TICKET_FILTERS, smax_on=smax_configured(get_settings()),
                   create_on=tc.can_create(get_settings()),
                   export_qs=urlencode({k: v for k, v in dict(q=q, dias=dias, estado=estado, tipo=tipo, ambito=ambito,
-                                                                 renovacao=renovacao, pedido=pedido).items() if v}))
+                                                                 renovacao=renovacao, pedido=pedido, servido=servido).items() if v}))
 
 
 @app.get("/certificados/exportar")
 def certificados_csv(q: str = "", dias: str = "", estado: str = "", tipo: str = "", ambito: str = "",
-                     renovacao: str = "", pedido: str = "", user: str = Depends(current_user)):
-    rows, _ = _inventory_filtered(q, dias, estado, tipo, ambito, renovacao, pedido)
+                     renovacao: str = "", pedido: str = "", servido: str = "", user: str = Depends(current_user)):
+    rows, _ = _inventory_filtered(q, dias, estado, tipo, ambito, renovacao, pedido, servido)
     return csv_response("certificados.csv",
                         ["Certificado", "Estado", "Tipo", "Âmbito", "Renovação automática", "Dias", "Expira",
                          "Data de", "Emissor (servidor)", "Emissores (CMDB)", "Situação", "Registos CMDB", "APIs",
-                         "Pedido SMAX", "Situação do pedido", "Fase do pedido", "Pedidos abertos", "Link do pedido"],
+                         "Pedido SMAX", "Situação do pedido", "Fase do pedido", "Pedidos abertos", "Link do pedido",
+                         "Servido pelo certificado", "Instalado em"],
                         [[r["common_name"], STATE_LABELS.get(r["state"], r["state"]), TYPE_LABELS.get(r["type"], r["type"]),
                           SCOPE_LABELS.get(r["scope"], r["scope"]), "Sim" if r["renovacao"] == "auto" else "Não",
                           r["dias"], fmt_dt(r["live_not_after"] or r["cmdb_valid_to"]),
                           {"live": "servidor", "cmdb": "CMDB"}.get(r["fonte_data"], ""), r["live_issuer"] or "",
                           ", ".join(r["issuers"]), r["summary"], r["registos"], ", ".join(r["apis"]),
                           (r["smax"]["main"] or {}).get("id", ""), r["smax"]["label"], (r["smax"]["main"] or {}).get("fase", ""),
-                          ", ".join(x["id"] for x in r["smax"]["open"]), (r["smax"]["main"] or {}).get("url", "")]
+                          ", ".join(x["id"] for x in r["smax"]["open"]), (r["smax"]["main"] or {}).get("url", ""),
+                          (r["servido_por"] or {}).get("nome", ""),
+                          ", ".join(sorted({x["host"] for x in r["instalado_em"]}))]
                          for r in rows])
 
 
@@ -358,7 +375,7 @@ def certificado_detalhe(request: Request, cn: str, user: str = Depends(current_u
         for ep in eps:
             sr = snap.scan_for(ep)
             leaf = snap.leaf_for(sr)
-            ev = evaluate_endpoint(ep, sr, leaf, latest, settings, now)
+            ev = evaluate_endpoint(ep, sr, leaf, latest or snap.latest_for(ep, leaf), settings, now)
             history = list(s.scalars(select(ScanResult).where(ScanResult.endpoint_id == ep.id)
                                      .order_by(ScanResult.id.desc()).limit(10)))
             chain_up = ancestry(s, settings, leaf.sha256)[0] if leaf else []
@@ -374,9 +391,13 @@ def certificado_detalhe(request: Request, cn: str, user: str = Depends(current_u
         auto_cmdb = any(is_auto_renew(settings, r.issuer, r.issuer_name) for r in recs)
         auto_live = bool(leaf0) and is_auto_renew(settings, leaf0.issuer_dn, leaf0.issuer_cn)
         ext = s.scalar(select(SslLabsResult).where(SslLabsResult.host == cn))
+        inv_row = next((r for r in build_inventory(s, settings, now, snap) if r["cn"] == cn), None)
+        servido_por = inv_row["servido_por"] if inv_row else None
+        instalado_em = inv_row["instalado_em"] if inv_row else []
         effective = leaf0.not_after if leaf0 else (recs[0].valid_to if recs else None)
-        smax = ticket_link(tickets_by_endpoint(s).get(cn, []), effective, settings)
+        smax = inv_row["smax"] if inv_row else ticket_link(tickets_by_endpoint(s).get(cn, []), effective, settings)
     return render(request, "certificado.html", user, smax=smax, smax_on=smax_configured(settings),
+                  servido_por=servido_por, instalado_em=instalado_em,
                   create_on=tc.can_create(settings), cn=cn, recs=recs, inactive=inactive, eps=ep_data, apis=apis,
                   findings=findings, ctype=ctype, scope=scope, now=now, ext=ext, ssllabs_on=bool(settings.ssllabs_email),
                   auto_renew="auto" if (auto_cmdb or auto_live) else "manual",
@@ -431,13 +452,16 @@ def catalogo(request: Request, user: str = Depends(current_user)):
     return render(request, "catalogo.html", user)
 
 
-API_VIEWS = {"": "Todos", "expirados": "Expirados", "90": "Expiram em 90 dias", "sem_data": "Sem data de expiração",
+API_VIEWS = {"": "Todos", "expirados": "Expirados", "90": "Expiram em 90 dias",
+             "90_sem_pedido": "Expiram em 90 dias sem pedido em curso", "sem_data": "Sem data de expiração",
              "divergentes": "CMDB diz outra coisa"}
 
 
 def _api_rows(settings, now, s, vista: str = "", q: str = ""):
     snap = load_snapshot(s)
     inv = {r["cn"]: r for r in build_inventory(s, settings, now, snap)}
+    from ..tickets import last_comments
+    by_label, comments = tickets_by_label(s), last_comments(s)
     rows = []
     for a in snap.apis:
         dl = days_left(a.expiry, now) if a.expiry else None
@@ -445,11 +469,14 @@ def _api_rows(settings, now, s, vista: str = "", q: str = ""):
         computed_expired = dl is not None and dl < 0
         rows.append({"api": a, "dias": dl, "nome": base or a.name, "sufixo": suffix,
                      "divergente": a.cmdb_expired is not None and dl is not None and a.cmdb_expired != computed_expired,
+                     "smax": ticket_link(by_label.get(norm_label(a.name), []), a.expiry, settings, comments),
                      "servidor": inv.get(a.host) if a.host else None})
     counts = {"": len(rows), "expirados": sum(1 for r in rows if r["dias"] is not None and r["dias"] < 0),
               "90": sum(1 for r in rows if r["dias"] is not None and 0 <= r["dias"] <= 90),
               "sem_data": sum(1 for r in rows if r["dias"] is None),
-              "divergentes": sum(1 for r in rows if r["divergente"])}
+              "divergentes": sum(1 for r in rows if r["divergente"]),
+              "90_sem_pedido": sum(1 for r in rows if r["dias"] is not None and 0 <= r["dias"] <= 90
+                                   and r["smax"]["state"] != "em_curso")}
     if vista == "expirados":
         rows = [r for r in rows if r["dias"] is not None and r["dias"] < 0]
     elif vista == "90":
@@ -458,6 +485,8 @@ def _api_rows(settings, now, s, vista: str = "", q: str = ""):
         rows = [r for r in rows if r["dias"] is None]
     elif vista == "divergentes":
         rows = [r for r in rows if r["divergente"]]
+    elif vista == "90_sem_pedido":
+        rows = [r for r in rows if r["dias"] is not None and 0 <= r["dias"] <= 90 and r["smax"]["state"] != "em_curso"]
     if q:
         ql = q.lower()
         rows = [r for r in rows if ql in " ".join((r["api"].name, r["api"].application, r["api"].location,
@@ -481,7 +510,7 @@ def apis_page(request: Request, vista: str = "", q: str = "", user: str = Depend
                   configured=apis_configured(settings), tql=settings.ucmdb_tql_apis,
                   campos=summary.get("campos") if isinstance(summary, dict) else None,
                   resumo=summary if isinstance(summary, dict) else {},
-                  any_host=any(r["api"].host for r in rows))
+                  any_host=any(r["api"].host for r in rows), smax_on=smax_configured(settings))
 
 
 @app.get("/apis/exportar")
@@ -491,9 +520,11 @@ def apis_csv(vista: str = "", q: str = "", user: str = Depends(current_user)):
         rows, _ = _api_rows(settings, now, s, vista if vista in API_VIEWS else "", q)
         data = [[r["api"].name, r["api"].application, r["api"].location, fmt_dt(r["api"].expiry, True), r["dias"],
                  {True: "Sim", False: "Não"}.get(r["api"].cmdb_expired, ""), fmt_dt(r["api"].registered_at, True),
-                 r["api"].url, r["api"].ucmdb_id] for r in rows]
+                 r["api"].url, r["api"].ucmdb_id, (r["smax"]["main"] or {}).get("id", ""), r["smax"]["label"],
+                 (r["smax"]["main"] or {}).get("url", "")] for r in rows]
     return csv_response("apis.csv", ["Nome", "Aplicação", "Localização", "Data de expiração", "Dias",
-                                     "Expirado? (CMDB)", "Registo na CMDB", "URL", "UCMDB ID"], data)
+                                     "Expirado? (CMDB)", "Registo na CMDB", "URL", "UCMDB ID", "Pedido SMAX",
+                                     "Situação do pedido", "Link do pedido"], data)
 
 
 # ------------------------------------------------------------------ pedidos SMAX (criação)
@@ -513,7 +544,7 @@ async def pedidos_novo(request: Request, user: str = Depends(current_user)):
         raise HTTPException(409, " ".join(tc.config_problems(settings)))
     if form.get("modo") == "vista":
         rows, _ = _inventory_filtered(*(str(form.get(k) or "") for k in ("q", "dias", "estado", "tipo", "ambito",
-                                                                          "renovacao", "pedido")))
+                                                                          "renovacao", "pedido", "servido")))
         cns = [r["cn"] for r in rows]
     else:
         cns = [str(c) for c in form.getlist("cn")]
@@ -528,6 +559,18 @@ async def pedidos_novo(request: Request, user: str = Depends(current_user)):
 
 
 @app.get("/pedidos")
+def pedidos_smax(request: Request, vista: str = "abertos", q: str = "", user: str = Depends(current_user)):
+    settings = get_settings()
+    vista = vista if vista in TICKET_VIEWS else "abertos"
+    with session_scope() as s:
+        rows, counts = ticket_list(s, settings, vista, q)
+        n_lotes = s.query(TicketBatch).count()
+        fetched = s.scalar(select(SmaxTicket.fetched_at).limit(1))
+    return render(request, "pedidos_smax.html", user, rows=rows[:1000], n_rows=len(rows), counts=counts, vista=vista,
+                  q=q, views=TICKET_VIEWS, n_lotes=n_lotes, fetched=fetched, smax_on=smax_configured(settings))
+
+
+@app.get("/pedidos/lotes")
 def pedidos(request: Request, user: str = Depends(current_user)):
     settings = get_settings()
     with session_scope() as s:
@@ -629,7 +672,7 @@ def pedido_cancelar(request: Request, batch_id: int, csrf: str = Form(""), user:
             raise HTTPException(409, "Só um rascunho pode ser cancelado.")
         b.status, b.finished_at = "cancelado", utcnow()
         audit(s, user, "pedidos.lote_cancelado", f"lote {batch_id}")
-    return RedirectResponse("/pedidos", status_code=303)
+    return RedirectResponse("/pedidos/lotes", status_code=303)
 
 
 @app.post("/pedidos/{batch_id}/repetir")

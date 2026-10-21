@@ -301,6 +301,8 @@ class TicketDraft(Base):
     responsavel: Mapped[str] = mapped_column(String(128), default="")
     localizacao: Mapped[str] = mapped_column(String(256), default="")
     prefill: Mapped[dict] = mapped_column(JSON, default=dict)      # de onde veio cada valor sugerido
+    via: Mapped[list | None] = mapped_column(JSON, default=list, nullable=True)     # nomes selecionados que levaram a este certificado
+    sites: Mapped[list | None] = mapped_column(JSON, default=list, nullable=True)   # sites onde o certificado está instalado
     warnings: Mapped[list] = mapped_column(JSON, default=list)
     status: Mapped[str] = mapped_column(String(16), default="pendente")
     ticket_id: Mapped[str] = mapped_column(String(64), default="")
@@ -308,3 +310,18 @@ class TicketDraft(Base):
     detail: Mapped[dict] = mapped_column(JSON, default=dict)
     payload: Mapped[dict] = mapped_column(JSON, default=dict)
     done_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
+class SmaxComment(Base):
+    """Comentário de um pedido do SMAX (só comentários de pessoas; os do sistema são ignorados)."""
+
+    __tablename__ = "smax_comments"
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    ticket_id: Mapped[str] = mapped_column(String(64), index=True)
+    created_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    author_id: Mapped[str] = mapped_column(String(64), default="")
+    author: Mapped[str] = mapped_column(String(256), default="")
+    body: Mapped[str] = mapped_column(Text, default="")
+    privacy: Mapped[str] = mapped_column(String(32), default="")
+    origin: Mapped[str] = mapped_column(String(32), default="")

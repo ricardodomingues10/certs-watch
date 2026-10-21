@@ -60,8 +60,12 @@ def build_inventory(session: Session, settings: Settings, now: datetime, snap: S
         if a.host:
             api_by_host[a.host].append(a)
 
+    from .evaluator import cert_cn
     from .tickets import link as ticket_link, tickets_by_endpoint
+    from .tickets import last_comments
     tickets = tickets_by_endpoint(session)
+    comments = last_comments(session)
+    sites_by_cn = snap.sites_by_cert_cn()
     rows = []
     for cn in sorted(set(snap.by_cn) | set(snap.ep_by_cn)):
         recs = snap.by_cn.get(cn, [])
@@ -77,7 +81,26 @@ def build_inventory(session: Session, settings: Settings, now: datetime, snap: S
             if sr.status == "ok" and leaf is not None:
                 live_cert, live_scan = leaf, sr
                 break
+        # Nomes encontrados na internet que não responderam não entram no inventário (seria só ruído)
+        eps_here = snap.ep_by_cn.get(cn, [])
+        if not recs and live_cert is None and eps_here and all(e.source == "ct" for e in eps_here):
+            continue
         effective = live_cert.not_after if live_cert else (latest.valid_to if latest else None)
+        # Site servido por um certificado com outro nome (wildcard ou certificado com vários nomes)
+        servido_por = None
+        if live_cert is not None and cert_cn(live_cert) and cert_cn(live_cert) != cn:
+            lcn = cert_cn(live_cert)
+            same_date = [r for r in recs if r.valid_to and live_cert.not_after
+                         and abs((as_utc(r.valid_to).date() - as_utc(live_cert.not_after).date()).days) <= 1]
+            servido_por = {
+                "cn": lcn, "nome": live_cert.subject_cn or lcn, "sha256": live_cert.sha256,
+                "wildcard": lcn.startswith("*."), "nomes": len(live_cert.sans_dns or []),
+                "not_after": live_cert.not_after, "emissor": live_cert.issuer_cn,
+                "sites": [s for s in sites_by_cn.get(lcn, []) if s["site"] != cn],
+                # Registo da CMDB com o nome do site: com a mesma data é um registo "por site" deste certificado
+                "cmdb": ("sem_registo" if not recs else ("por_site" if same_date else "diferente")),
+            }
+        instalado_em = sites_by_cn.get(cn, [])
         days = days_left(effective, now) if effective else None
         issuer_norm = norm_issuer(live_cert.issuer_cn) if live_cert else (latest.issuer_norm if latest else "")
         ctype = cert_type(cn, kind, is_api=cn in api_by_host, issuer_norm=issuer_norm,
@@ -109,7 +132,11 @@ def build_inventory(session: Session, settings: Settings, now: datetime, snap: S
             "dias": days,
             "fonte_data": "live" if live_cert else ("cmdb" if latest else "—"),
             "renovacao": "auto" if (cmdb_auto or live_auto) else "manual",
-            "smax": ticket_link(tickets.get(cn, []), effective, settings),
+            "smax": ticket_link(tickets.get(servido_por["cn"] if servido_por else cn, []),
+                                effective, settings, comments),
+            "servido_por": servido_por,
+            "instalado_em": instalado_em,
+            "origens_servidor": sorted({e.source for e in eps_here}),
             "renovacao_fonte": ", ".join(x for x, ok in (("CMDB", cmdb_auto), ("servidor", live_auto)) if ok),
             "findings": len(fl),
             "max_sev": max((f.severity for f in fl), key=lambda x: SEV_RANK[x], default=None),
@@ -139,7 +166,7 @@ def check_matrix(session: Session, settings: Settings, now: datetime, snap: Snap
             continue
         sr = snap.scan_for(ep)
         leaf = snap.leaf_for(sr)
-        ev = evaluate_endpoint(ep, sr, leaf, snap.latest_by_issuer(ep.expected_cn_norm), settings, now)
+        ev = evaluate_endpoint(ep, sr, leaf, snap.latest_for(ep, leaf), settings, now)
         recs = snap.by_cn.get(ep.expected_cn_norm, [])
         kind = recs[0].kind if recs else classify(ep.expected_cn_norm)
         issuer_norm = norm_issuer(leaf.issuer_cn) if leaf else ""

@@ -101,6 +101,8 @@ class Settings:
     ct_domains: list[str]
     ct_sources: list[str]
     ct_include_expired_days: int
+    ct_scan: bool
+    ct_scan_max: int
     certspotter_api_key: str | None
     ctlogs_api_key: str | None
 
@@ -116,6 +118,9 @@ class Settings:
     smax_ticket_url: str
     smax_verify_tls: bool
     smax_max_tickets: int
+    smax_comments: bool
+    smax_comments_max: int
+    smax_discussions_url: str
     # SMAX: criação de pedidos (desligada por omissão)
     smax_create_enabled: bool
     smax_change_model: str
@@ -204,6 +209,8 @@ class Settings:
             ct_domains=_str_list(_env("CERTWATCH_CT_DOMAINS", "")),
             ct_sources=_str_list(_env("CERTWATCH_CT_SOURCES", "crtsh,certspotter,ctlogs")),
             ct_include_expired_days=int(_env("CERTWATCH_CT_INCLUDE_EXPIRED_DAYS", "0")),
+            ct_scan=_env("CERTWATCH_CT_SCAN", "true").lower() != "false",
+            ct_scan_max=int(_env("CERTWATCH_CT_SCAN_MAX", "500")),
             certspotter_api_key=_secret("certspotter_api_key", "CERTWATCH_CERTSPOTTER_API_KEY"),
             ctlogs_api_key=_secret("ctlogs_api_key", "CERTWATCH_CTLOGS_API_KEY"),
             smax_url=_env("CERTWATCH_SMAX_URL", ""),
@@ -222,6 +229,9 @@ class Settings:
             smax_ticket_url=_env("CERTWATCH_SMAX_TICKET_URL", "{base}/saw/{entity}/{id}/general?TENANTID={tenant}"),
             smax_verify_tls=_env("CERTWATCH_SMAX_VERIFY_TLS", "true").lower() != "false",
             smax_max_tickets=int(_env("CERTWATCH_SMAX_MAX_TICKETS", "20000")),
+            smax_comments=_env("CERTWATCH_SMAX_COMMENTS", "true").lower() != "false",
+            smax_comments_max=int(_env("CERTWATCH_SMAX_COMMENTS_MAX", "300")),
+            smax_discussions_url=_env("CERTWATCH_SMAX_DISCUSSIONS_URL", "{base}/saw/{entity}/{id}/discussions?TENANTID={tenant}"),
             smax_create_enabled=_env("CERTWATCH_SMAX_CREATE_ENABLED", "false").lower() == "true",
             smax_change_model=_env("CERTWATCH_SMAX_CHANGE_MODEL", ""),
             smax_service=_env("CERTWATCH_SMAX_SERVICE", ""),

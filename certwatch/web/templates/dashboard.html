@@ -34,6 +34,7 @@
       <span class="todo-h">Agir</span>
       <a class="pill {{ 'pill-hot' if soon30 }}" href="/certificados?dias=30"><b>{{ soon30 }}</b> expiram em 30 dias</a>
       {% if smax_on %}<a class="pill {{ 'pill-hot' if soon30_sem_pedido }}" href="/certificados?dias=30&amp;pedido=nao_em_curso"><b>{{ soon30_sem_pedido }}</b> destes sem pedido em curso</a>{% endif %}
+      {% if smax_on and renew.atrasados %}<a class="pill pill-hot" href="/pedidos?vista=atrasados"><b>{{ renew.atrasados }}</b> pedidos abertos com certificado já expirado</a>{% endif %}
       <a class="pill {{ 'pill-hot' if sev_counts.get('critica',0) + sev_counts.get('alta',0) }}" href="/findings"><b>{{ sev_counts.get('critica',0) + sev_counts.get('alta',0) }}</b> alertas altos ou críticos</a>
     </div>
     <div class="todo-group">

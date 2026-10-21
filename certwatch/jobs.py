@@ -192,6 +192,32 @@ def load_api_records(settings: Settings) -> tuple[list[dict], dict]:
     return records, fields
 
 
+def sync_ct_endpoints(session: Session, settings: Settings) -> dict:
+    """Cria servidores a verificar a partir dos nomes encontrados na internet (Certificate Transparency):
+    só nomes concretos (sem wildcard) dos domínios configurados, de certificados ainda válidos."""
+    from .models import CtCert
+    if not settings.ct_scan or not settings.ct_domains:
+        return {"aviso": "desligado"}
+    now = utcnow()
+    names: set[str] = set()
+    for c in session.scalars(select(CtCert).where(CtCert.not_after >= now)):
+        for n in c.names or []:
+            if n.startswith("*.") or not is_valid_hostname(n):
+                continue
+            if any(n == d or n.endswith("." + d) for d in settings.ct_domains):
+                names.add(n)
+    existing = {e.host for e in session.scalars(select(Endpoint))}
+    port = settings.scan_default_port
+    created = 0
+    for n in sorted(names - existing):
+        if created >= settings.ct_scan_max:
+            break
+        session.add(Endpoint(host=n, port=port, expected_cn_norm=n, source="ct",
+                             note="Encontrado na internet (Certificate Transparency)"))
+        created += 1
+    return {"nomes": len(names), "novos": created, "limite": settings.ct_scan_max}
+
+
 # ---------------------------------------------------------------- scan
 def _valid_target(ep: Endpoint, settings: Settings) -> bool:
     return (is_valid_hostname(ep.host) or is_ip(ep.host)) and ep.port in settings.scan_allowed_ports
@@ -270,8 +296,15 @@ def run_scan(session: Session, settings: Settings) -> dict:
     counts: dict[str, int] = {}
     by_id = {e.id: e for e in targets}
     for eid, out in results.items():
-        sr = _store_outcome(session, by_id[eid], out)
+        ep = by_id[eid]
+        sr = _store_outcome(session, ep, out)
         counts[sr.status] = counts.get(sr.status, 0) + 1
+        # Nomes vindos da internet que não respondem: desligados sem alerta (muitos já não existem)
+        if ep.source == "ct" and sr.status != "ok" and ep.consecutive_failures >= settings.unreachable_after:
+            ep.enabled = False
+            ep.note = (f"Encontrado na internet; sem resposta TLS em {ep.consecutive_failures} verificações "
+                       f"({sr.status}). Desligado automaticamente.")[:512]
+            counts["ct_desligados"] = counts.get("ct_desligados", 0) + 1
 
     session.execute(
         delete(ScanResult).where(ScanResult.scanned_at < utcnow() - timedelta(days=SCAN_RETENTION_DAYS))
@@ -344,6 +377,8 @@ def _run(job: str, settings: Settings) -> dict:
             try:
                 with session_scope() as s:
                     summary["ingest_ct"] = ingest_ct(s, settings)
+                with session_scope() as s:
+                    summary["ct_servidores"] = sync_ct_endpoints(s, settings)
             except Exception as exc:
                 log.exception("Descoberta CT falhou")
                 summary["ingest_ct"] = {"erro": str(exc)}

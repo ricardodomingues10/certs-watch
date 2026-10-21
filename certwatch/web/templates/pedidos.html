@@ -1,7 +1,7 @@
 {% extends "base.html" %}
 {% block title %}Pedidos SMAX{% endblock %}
-{% block crumb %}Operação{% endblock %}
-{% block page_title %}Pedidos SMAX{% endblock %}
+{% block crumb %}<a href="/pedidos">Pedidos SMAX</a>{% endblock %}
+{% block page_title %}Lotes criados aqui{% endblock %}
 {% block lede %}Lotes de pedidos de renovação criados a partir da aplicação. Para criar, selecione certificados em <a href="/certificados">Certificados</a> (um, vários ou todos os de uma vista filtrada) ou use o botão no detalhe de um certificado.{% endblock %}
 {% block content %}
 {% if problems %}<div class="note warn"><b>A criação de pedidos não está disponível.</b><ul class="small">{% for p in problems %}<li>{{ p }}</li>{% endfor %}</ul></div>{% endif %}

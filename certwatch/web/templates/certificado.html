@@ -5,6 +5,30 @@
 {% block page_title %}<span class="mono">{{ cn }}</span> {{ type_chip(ctype) }} {{ scope_chip(scope) }}{% endblock %}
 {% block lede %}{{ TYPE_HELP.get(ctype) }} {{ SCOPE_HELP.get(scope) }}{% endblock %}
 {% block content %}
+{% if servido_por %}
+<div class="note served-note">
+  <b>Este site usa o certificado <a href="/certificados/detalhe?cn={{ servido_por.cn|urlencode }}">{{ servido_por.nome }}</a>{% if servido_por.wildcard %} (wildcard){% elif servido_por.nomes > 1 %} (certificado com {{ servido_por.nomes }} nomes){% endif %}.</b>
+  A renovação é desse certificado{% if servido_por.sites %}, que também está instalado em {{ servido_por.sites|map(attribute='host')|unique|list|length }} outro(s) site(s): {{ servido_por.sites|map(attribute='host')|unique|list|join(', ') }}{% endif %}.
+  Expira {{ servido_por.not_after|dt }} · {{ servido_por.emissor }}.
+  {% if servido_por.cmdb == 'por_site' %}<div class="small">O registo da CMDB com o nome deste site tem a mesma data: é um registo por site deste certificado.</div>
+  {% elif servido_por.cmdb == 'diferente' %}<div class="small"><b>O registo da CMDB com o nome deste site tem outra data.</b> Ou está desatualizado, ou existe um certificado próprio para este site que não está instalado.</div>{% endif %}
+</div>
+{% endif %}
+{% set hosts = instalado_em|map(attribute='host')|unique|list %}
+{% if hosts|length > 1 or (hosts|length == 1 and hosts[0] != cn) %}
+<section class="card">
+  {% set versions = instalado_em|groupby('sha256') %}
+  <h2>Onde está instalado <small>{{ hosts|length }} site(s){% if versions|length > 1 %} · {{ versions|length }} versões diferentes{% endif %}</small></h2>
+  {% if versions|length > 1 %}<p class="small warn-line">Nem todos os sites servem a mesma versão deste certificado (renovação por instalar em alguns?).</p>{% endif %}
+  <div class="scroll"><table class="compact">
+    <thead><tr><th>Site</th><th>Porta</th><th>Expira</th><th>Versão (SHA-256)</th></tr></thead>
+    {% for s in instalado_em %}
+    <tr><td><a class="mono" href="/certificados/detalhe?cn={{ s.site|urlencode }}">{{ s.host }}</a></td><td>{{ s.port }}</td>
+      <td>{{ s.not_after|dt }}</td><td class="mono small">{{ s.sha256[:16] }}…</td></tr>
+    {% endfor %}
+  </table></div>
+</section>
+{% endif %}
 
 {% if smax_on %}
 <section class="card" id="smax">
@@ -20,7 +44,7 @@
   {% set all = smax.open + smax.closed %}
   {% if all %}
   <div class="scroll"><table class="compact">
-    <thead><tr><th>Pedido</th><th>Fase</th><th>Ambiente</th><th>Expiração no pedido</th><th>Grupo / responsável</th><th>Atualizado</th></tr></thead>
+    <thead><tr><th>Pedido</th><th>Fase</th><th>Ambiente</th><th>Expiração no pedido</th><th>Grupo / responsável</th><th>Atualizado</th><th>Último comentário</th></tr></thead>
     {% for x in all %}
     <tr class="{{ 'faded' if not x.aberto }}">
       <td><a class="ticket {{ 'ticket-open' if x.aberto else 'ticket-closed' }}" href="{{ x.url }}" target="_blank" rel="noopener noreferrer">{{ x.id }}</a>
@@ -30,6 +54,9 @@
       <td>{{ x.expira|dt if x.expira else '—' }}{% if x.aberto and not x.deste_certificado %} <span class="tag tag-run">outra data</span>{% endif %}</td>
       <td class="small">{{ x.grupo or '—' }}{% if x.responsavel %}<div class="muted">{{ x.responsavel }}</div>{% endif %}</td>
       <td class="small">{{ x.atualizado|dtt if x.atualizado else '—' }}</td>
+      <td class="small comment-cell">{% if x.ultimo_comentario %}<div class="muted">{{ x.ultimo_comentario.quando|dtt if x.ultimo_comentario.quando else '' }}{% if x.ultimo_comentario.autor %} · {{ x.ultimo_comentario.autor }}{% endif %}</div>
+        <div class="comment-text">{{ x.ultimo_comentario.texto[:200] }}{% if x.ultimo_comentario.texto|length > 200 %}…{% endif %}</div>
+        <a href="{{ x.discussao }}" target="_blank" rel="noopener noreferrer">{{ x.comentarios }} comentário(s) ↗</a>{% else %}<span class="muted">—</span>{% endif %}</td>
     </tr>
     {% endfor %}
   </table></div>

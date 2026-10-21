@@ -26,6 +26,10 @@
     <option value="auto" {{ 'selected' if renovacao == 'auto' }}>Renovação automática (Let's Encrypt)</option>
     <option value="manual" {{ 'selected' if renovacao == 'manual' }}>Renovação manual</option>
   </select>
+  <select id="f-servido" name="servido" aria-label="Certificado próprio ou partilhado">
+    <option value="">Próprio ou partilhado</option>
+    {% for k, l in cert_filters.items() %}<option value="{{ k }}" {{ 'selected' if servido == k }}>{{ l }}</option>{% endfor %}
+  </select>
   {% if smax_on %}<select id="f-pedido" name="pedido" aria-label="Pedido SMAX">
     <option value="">Com ou sem pedido SMAX</option>
     {% for k, l in ticket_filters.items() %}<option value="{{ k }}" {{ 'selected' if pedido == k }}>{{ l }}</option>{% endfor %}
@@ -37,14 +41,14 @@
     {% endfor %}
   </select>
   <button>Filtrar</button>
-  {% if q or dias or estado or tipo or ambito or renovacao or pedido %}<a href="/certificados">limpar filtros</a>{% endif %}
+  {% if q or dias or estado or tipo or ambito or renovacao or pedido or servido %}<a href="/certificados">limpar filtros</a>{% endif %}
 </form>
 
 {% if create_on %}
 <form method="post" action="/pedidos/novo" id="selecao">
 <input type="hidden" name="csrf" value="{{ csrf }}">
 <input type="hidden" name="next" value="/certificados{{ '?' ~ export_qs if export_qs }}">
-{% for k, v in [('q', q), ('dias', dias), ('estado', estado), ('tipo', tipo), ('ambito', ambito), ('renovacao', renovacao), ('pedido', pedido)] %}<input type="hidden" name="{{ k }}" value="{{ v }}">{% endfor %}
+{% for k, v in [('q', q), ('dias', dias), ('estado', estado), ('tipo', tipo), ('ambito', ambito), ('renovacao', renovacao), ('pedido', pedido), ('servido', servido)] %}<input type="hidden" name="{{ k }}" value="{{ v }}">{% endfor %}
 <div class="selbar">
   <span>Pedidos SMAX: <b data-sel-count>0</b> selecionado(s)</span>
   <span class="grow"></span>
@@ -63,7 +67,10 @@
       {% if create_on %}<td class="td-check"><input type="checkbox" name="cn" value="{{ r.cn }}" aria-label="Selecionar {{ r.common_name }}"></td>{% endif %}
       <td>{{ state(r.state) }}</td>
       <td><a href="/certificados/detalhe?cn={{ r.cn|urlencode }}">{{ r.common_name }}</a>
-        <div class="small muted opt-s">{% if r.in_cmdb %}CMDB{% if r.registos > 1 %} ({{ r.registos }} registos){% endif %}{% endif %}{% if r.apis %}{{ ' · ' if r.in_cmdb }}API: {{ r.apis|join(', ') }}{% endif %}{% if not r.in_cmdb and not r.apis %}adicionado à mão{% endif %}</div></td>
+        {% if r.servido_por %}<div class="small served">servido por <a href="/certificados/detalhe?cn={{ r.servido_por.cn|urlencode }}">{{ r.servido_por.nome }}</a>{% if r.servido_por.wildcard %} <span class="tag tag-acc">wildcard</span>{% endif %}</div>{% endif %}
+        {% set nsites = r.instalado_em|map(attribute='host')|unique|list|length %}
+        {% if nsites > 1 or (nsites == 1 and r.instalado_em[0].host != r.cn) %}<div class="small served">instalado em <b>{{ nsites }}</b> site{{ 's' if nsites != 1 }}</div>{% endif %}
+        <div class="small muted opt-s">{% if r.in_cmdb %}CMDB{% if r.registos > 1 %} ({{ r.registos }} registos){% endif %}{% endif %}{% if r.apis %}{{ ' · ' if r.in_cmdb }}API: {{ r.apis|join(', ') }}{% endif %}{% if not r.in_cmdb and not r.apis %}{{ 'encontrado na internet' if 'ct' in r.origens_servidor else 'adicionado à mão' }}{% endif %}</div></td>
       <td class="opt">{{ type_chip(r.type) }}</td>
       <td class="opt">{{ scope_chip(r.scope) }}</td>
       <td class="opt-s">{{ r.summary }}{% if r.findings > 1 %} <span class="muted small">(+{{ r.findings - 1 }})</span>{% endif %}</td>

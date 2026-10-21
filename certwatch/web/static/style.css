@@ -378,3 +378,13 @@ pre.payload { max-width: 640px; max-height: 360px; overflow: auto; font: 12px/1.
 .confirm-form { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 12px; }
 .confirm-actions { display: flex; gap: 8px; flex-wrap: wrap; }
 button:disabled { opacity: .5; cursor: not-allowed; }
+
+/* Site servido por outro certificado */
+.served { color: var(--muted); margin-top: 2px; }
+.served-note { border-left-width: 4px; }
+
+/* Pedidos SMAX: lista */
+.tabs a .n.hot { color: var(--bad); font-weight: 700; }
+.ticket-title { max-width: 360px; }
+.comment-cell { min-width: 220px; max-width: 380px; }
+.comment-text { white-space: pre-line; margin: 2px 0; color: var(--ink); }

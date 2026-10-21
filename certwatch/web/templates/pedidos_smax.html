@@ -1,0 +1,51 @@
+{% extends "base.html" %}
+{% block title %}Pedidos SMAX{% endblock %}
+{% block crumb %}Operação{% endblock %}
+{% block page_title %}Pedidos SMAX{% endblock %}
+{% block lede %}Pedidos de certificados lidos do SMAX{% if fetched %} (última leitura {{ fetched|dtt }}){% endif %}, ligados ao certificado ou à API a que se referem. Os comentários dos pedidos abertos mostram o que os técnicos escreveram, mesmo quando o estado não mudou.{% endblock %}
+{% block actions %}
+<a class="button" href="/pedidos/lotes">Lotes criados aqui ({{ n_lotes }})</a>
+{% if smax_on %}<form method="post" action="/jobs/ingest_smax"><input type="hidden" name="csrf" value="{{ csrf }}"><input type="hidden" name="next" value="/pedidos"><button>Ler o SMAX agora</button></form>{% endif %}
+{% endblock %}
+{% block content %}
+{% if not smax_on %}<div class="note warn">A leitura do SMAX não está configurada (README, secção 7).</div>{% endif %}
+<nav class="tabs" aria-label="Vistas">
+  {% for k, label in views.items() %}
+  <a href="/pedidos?vista={{ k }}" class="{{ 'on' if vista == k }}">{{ label }} <span class="n {{ 'hot' if k == 'atrasados' and counts[k] }}">{{ counts[k] }}</span></a>
+  {% endfor %}
+</nav>
+<form class="filters" method="get">
+  <input type="hidden" name="vista" value="{{ vista }}">
+  <input type="search" name="q" value="{{ q }}" placeholder="número, nome ou grupo" aria-label="Filtrar">
+  <button>Filtrar</button>{% if q %} <a href="/pedidos?vista={{ vista }}">limpar</a>{% endif %}
+</form>
+<div class="card flush scroll">
+<table>
+  <thead><tr><th>Pedido</th><th>Certificado / API</th><th>Fase</th><th>Expiração no pedido</th><th>Grupo / responsável</th><th>Último comentário</th></tr></thead>
+  <tbody>
+  {% for r in rows %}{% set t = r.t %}
+    <tr>
+      <td><a class="ticket {{ 'ticket-open' if r.aberto else 'ticket-closed' }}" href="{{ r.url }}" target="_blank" rel="noopener noreferrer">{{ t.id }}</a>
+        <div class="small muted ticket-title">{{ t.display_label }}</div></td>
+      <td>{% if r.alvo %}<a class="mono" href="{{ '/certificados/detalhe?cn=' if r.alvo.tipo == 'certificado' else '/apis?q=' }}{{ r.alvo.nome|urlencode }}">{{ r.alvo.nome }}</a>
+          {% if r.alvo.tipo == 'API' %} <span class="tag tag-acc">API</span>{% endif %}
+        {% else %}<span class="mono">{{ t.endpoint or '—' }}</span>{% if t.endpoint %}<div class="small muted">não está no inventário</div>{% endif %}{% endif %}
+        {% if t.environment %}<div class="small muted">{{ t.environment }}</div>{% endif %}</td>
+      <td>{{ t.phase or '—' }}{% if r.fim_ultrapassado %}<div><span class="tag tag-run" title="Data de fim planeada: {{ t.scheduled_end|dt }}">fim planeado ultrapassado</span></div>{% endif %}</td>
+      <td class="nowrap">{{ t.cert_expiry|dt if t.cert_expiry else '—' }}
+        {% if r.cert_expirado %}<div><span class="tag tag-err">expirou há {{ r.dias_expirado }} d</span></div>{% endif %}</td>
+      <td class="small">{{ t.owner_group or '—' }}{% if t.owner_person %}<div class="muted">{{ t.owner_person }}</div>{% endif %}</td>
+      <td class="small comment-cell">{% if r.ultimo_comentario %}{% set c = r.ultimo_comentario %}
+        <div class="muted">{{ c.quando|dtt if c.quando else '' }}{% if c.autor %} · {{ c.autor }}{% endif %}</div>
+        <div class="comment-text">{{ c.texto[:220] }}{% if c.texto|length > 220 %}…{% endif %}</div>
+        <a href="{{ r.discussao }}" target="_blank" rel="noopener noreferrer">{{ r.comentarios }} comentário(s) ↗</a>
+        {% elif r.aberto %}<span class="muted">sem comentários</span>{% else %}<span class="muted">—</span>{% endif %}</td>
+    </tr>
+  {% else %}
+    <tr><td colspan="6"><div class="empty"><b>Nenhum pedido nesta vista</b>{{ 'Ainda não houve leitura do SMAX.' if not counts.todos else '' }}</div></td></tr>
+  {% endfor %}
+  </tbody>
+</table>
+{% if n_rows > rows|length %}<p class="muted small">A mostrar {{ rows|length }} de {{ n_rows }}.</p>{% endif %}
+</div>
+{% endblock %}

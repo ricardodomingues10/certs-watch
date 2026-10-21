@@ -1,5 +1,5 @@
 {% extends "base.html" %}
-{% from "_macros.html" import days, state, scope_chip %}
+{% from "_macros.html" import days, state, scope_chip, ticket_cell %}
 {% block title %}APIs{% endblock %}
 {% block crumb %}Inventário{% endblock %}
 {% block page_title %}APIs e segredos <small>{{ counts[''] }}</small>{% endblock %}
@@ -45,7 +45,7 @@ e reinicie (<span class="mono">docker compose up -d</span>), ou coloque a export
 
 <div class="card flush scroll">
 <table>
-  <thead><tr><th>Nome</th><th>Aplicação</th><th>Localização</th><th>Expira</th><th>Expirado? (CMDB)</th><th>Registo na CMDB</th>{% if any_host %}<th>Servidor</th>{% endif %}</tr></thead>
+  <thead><tr><th>Nome</th><th>Aplicação</th><th>Localização</th><th>Expira</th>{% if smax_on %}<th>Pedido SMAX</th>{% endif %}<th>Expirado? (CMDB)</th><th>Registo na CMDB</th>{% if any_host %}<th>Servidor</th>{% endif %}</tr></thead>
   <tbody>
   {% for r in rows %}{% set a = r.api %}
     <tr>
@@ -54,6 +54,7 @@ e reinicie (<span class="mono">docker compose up -d</span>), ou coloque a export
       <td>{{ a.application or '—' }}</td>
       <td class="small">{{ a.location or '—' }}</td>
       <td class="nowrap">{% if a.expiry %}{{ days(r.dias) }}<div class="small muted">{{ a.expiry|dt }}</div>{% else %}<span class="muted">sem data</span>{% endif %}</td>
+      {% if smax_on %}<td>{{ ticket_cell(r.smax, r.dias) }}</td>{% endif %}
       <td>{% if a.cmdb_expired is none %}<span class="muted">—</span>{% else %}{{ 'Sim' if a.cmdb_expired else 'Não' }}{% endif %}
         {% if r.divergente %}<div><span class="tag tag-run" title="O campo da CMDB não corresponde à data de expiração">desatualizado</span></div>{% endif %}</td>
       <td class="small nowrap">{{ a.registered_at|dt if a.registered_at else '—' }}</td>
@@ -61,7 +62,7 @@ e reinicie (<span class="mono">docker compose up -d</span>), ou coloque a export
         {% if r.servidor %}<div>{{ state(r.servidor.state) }} {{ scope_chip(r.servidor.scope) }}</div>{% endif %}{% else %}—{% endif %}</td>{% endif %}
     </tr>
   {% else %}
-    <tr><td colspan="7" class="muted">{{ 'Ainda não foi importada nenhuma API. Use "Importar lista agora" no topo da página.' if configured and not counts[''] else 'Nenhuma API nesta vista.' }}</td></tr>
+    <tr><td colspan="8" class="muted">{{ 'Ainda não foi importada nenhuma API. Use "Importar lista agora" no topo da página.' if configured and not counts[''] else 'Nenhuma API nesta vista.' }}</td></tr>
   {% endfor %}
   </tbody>
 </table>

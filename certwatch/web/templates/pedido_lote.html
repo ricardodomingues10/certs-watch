@@ -1,7 +1,7 @@
 {% extends "base.html" %}
 {% block title %}Lote {{ b.id }}{% endblock %}
 {% block head %}{% if b.status == 'a_criar' %}<meta http-equiv="refresh" content="3">{% endif %}{% endblock %}
-{% block crumb %}<a href="/pedidos">Pedidos SMAX</a>{% endblock %}
+{% block crumb %}<a href="/pedidos">Pedidos SMAX</a> › <a href="/pedidos/lotes">Lotes</a>{% endblock %}
 {% block page_title %}Lote {{ b.id }} <span class="tag {{ {'concluido': 'tag-ok', 'interrompido': 'tag-err', 'a_criar': 'tag-run', 'rascunho': 'tag-acc'}.get(b.status, 'tag-off') }}">{{ BATCH_STATES.get(b.status, b.status) }}</span>{% endblock %}
 {% block lede %}{% if b.status == 'rascunho' %}Preencha o que a CMDB não tem. Os valores já preenchidos são sugestões e indicam de onde vêm. Só os pedidos marcados são enviados; nada é criado no SMAX antes de rever e confirmar.{% elif b.status == 'a_criar' %}A criar os pedidos no SMAX, um de cada vez. Esta página atualiza-se sozinha.{% else %}Criado por {{ b.created_by }} em {{ b.created_at|dtt }}{% if b.confirmed_by %}, confirmado por {{ b.confirmed_by }} em {{ b.confirmed_at|dtt }}{% endif %}.{% endif %}{% endblock %}
 {% block actions %}
@@ -48,6 +48,7 @@
         <input type="checkbox" name="incluir_{{ d.id }}" value="1" {{ 'checked' if d.include }} aria-label="Enviar pedido para {{ d.name }}"></td>
       <td class="draft-cert"><a class="mono" href="/certificados/detalhe?cn={{ d.cn|urlencode }}">{{ d.name }}</a>
         <div class="small muted">expira {{ d.expiry|dt if d.expiry else '—' }} ({{ d.expiry_source }}){% if d.issuer %} · {{ d.issuer }}{% endif %}</div>
+        {% if d.sites and (d.sites|length > 1 or d.sites[0] != d.cn) %}<div class="small served" title="{{ d.sites|join(', ') }}">instalado em <b>{{ d.sites|length }}</b> site(s): {{ d.sites[:4]|join(', ') }}{% if d.sites|length > 4 %}…{% endif %}</div>{% endif %}
         {% for w in d.warnings %}<div class="small warn-line">⚠ {{ w }}</div>{% endfor %}
         {% if d.warnings and 'em curso' in d.warnings|join(' ') %}<label class="small"><input type="checkbox" name="duplicado_{{ d.id }}" value="1" {{ 'checked' if d.override_duplicate }}> criar mesmo assim</label>{% endif %}
         {% if d.include and e.get('expiry') %}<div class="small err-line">{{ e.expiry }}</div>{% endif %}

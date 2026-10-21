@@ -124,6 +124,8 @@ def build_payload(d: TicketDraft, settings: Settings) -> dict:
     }}]}
     rows = [("Nome", d.name), ("Data de expiração", local.strftime("%d-%m-%Y %H:%M")),
             ("Issuer", d.issuer or "Não indicado"), ("Localização", d.localizacao)]
+    if d.sites:
+        rows.append(("Instalado em", ", ".join(d.sites)))
     description = ("<p>Solicitamos a renovação do certificado:</p>"
                    + "".join(f"<p>{escape(k)}: {escape(str(v))}</p>" for k, v in rows)
                    + (f"<p>{escape(settings.smax_description_sign)}</p>" if settings.smax_description_sign else ""))
@@ -196,27 +198,51 @@ def create_batch(session: Session, cns: list[str], actor: str, settings: Setting
     batch = TicketBatch(created_by=actor, status="rascunho")
     session.add(batch)
     session.flush()
-    for pos, cn in enumerate(cns):
+    # Cada nome selecionado aponta para o certificado que é realmente servido (um wildcard ou um certificado
+    # com vários nomes pode estar em muitos sites): um pedido por certificado, com todos os sites.
+    targets: dict[str, dict] = {}
+    for cn in cns:
         r = inv[cn]
-        expiry = r["live_not_after"] or r["cmdb_valid_to"]
-        vals, src = _suggest(session, r, settings)
-        warnings = []
-        include = True
-        if r["smax"]["state"] == "em_curso":
-            warnings.append(f"Já existe o pedido {r['smax']['main']['id']} em curso para este certificado.")
+        sp = r["servido_por"]
+        if sp:
+            tr = inv.get(sp["cn"])
+            t = targets.setdefault(sp["cn"], {
+                "cn": sp["cn"], "name": sp["nome"], "expiry": sp["not_after"], "expiry_source": "servidor",
+                "issuer": sp["emissor"] or "", "scope": (tr or r)["scope"], "smax": r["smax"],
+                "auto": is_auto_renew(settings, sp["emissor"]), "dias": r["dias"],
+                "sites": {s["host"] for s in (tr["instalado_em"] if tr else sp["sites"])} | {s["host"] for s in r["instalado_em"]},
+                "via": []})
+            t["sites"].add(cn)
+            t["via"].append(cn)
+        else:
+            t = targets.setdefault(cn, {
+                "cn": cn, "name": r["common_name"], "expiry": r["live_not_after"] or r["cmdb_valid_to"],
+                "expiry_source": "servidor" if r["live_not_after"] else "CMDB",
+                "issuer": (r["live_issuer"] or ", ".join(r["issuers"])), "scope": r["scope"], "smax": r["smax"],
+                "auto": r["renovacao"] == "auto", "dias": r["dias"],
+                "sites": {s["host"] for s in r["instalado_em"]}, "via": []})
+            if cn not in t["via"] and t["via"]:
+                t["via"].append(cn)
+    for pos, tg in enumerate(targets.values()):
+        base = inv.get(tg["cn"]) or {"cn": tg["cn"], "scope": tg["scope"]}
+        vals, src = _suggest(session, base, settings)
+        warnings, include = [], True
+        if tg["via"]:
+            warnings.append(f"Selecionado através de {', '.join(tg['via'])}: o certificado servido é {tg['name']}.")
+        if tg["smax"]["state"] == "em_curso":
+            warnings.append(f"Já existe o pedido {tg['smax']['main']['id']} em curso para este certificado.")
             include = False
-        elif r["smax"]["state"] == "outra_data":
-            warnings.append(f"Há um pedido aberto ({r['smax']['main']['id']}) para outra data de expiração.")
-        if r["renovacao"] == "auto":
+        elif tg["smax"]["state"] == "outra_data":
+            warnings.append(f"Há um pedido aberto ({tg['smax']['main']['id']}) para outra data de expiração.")
+        if tg["auto"]:
             warnings.append("Renovação automática (Let's Encrypt): normalmente não precisa de pedido.")
             include = False
-        if r["dias"] is not None and r["dias"] < 0:
-            warnings.append(f"Já expirou há {-r['dias']} dias.")
+        if tg["dias"] is not None and tg["dias"] < 0:
+            warnings.append(f"Já expirou há {-tg['dias']} dias.")
         session.add(TicketDraft(
-            batch_id=batch.id, position=pos, cn=cn, name=r["common_name"], expiry=expiry,
-            expiry_source="servidor" if r["live_not_after"] else "CMDB",
-            issuer=(r["live_issuer"] or ", ".join(r["issuers"]))[:512], scope=r["scope"], include=include,
-            prefill=src, warnings=warnings, **vals))
+            batch_id=batch.id, position=pos, cn=tg["cn"], name=tg["name"], expiry=tg["expiry"],
+            expiry_source=tg["expiry_source"], issuer=(tg["issuer"] or "")[:512], scope=tg["scope"], include=include,
+            prefill=src, warnings=warnings, via=tg["via"], sites=sorted(tg["sites"])[:200], **vals))
     session.add(AuditLog(actor=actor, action="pedidos.lote_criado", target=f"lote {batch.id}",
                          details={"certificados": cns}))
     return batch

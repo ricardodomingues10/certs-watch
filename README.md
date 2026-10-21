@@ -1,4 +1,4 @@
-# certwatch 0.7
+# certwatch 0.8
 
 Aplicação autónoma de gestão de certificados X.509 de uma organização. Não depende do n8n.
 
@@ -15,6 +15,7 @@ Aplicação autónoma de gestão de certificados X.509 de uma organização. Nã
 10. Pede (opcional) ao Qualys SSL Labs a nota A+–F dos nomes externos, vista a partir da internet.
 11. Lê (opcional) os pedidos de certificados do SMAX e mostra, para cada certificado, o número do pedido com link para o SMAX.
 12. Cria (opcional) pedidos de renovação no SMAX para um certificado, para os selecionados ou para todos os de uma vista filtrada, com revisão e confirmação.
+13. Distingue o **site** (onde está instalado) do **certificado** (o que se renova): um wildcard ou um certificado com vários nomes pode servir muitos sites, e os pedidos são sempre feitos para o certificado.
 
 Fora desta versão: escrita na UCMDB, email.
 
@@ -201,6 +202,10 @@ Situações de cada certificado:
 
 Onde aparece: coluna **Pedido SMAX** em Certificados (filtro "Sem pedido em curso", pesquisa pelo número do pedido, exportação CSV com o link), secção **Pedidos no SMAX** no topo do detalhe de cada certificado (todos os pedidos, abertos e fechados), e no Painel ("expiram em 30 dias … destes sem pedido em curso" e coluna Pedido em "Precisam de ação"). O número do pedido abre o SMAX (`CERTWATCH_SMAX_TICKET_URL`).
 
+### 7.0 Página Pedidos SMAX
+
+Todos os pedidos lidos, ligados ao certificado ou à API a que se referem, com separadores: **abertos**, **abertos com certificado já expirado** (a data de expiração do pedido já passou), **abertos com fim planeado ultrapassado**, **com comentários**, **fechados**. Para os pedidos abertos são lidos os comentários (`GET /rest/{tenant}/collaboration/comments/{entidade}/{id}`, sem os do sistema), com autor e data, porque muitas vezes os técnicos comentam sem mudar o estado; o link abre a discussão no SMAX. Os pedidos de APIs são ligados pelo nome (o "endpoint" do pedido é o nome da API) e aparecem na página APIs. Se os pedidos das APIs usarem outro modelo de change, alargar `CERTWATCH_SMAX_FILTER`, por exemplo `(BasedOnChangeModel = '111' or BasedOnChangeModel = '222')`.
+
 ### 7.1 Criar pedidos de renovação
 
 Ligar com `CERTWATCH_SMAX_CREATE_ENABLED=true` e os valores do modelo de change (`CERTWATCH_SMAX_CHANGE_MODEL`, `CERTWATCH_SMAX_SERVICE`, `CERTWATCH_SMAX_DATA_DOMAINS`, ver `.env.example`). A conta SMAX tem de poder criar changes nesse modelo.
@@ -216,6 +221,17 @@ Ligar com `CERTWATCH_SMAX_CREATE_ENABLED=true` e os valores do modelo de change 
    - "Novo lote com os que falharam" repete apenas os que falharam ou não foram tentados.
 
 Tudo fica na auditoria (quem criou, confirmou e cada pedido criado). As respostas do SMAX guardadas nunca incluem o token de sessão.
+
+## 7.2 Sites e certificados
+
+Um site (`adfs.exemplo.pt:443`) serve um certificado de cada vez; um certificado (um wildcard `*.exemplo.pt` ou um certificado com vários nomes) pode estar em muitos sites. A aplicação sabe qual é pelo que cada servidor apresenta na verificação.
+
+- **Detalhe de um site** servido por outro certificado: aviso no topo ("Este site usa o certificado `*.exemplo.pt`… também instalado em…"). Se a CMDB tem um registo com o nome do site e a **mesma data**, é um registo "por site" desse certificado; com **outra data**, está desatualizado ou há um certificado próprio por instalar.
+- **Detalhe de um certificado**: "Onde está instalado", com a versão (SHA-256) servida em cada site; versões diferentes indicam uma renovação por instalar em alguns sites.
+- **Certificados**: "servido por …" e "instalado em N sites"; filtro "Próprio ou partilhado".
+- **Pedidos**: escolher um site gera o pedido para o certificado que ele serve; vários sites do mesmo certificado dão um só pedido; a descrição lista os sites.
+- Um site sem registo próprio na CMDB é comparado com os registos do certificado que serve; os alertas de expiração da CMDB de um certificado que já é visto nos sites são substituídos pelos alertas da verificação.
+- Para descobrir onde estão os wildcards, a aplicação verifica os nomes encontrados na internet (`CERTWATCH_CT_SCAN`): só nomes concretos dos domínios configurados, de certificados ainda válidos; os que não respondem são desligados sem alerta e não aparecem no inventário.
 
 ## 8. Classificação
 
@@ -298,7 +314,7 @@ Os testes levantam servidores TLS reais em localhost com uma PKI de teste (chain
 Fazer o build numa máquina com acesso e transferir a imagem:
 
 ```bash
-docker compose build && docker save certwatch:0.7.0 postgres:16-alpine | gzip > certwatch-images.tar.gz
+docker compose build && docker save certwatch:0.8.0 postgres:16-alpine | gzip > certwatch-images.tar.gz
 # no servidor:
 gunzip -c certwatch-images.tar.gz | docker load && docker compose up -d --no-build
 ```
