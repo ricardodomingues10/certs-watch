@@ -377,10 +377,16 @@ Depois pré-visualiza-se e envia-se:
 - **Certificados novos na internet, para aprovação**: os certificados encontrados na internet (Certificate Transparency) nos últimos N dias que não estão na CMDB e não foram ignorados na triagem. Ficam separados em "nome desconhecido" e "nome já na CMDB, com outro certificado". O email pede à equipa de Sistemas que aprove ou não o registo de cada um e leva em anexo `Certificados_Internet.xlsx`, com uma coluna "Aprovado (Sim/Não)" para preencher.
 - **Várias partes**: num só email ou um email por parte.
 
-**Editar o texto dos emails.** Na página do relatório, em **Editar o texto dos emails**, muda-se o assunto, a saudação, os parágrafos antes de cada tabela, o fecho e a assinatura de cada email. As tabelas e os anexos continuam a ser gerados pela aplicação.
-- **Variáveis** entre chavetas são trocadas no envio: `{n_alerta}`, `{alerta}`, `{janela}`, `{desde}`, `{ate}`, `{n_internos}`, `{n_externos}`, `{n_renovados}`, `{n_internet}`, `{periodo}`, `{data}`, `{saudacao}` (Bom dia/Boa tarde) e `{assinatura}`.
-- `**texto**` fica a negrito e cada linha nova é uma quebra de linha. O texto é sempre tratado como texto simples (não aceita HTML). Um bloco vazio não aparece no email.
-- **Guardar neste relatório** muda só este relatório. **Guardar como modelo para os próximos** passa a ser o texto de todos os relatórios novos. **Repor o texto original da aplicação** apaga o modelo. As alterações ficam na auditoria (`relatorio.textos`).
+**Editar os emails.** Cada email aparece na página tal como vai ser enviado. Em **Editar este email** escreve-se e apaga-se diretamente no email, como num documento:
+- **Mudar texto:** clicar e escrever. Também se muda o assunto. Há botões de negrito e itálico.
+- **Tirar uma linha de uma tabela:** tocar na linha (ou apontar com o rato) e carregar no ✕ vermelho. Também se pode selecionar várias linhas e carregar em Delete. Se todas as linhas de uma tabela saírem, a tabela sai também.
+- **Tirar uma coluna:** clicar numa célula da coluna e carregar em **Apagar a coluna**.
+- **Desfazer** (ou Ctrl+Z) volta atrás. **Guardar o email** grava; a pré-visualização e o envio passam a usar exatamente esse texto. **Voltar ao email gerado** descarta as alterações.
+- A saudação e o fecho são os mesmos nos três emails.
+- O texto editado fica como está, mesmo que os dados mudem. O anexo Excel não muda: para tirar um certificado também do Excel, usa-se **Retirar certificados do email e do Excel**.
+- Segurança: o email editado passa por uma lista de permissões antes de ser guardado e enviado (só texto, tabelas e estilos simples; sem scripts, imagens, links ou eventos). As alterações ficam na auditoria (`relatorio.editar_email`).
+
+**Texto por omissão (modelo).** Em **Texto por omissão dos emails** muda-se o texto base que a aplicação gera para todos os relatórios: assuntos, saudação, parágrafos, fecho e assinatura, com variáveis entre chavetas (`{n_alerta}`, `{alerta}`, `{janela}`, `{desde}`, `{ate}`, `{n_internos}`, `{n_externos}`, `{n_renovados}`, `{n_internet}`, `{periodo}`, `{data}`, `{saudacao}`, `{assinatura}`). Guarda-se só para o relatório ou como modelo para os próximos.
 
 Configuração no `.env`: `CERTWATCH_SMTP_HOST`, `_PORT`, `_SECURITY` (starttls/ssl/none), `_FROM` e `_USER`. A password vai no segredo `secrets/smtp_password`. Este ficheiro tem de existir, nem que seja vazio (`touch secrets/smtp_password`), tal como `secrets/publish_ssh`. `CERTWATCH_REPORT_ALLOWED_DOMAINS` limita os destinatários aos domínios da organização. Os envios ficam registados no relatório e na auditoria.
 

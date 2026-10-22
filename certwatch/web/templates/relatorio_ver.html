@@ -23,13 +23,91 @@
   </div>
 </section>
 
+
+<h2 id="previsao">Os emails</h2>
+<p class="small muted">É isto que vai ser enviado. Para mudar, carregue em <b>Editar este email</b> e escreva ou apague diretamente no email.</p>
+{% set titulos = {'alertas': 'Alertas', 'reconciliacao': 'Reconciliação', 'internet': 'Certificados novos na internet (aprovação)'} %}
+{% set anexos = {'reconciliacao': ('/relatorio/' ~ rep.id ~ '/excel', 'Certificados_' ~ rep.ate ~ '_Dias.xlsx'), 'internet': ('/relatorio/' ~ rep.id ~ '/excel?parte=internet', INTERNET_EXCEL)} %}
+{% for k in ['alertas', 'reconciliacao', 'internet'] %}
+<section class="card email-card" id="email-{{ k }}" data-email="{{ k }}" data-editor="/relatorio/{{ rep.id }}/editor/{{ k }}" data-preview="/relatorio/{{ rep.id }}/previsao/{{ k }}">
+  <div class="email-head">
+    <div>
+      <h3>{{ titulos[k] }}</h3>
+      <p class="small muted">Assunto: {{ assuntos[k] }}{% if k in anexos %} · anexo <a href="{{ anexos[k][0] }}">{{ anexos[k][1] }}</a>{% endif %}</p>
+      {% if editado[k] %}<p class="small"><span class="tag tag-run">editado</span> por {{ editados.por }} em {{ editados.em|dtt }}. O texto editado fica como está, mesmo que os dados mudem.</p>{% endif %}
+    </div>
+    <div class="email-btns">
+      <button type="button" class="primary" data-edit-start hidden>Editar este email</button>
+      {% if editado[k] or comum_editado %}
+      <form method="post" action="/relatorio/{{ rep.id }}/email/{{ k }}" data-edit-hide>
+        <input type="hidden" name="csrf" value="{{ csrf }}"><input type="hidden" name="acao" value="repor">
+        <button>Voltar ao email gerado</button>
+      </form>
+      {% endif %}
+    </div>
+  </div>
+  <form method="post" action="/relatorio/{{ rep.id }}/email/{{ k }}" class="email-edit" data-edit-form hidden>
+    <input type="hidden" name="csrf" value="{{ csrf }}"><input type="hidden" name="acao" value="guardar">
+    <input type="hidden" name="assunto_original" value="{{ assuntos[k] }}">
+    <label class="small">Assunto <input type="text" name="assunto" value="{{ assuntos[k] }}" maxlength="250"></label>
+    <div class="email-toolbar" role="toolbar" aria-label="Edição do email">
+      <button type="button" data-cmd="bold" title="Negrito"><b>N</b></button>
+      <button type="button" data-cmd="italic" title="Itálico"><i>I</i></button>
+      <button type="button" data-cmd="delrow">Apagar a linha</button>
+      <button type="button" data-cmd="delcol">Apagar a coluna</button>
+      <button type="button" data-cmd="undo">Desfazer</button>
+      <span class="grow"></span>
+      <button type="button" data-edit-cancel>Cancelar</button>
+      <button class="primary">Guardar o email</button>
+    </div>
+    <p class="small muted">Clique no email e escreva ou apague como num documento. Para tirar uma linha de uma tabela, toque nela (ou aponte com o rato) e carregue no ✕ vermelho (ou selecione várias linhas e carregue em Delete).
+      A saudação e o fecho são os mesmos nos três emails. O anexo Excel não muda: para tirar um certificado também do Excel, use "Retirar certificados" mais abaixo.</p>
+  </form>
+  <div class="email-frame">
+    <iframe class="email-preview" src="/relatorio/{{ rep.id }}/previsao/{{ k }}" title="Email: {{ titulos[k] }}"></iframe>
+    <button type="button" class="row-del" data-row-del hidden title="Apagar esta linha" aria-label="Apagar esta linha">✕</button>
+  </div>
+</section>
+{% endfor %}
+
+<section class="card" id="enviar">
+  <h2>Enviar</h2>
+  {% if problems %}<div class="note warn small">O envio não está configurado: {{ problems|join('; ') }}.</div>{% endif %}
+  <form method="post" action="/relatorio/{{ rep.id }}/enviar" class="stack">
+    <input type="hidden" name="csrf" value="{{ csrf }}">
+    <label class="small">Para (separe vários endereços por vírgula)
+      <input type="text" name="para" value="{{ para }}" required autocomplete="email" placeholder="nome@organizacao.pt"></label>
+    {% if settings.report_allowed_domains %}<p class="small muted">Só são aceites endereços de {{ settings.report_allowed_domains|join(', ') }}.</p>{% endif %}
+    <fieldset class="plain"><legend class="small">O que enviar</legend>
+      <label><input type="checkbox" name="parte" value="alertas" checked> Alertas</label>
+      <label><input type="checkbox" name="parte" value="reconciliacao" checked> Reconciliação com o Excel em anexo</label>
+      <label><input type="checkbox" name="parte" value="internet"> Certificados novos na internet, para aprovação (com Excel)</label>
+    </fieldset>
+    <fieldset class="plain"><legend class="small">Se escolher mais do que uma</legend>
+      <label><input type="radio" name="modo" value="junto" checked> Num só email</label>
+      <label><input type="radio" name="modo" value="separado"> Um email por parte</label>
+    </fieldset>
+    <label><input type="checkbox" name="confirmo" value="1" required> Revi a pré-visualização e quero enviar.</label>
+    <div><button class="primary" {{ 'disabled' if problems }}>Enviar</button></div>
+  </form>
+  {% if rep.sends %}
+  <table class="compact mt">
+    <thead><tr><th>Quando</th><th>Por</th><th>Para</th><th>O quê</th><th>Resultado</th></tr></thead>
+    {% for e in rep.sends|reverse %}<tr><td class="small">{{ e.em|dtt }}</td><td class="small">{{ e.por }}</td><td class="small">{{ (e.para or [])|join(', ') }}</td>
+      <td class="small">{{ (e.assuntos or e.partes)|join(' | ') }}</td>
+      <td>{% if e.ok %}<span class="tag tag-ok">enviado</span>{% else %}<span class="tag tag-err" title="{{ e.erro }}">falhou</span><div class="small muted">{{ e.erro }}</div>{% endif %}</td></tr>{% endfor %}
+  </table>
+  {% endif %}
+</section>
+
 <details class="card" id="lista" {{ 'open' if excl }}>
-  <summary>Certificados incluídos ({{ n_in }} de {{ janela|length }} a expirar; {{ sel.internet|length }} de {{ internet|length }} da internet) — retirar algum</summary>
+  <summary>Retirar certificados do email e do Excel ({{ n_in }} de {{ janela|length }} a expirar; {{ sel.internet|length }} de {{ internet|length }} da internet)</summary>
+  <p class="small muted mt">Para tirar uma linha só do texto do email, basta apagá-la no email. Aqui tira-se o certificado do email gerado e também do anexo Excel.</p>
   <form method="post" action="/relatorio/{{ rep.id }}/selecao" class="mt">
     <input type="hidden" name="csrf" value="{{ csrf }}">
     <div class="selbar"><label><input type="checkbox" data-check-all="inc"> Incluir todos</label>
       <span class="small muted"><span data-sel-count>{{ janela|length - (janela|selectattr('cn', 'in', excl)|list|length) }}</span> incluídos</span>
-      <button class="primary">Guardar e atualizar a pré-visualização</button></div>
+      <button class="primary">Guardar</button></div>
     <div class="scroll"><table>
       <thead><tr><th>Incluir</th><th>Certificado</th><th>Validade efetiva</th><th>Dias</th><th>Âmbito</th><th>Alteração</th><th>Renovação automática</th><th>CMDB atualizada</th></tr></thead>
       <tbody>
@@ -68,7 +146,7 @@
 </details>
 
 <details class="card" id="texto" {{ 'open' if n_proprios or request.query_params.get('msg', '').startswith(('Texto', 'Alterações', 'Reposto', 'O texto')) }}>
-  <summary>Editar o texto dos emails{% if n_proprios %} — {{ n_proprios }} bloco(s) alterado(s) neste relatório{% elif modelo %} — a usar o modelo guardado{% endif %}</summary>
+  <summary>Texto por omissão dos emails (modelo){% if n_proprios %} — {{ n_proprios }} bloco(s) alterado(s) neste relatório{% elif modelo %} — a usar o modelo guardado{% endif %}</summary>
   <p class="small muted mt">As tabelas e os anexos são gerados pela aplicação; aqui muda o texto à volta deles: assunto, saudação, parágrafos, fecho e assinatura.
     Pode guardar só para este relatório ou como modelo para os próximos.
     {% if modelo %}Modelo guardado por {{ modelo.por or '—' }} em {{ modelo.em|dtt }}.{% endif %}</p>
@@ -108,53 +186,4 @@
   </form>
 </details>
 
-<h2 id="previsao">Pré-visualização</h2>
-<p class="small muted">Mostra o texto guardado: depois de editar, guarde para atualizar.</p>
-<div>
-  <section class="card">
-    <h3>Alertas</h3>
-    <p class="small muted">Assunto: {{ assuntos.alertas }}</p>
-    <iframe class="email-preview" src="/relatorio/{{ rep.id }}/previsao/alertas" title="Pré-visualização do email de alertas"></iframe>
-  </section>
-  <section class="card">
-    <h3>Reconciliação</h3>
-    <p class="small muted">Assunto: {{ assuntos.reconciliacao }} · anexo <a href="/relatorio/{{ rep.id }}/excel">Certificados_{{ rep.ate }}_Dias.xlsx</a></p>
-    <iframe class="email-preview" src="/relatorio/{{ rep.id }}/previsao/reconciliacao" title="Pré-visualização do email de reconciliação"></iframe>
-  </section>
-  <section class="card">
-    <h3>Certificados novos na internet (aprovação)</h3>
-    <p class="small muted">Assunto: {{ assuntos.internet }} · anexo <a href="/relatorio/{{ rep.id }}/excel?parte=internet">{{ INTERNET_EXCEL }}</a> (com a coluna "Aprovado" para preencher)</p>
-    <iframe class="email-preview" src="/relatorio/{{ rep.id }}/previsao/internet" title="Pré-visualização do email de aprovação dos certificados da internet"></iframe>
-  </section>
-</div>
-
-<section class="card" id="enviar">
-  <h2>Enviar</h2>
-  {% if problems %}<div class="note warn small">O envio não está configurado: {{ problems|join('; ') }}.</div>{% endif %}
-  <form method="post" action="/relatorio/{{ rep.id }}/enviar" class="stack">
-    <input type="hidden" name="csrf" value="{{ csrf }}">
-    <label class="small">Para (separe vários endereços por vírgula)
-      <input type="text" name="para" value="{{ para }}" required autocomplete="email" placeholder="nome@organizacao.pt"></label>
-    {% if settings.report_allowed_domains %}<p class="small muted">Só são aceites endereços de {{ settings.report_allowed_domains|join(', ') }}.</p>{% endif %}
-    <fieldset class="plain"><legend class="small">O que enviar</legend>
-      <label><input type="checkbox" name="parte" value="alertas" checked> Alertas</label>
-      <label><input type="checkbox" name="parte" value="reconciliacao" checked> Reconciliação com o Excel em anexo</label>
-      <label><input type="checkbox" name="parte" value="internet"> Certificados novos na internet, para aprovação (com Excel)</label>
-    </fieldset>
-    <fieldset class="plain"><legend class="small">Se escolher mais do que uma</legend>
-      <label><input type="radio" name="modo" value="junto" checked> Num só email</label>
-      <label><input type="radio" name="modo" value="separado"> Um email por parte</label>
-    </fieldset>
-    <label><input type="checkbox" name="confirmo" value="1" required> Revi a pré-visualização e quero enviar.</label>
-    <div><button class="primary" {{ 'disabled' if problems }}>Enviar</button></div>
-  </form>
-  {% if rep.sends %}
-  <table class="compact mt">
-    <thead><tr><th>Quando</th><th>Por</th><th>Para</th><th>O quê</th><th>Resultado</th></tr></thead>
-    {% for e in rep.sends|reverse %}<tr><td class="small">{{ e.em|dtt }}</td><td class="small">{{ e.por }}</td><td class="small">{{ (e.para or [])|join(', ') }}</td>
-      <td class="small">{{ (e.assuntos or e.partes)|join(' | ') }}</td>
-      <td>{% if e.ok %}<span class="tag tag-ok">enviado</span>{% else %}<span class="tag tag-err" title="{{ e.erro }}">falhou</span><div class="small muted">{{ e.erro }}</div>{% endif %}</td></tr>{% endfor %}
-  </table>
-  {% endif %}
-</section>
 {% endblock %}

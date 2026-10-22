@@ -11,6 +11,7 @@ A validade "efetiva" é a que o servidor apresenta (quando verificado) ou a da C
 from __future__ import annotations
 
 import html
+from html.parser import HTMLParser
 import io
 import re
 import smtplib
@@ -359,22 +360,130 @@ def subject_for(part: str, sel: dict, desde: int, ate: int, alert_days: int, tex
     return re.sub(r"\s+", " ", fill(texts.get(key, ""), ctx)).strip()[:250] or "Certificados"
 
 
-def email_html(part: str | list[str], sel: dict, desde: int, ate: int, alert_days: int, signature: str, now: datetime,
-               ct_dias: int = 0, texts: dict | None = None) -> str:
+SECTIONS = ("inicio", "alertas", "reconciliacao", "internet", "fim")
+PARTS = ("alertas", "reconciliacao", "internet")
+
+
+def _parts(part: str | list[str]) -> list[str]:
+    return {"ambos": ["alertas", "reconciliacao"]}.get(part, [part]) if isinstance(part, str) else list(part)
+
+
+def email_sections(part: str | list[str], sel: dict, desde: int, ate: int, alert_days: int, signature: str, now: datetime,
+                   ct_dias: int = 0, texts: dict | None = None) -> dict:
+    """O email gerado, por secções: início (saudação), cada parte pedida e fim (fecho e assinatura)."""
     texts = texts or DEFAULT_TEXTS
     ctx = text_context(sel, desde, ate, alert_days, ct_dias, now, signature)
-    parts = {"ambos": ["alertas", "reconciliacao"]}.get(part, [part]) if isinstance(part, str) else list(part)
-    body = ""
-    if "alertas" in parts:
-        body += alerts_html(sel, desde, ate, alert_days, texts, ctx)
-    if "reconciliacao" in parts:
-        body += reconciliation_html(sel, texts, ctx)
-    if "internet" in parts:
-        body += internet_html(sel, ct_dias, texts, ctx)
+    out = {"inicio": _p(texts, "comum.saudacao", ctx) + _p(texts, "comum.inicio", ctx)}
+    for p in _parts(part):
+        if p == "alertas":
+            out[p] = alerts_html(sel, desde, ate, alert_days, texts, ctx)
+        elif p == "reconciliacao":
+            out[p] = reconciliation_html(sel, texts, ctx)
+        elif p == "internet":
+            out[p] = internet_html(sel, ct_dias, texts, ctx)
     closing = "<br>".join(x for x in (_t(texts, "comum.fecho", ctx), _t(texts, "comum.assinatura", ctx)) if x.strip())
-    return (f'<div style="font-family:Arial,sans-serif;font-size:14px;color:#222;">{_p(texts, "comum.saudacao", ctx)}'
-            f'{_p(texts, "comum.inicio", ctx)}{body}{_p(texts, "comum.fim", ctx)}'
-            + (f"<p>{closing}</p>" if closing else "") + "</div>")
+    out["fim"] = _p(texts, "comum.fim", ctx) + (f"<p>{closing}</p>" if closing else "")
+    return out
+
+
+def email_html(part: str | list[str], sel: dict, desde: int, ate: int, alert_days: int, signature: str, now: datetime,
+               ct_dias: int = 0, texts: dict | None = None, edits: dict | None = None, markers: bool = False) -> str:
+    """O email em HTML. `edits`: secções alteradas à mão na página (substituem as geradas).
+    `markers`: marca cada secção (data-cw-part) para o editor da página."""
+    body = ""
+    for k, v in email_sections(part, sel, desde, ate, alert_days, signature, now, ct_dias, texts).items():
+        if edits and isinstance(edits.get(k), str):
+            v = sanitize_html(edits[k])
+        body += f'<div data-cw-part="{k}">{v}</div>' if markers else v
+    return f'<div style="font-family:Arial,sans-serif;font-size:14px;color:#222;">{body}</div>'
+
+
+# ------------------------------------------------------------------ HTML editado na página: lista de permissões
+MAX_HTML = 400_000
+_ALLOWED_TAGS = {"p", "br", "div", "span", "strong", "b", "em", "i", "u", "table", "thead", "tbody", "tfoot", "tr", "th",
+                 "td", "ul", "ol", "li", "h2", "h3", "h4", "hr"}
+_VOID = {"br", "hr"}
+_DROP_WITH_CONTENT = {"script", "style", "iframe", "object", "embed", "noscript", "template", "button", "svg", "math",
+                      "head", "title", "textarea", "select", "form", "frameset", "noembed", "xmp"}
+_STYLE_PROPS = {"border", "border-top", "border-bottom", "border-left", "border-right", "border-collapse", "border-color",
+                "border-width", "border-style", "background", "background-color", "color", "padding", "padding-left",
+                "padding-right", "padding-top", "padding-bottom", "margin", "margin-top", "margin-bottom", "font-family",
+                "font-size", "font-weight", "font-style", "text-align", "text-decoration", "vertical-align", "white-space",
+                "width", "line-height"}
+_STYLE_VAL = re.compile(r"^[#a-zA-Z0-9\s.,%()'\"-]+$")
+
+
+def _clean_style(style: str) -> str:
+    out = []
+    for decl in (style or "").split(";"):
+        if ":" not in decl:
+            continue
+        prop, val = (x.strip() for x in decl.split(":", 1))
+        prop = prop.lower()
+        low = val.lower()
+        if prop in _STYLE_PROPS and val and _STYLE_VAL.match(val) and "url" not in low and "expression" not in low:
+            out.append(f"{prop}:{val}")
+    return ";".join(out)
+
+
+class _Sanitizer(HTMLParser):
+    def __init__(self):
+        super().__init__(convert_charrefs=True)
+        self.out: list[str] = []
+        self.stack: list[str] = []
+        self.skip = 0
+
+    def handle_starttag(self, tag, attrs):
+        if tag in _DROP_WITH_CONTENT:
+            self.skip += 1
+            return
+        if self.skip or tag not in _ALLOWED_TAGS:
+            return
+        a = ""
+        for k, v in attrs:
+            if k == "style":
+                st = _clean_style(v or "")
+                if st:
+                    a += f' style="{html.escape(st)}"'
+            elif k in ("colspan", "rowspan") and (v or "").isdigit() and 0 < int(v) < 100:
+                a += f' {k}="{int(v)}"'
+        self.out.append(f"<{tag}{a}>")
+        if tag not in _VOID:
+            self.stack.append(tag)
+
+    def handle_startendtag(self, tag, attrs):
+        if tag in _DROP_WITH_CONTENT:
+            return
+        self.handle_starttag(tag, attrs)
+        if tag in _ALLOWED_TAGS and tag not in _VOID and not self.skip:
+            self.handle_endtag(tag)
+
+    def handle_endtag(self, tag):
+        if tag in _DROP_WITH_CONTENT:
+            self.skip = max(0, self.skip - 1)
+            return
+        if self.skip or tag not in self.stack:
+            return
+        while self.stack:
+            t = self.stack.pop()
+            self.out.append(f"</{t}>")
+            if t == tag:
+                break
+
+    def handle_data(self, data):
+        if not self.skip:
+            self.out.append(html.escape(data, quote=False))
+
+    def result(self) -> str:
+        self.close()
+        return "".join(self.out) + "".join(f"</{t}>" for t in reversed(self.stack))
+
+
+def sanitize_html(fragment: str) -> str:
+    """HTML editado na página → só etiquetas de texto e tabelas, estilos simples; sem scripts, links, imagens ou eventos."""
+    p = _Sanitizer()
+    p.feed((fragment or "")[:MAX_HTML])
+    return p.result()
 
 
 def clean_texts(form: dict) -> dict:

@@ -4,6 +4,7 @@ from __future__ import annotations
 import csv
 import json
 import io
+import re
 import time
 from contextlib import asynccontextmanager
 from datetime import datetime, timedelta
@@ -928,7 +929,14 @@ def _texts(rep: EmailReport) -> dict:
     return rp.texts_for(base, rep.textos)
 
 
+def _edits(rep: EmailReport) -> dict:
+    return dict((rep.editados or {}).get("secoes") or {})
+
+
 def _subject(key: str, sel: dict, rep: EmailReport, texts: dict) -> str:
+    edited = ((rep.editados or {}).get("assuntos") or {}).get("alertas" if key == "ambos" else key)
+    if edited:
+        return edited
     return rp.subject_for(key, sel, rep.desde, rep.ate, rep.alerta, texts, rep.ct_dias or 0, utcnow().astimezone(_tz()))
 
 
@@ -1001,6 +1009,8 @@ def relatorio_ver(request: Request, rid: int, user: str = Depends(current_user))
                   texts=texts, base_texts=base, text_groups=groups, TEXT_GROUPS=rp.TEXT_GROUPS, TEXT_LABELS=rp.TEXT_LABELS,
                   TEXT_VARS=rp.TEXT_VARS, ORIGINAL=rp.DEFAULT_TEXTS, modelo=modelo, MAX_TEXT=rp.MAX_TEXT,
                   n_proprios=len(rep.textos or {}),
+                  editado={k: k in _edits(rep) or k in ((rep.editados or {}).get("assuntos") or {}) for k in rp.PARTS},
+                  comum_editado=bool({"inicio", "fim"} & set(_edits(rep))), editados=rep.editados or {},
                   internet=sel["todos_internet"], INTERNET_EXCEL=rp.INTERNET_EXCEL,
                   msg=request.query_params.get("msg", ""), erro=request.query_params.get("erro", ""))
 
@@ -1066,11 +1076,71 @@ def relatorio_previsao(rid: int, parte: str, user: str = Depends(current_user)):
         s.expunge(rep)
     _, sel = _report_data(rep, settings)
     body = rp.email_html(parte, sel, rep.desde, rep.ate, rep.alerta, settings.report_signature, utcnow().astimezone(_tz()),
-                         rep.ct_dias or 0, _texts(rep))
+                         rep.ct_dias or 0, _texts(rep), _edits(rep))
     page = f'<!doctype html><html lang="pt-PT"><head><meta charset="utf-8"></head><body style="margin:12px;background:#fff">{body}</body></html>'
     return Response(page, media_type="text/html; charset=utf-8", headers={
         "Content-Security-Policy": "default-src 'none'; style-src 'unsafe-inline'; frame-ancestors 'self'; sandbox",
         "X-Frame-Options": "SAMEORIGIN"})
+
+
+@app.get("/relatorio/{rid}/editor/{parte}")
+def relatorio_editor(rid: int, parte: str, user: str = Depends(current_user)):
+    """O email desta parte, com as secções marcadas, para editar na página (sem scripts; mesma origem)."""
+    if parte not in rp.PARTS:
+        raise HTTPException(404)
+    settings = get_settings()
+    with session_scope() as s:
+        rep = _report_or_404(s, rid)
+        s.expunge(rep)
+    _, sel = _report_data(rep, settings)
+    body = rp.email_html(parte, sel, rep.desde, rep.ate, rep.alerta, settings.report_signature, utcnow().astimezone(_tz()),
+                         rep.ct_dias or 0, _texts(rep), _edits(rep), markers=True)
+    page = f'<!doctype html><html lang="pt-PT"><head><meta charset="utf-8"></head><body style="margin:12px;background:#fff">{body}</body></html>'
+    return Response(page, media_type="text/html; charset=utf-8", headers={
+        "Content-Security-Policy": "default-src 'none'; style-src 'unsafe-inline'; frame-ancestors 'self'",
+        "X-Frame-Options": "SAMEORIGIN", "Cache-Control": "no-store"})
+
+
+@app.post("/relatorio/{rid}/email/{parte}")
+async def relatorio_email_editar(request: Request, rid: int, parte: str, user: str = Depends(current_user)):
+    """Guarda o email editado na página (só as secções alteradas) ou volta ao email gerado."""
+    if parte not in rp.PARTS:
+        raise HTTPException(404)
+    form = await request.form()
+    check_csrf(request, form.get("csrf"))
+    acao = str(form.get("acao") or "guardar")
+    with session_scope() as s:
+        rep = _report_or_404(s, rid)
+        ed = dict(rep.editados or {})
+        secoes = dict(ed.get("secoes") or {})
+        assuntos = dict(ed.get("assuntos") or {})
+        if acao == "repor":
+            for k in ("inicio", parte, "fim"):
+                secoes.pop(k, None)
+            assuntos.pop(parte, None)
+            msg = "Voltou ao email gerado pela aplicação."
+            mudou = [parte]
+        elif acao == "guardar":
+            mudou = []
+            for k in ("inicio", parte, "fim"):
+                v = form.get(f"sec_{k}")
+                if v is None:
+                    continue
+                if len(str(v)) > rp.MAX_HTML:
+                    raise HTTPException(400, "Email demasiado grande.")
+                secoes[k] = rp.sanitize_html(str(v))
+                mudou.append(k)
+            assunto = re.sub(r"\s+", " ", str(form.get("assunto") or "")).strip()[:250]
+            if assunto and assunto != str(form.get("assunto_original") or "").strip():
+                assuntos[parte] = assunto
+                mudou.append("assunto")
+            msg = "Email guardado: a pré-visualização e o envio usam o texto editado." if mudou else "Nada mudou no email."
+        else:
+            raise HTTPException(400, "Ação desconhecida.")
+        rep.editados = {"secoes": secoes, "assuntos": assuntos, "por": user, "em": utcnow().isoformat()} \
+            if (secoes or assuntos) else None
+        audit(s, user, "relatorio.editar_email", f"relatório {rid}", parte=parte, acao=acao, secoes=mudou)
+    return RedirectResponse(f"/relatorio/{rid}?{urlencode({'msg': msg})}#email-{parte}", status_code=303)
 
 
 @app.get("/relatorio/{rid}/excel")
@@ -1112,7 +1182,7 @@ async def relatorio_enviar(request: Request, rid: int, user: str = Depends(curre
             subj = _group_subject(g, sel, rep, texts)
             msgs.append(rp.build_message(settings, to, subj,
                                          rp.email_html(g, sel, rep.desde, rep.ate, rep.alerta, settings.report_signature, now,
-                                                       rep.ct_dias or 0, texts), _group_attachments(g, sel, rep)))
+                                                       rep.ct_dias or 0, texts, _edits(rep)), _group_attachments(g, sel, rep)))
             subjects.append(subj)
         rp.send(settings, msgs, SMTP_FACTORY)
         ok, erro = True, ""

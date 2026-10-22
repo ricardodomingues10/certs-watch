@@ -486,6 +486,8 @@ class EmailReport(Base):
     excluded: Mapped[list] = mapped_column(JSON, default=list)
     sends: Mapped[list] = mapped_column(JSON, default=list)
     textos: Mapped[dict | None] = mapped_column(JSON, nullable=True)     # texto alterado só neste relatório
+    # emails editados à mão na página: {"secoes": {secção: html}, "assuntos": {parte: assunto}, "por", "em"}
+    editados: Mapped[dict | None] = mapped_column(JSON, nullable=True)
 
 
 class EmailTemplate(Base):

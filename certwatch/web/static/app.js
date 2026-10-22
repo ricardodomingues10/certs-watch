@@ -46,4 +46,147 @@ document.addEventListener("DOMContentLoaded", () => {
     }));
     table.classList.add("stack");
   });
+  // Relatório por email: editar o email diretamente (escrever, apagar, tirar linhas e colunas das tabelas)
+  const editors = Array.from(document.querySelectorAll("[data-email]"));
+  let editing = null;
+  window.addEventListener("beforeunload", (e) => {
+    if (editing && editing.dirty()) { e.preventDefault(); e.returnValue = ""; }
+  });
+  editors.forEach((card) => {
+    const frame = card.querySelector("iframe");
+    const form = card.querySelector("[data-edit-form]");
+    const start = card.querySelector("[data-edit-start]");
+    const del = card.querySelector("[data-row-del]");
+    if (!frame || !form || !start || !del) return;
+    start.hidden = false;
+    let doc = null, initial = [], history = [], row = null, lastPush = 0, on = false;
+    const sections = () => (doc ? Array.from(doc.querySelectorAll("[data-cw-part]")) : []);
+    const snap = () => sections().map((x) => x.innerHTML);
+    const push = () => { history.push(snap()); if (history.length > 200) history.shift(); lastPush = Date.now(); };
+    const fit = () => { if (doc && doc.body) frame.style.height = Math.max(240, Math.ceil(doc.body.getBoundingClientRect().height) + 40) + "px"; };
+    const el = (n) => (n && n.nodeType === 1 ? n : n && n.parentElement);
+    const rowOf = (n) => {
+      const e = el(n);
+      const tr = e && e.closest("tr");
+      return tr && tr.querySelector("td") && tr.closest("[data-cw-part]") ? tr : null;
+    };
+    const cellOf = (n) => { const e = el(n); return e && e.closest("td, th"); };
+    const place = (tr) => {
+      row = tr && tr.isConnected ? tr : null;
+      if (!row) { del.hidden = true; return; }
+      const r = row.getBoundingClientRect();
+      del.hidden = false;
+      del.style.top = (frame.offsetTop + r.top + r.height / 2 - 14) + "px";
+      del.style.left = (frame.offsetLeft + Math.min(r.right + 6, frame.clientWidth - 34)) + "px";
+    };
+    const dropRows = (rows) => {
+      rows.forEach((tr) => {
+        const table = tr.closest("table");
+        tr.remove();
+        if (table && !table.querySelector("td")) table.remove();
+      });
+      place(null); fit();
+    };
+    const delRow = (tr) => { if (tr) { push(); dropRows([tr]); } };
+    const delCol = () => {
+      const sel = doc.getSelection();
+      const cell = sel && sel.rangeCount ? cellOf(sel.getRangeAt(0).startContainer) : null;
+      if (!cell) { alertBox("Clique primeiro numa célula da coluna a apagar."); return; }
+      const table = cell.closest("table"), idx = cell.cellIndex;
+      push();
+      Array.from(table.rows).forEach((tr) => { if (tr.cells.length > idx) tr.deleteCell(idx); });
+      if (!table.querySelector("td, th")) table.remove();
+      place(null); fit();
+    };
+    const undo = () => {
+      const prev = history.pop();
+      if (!prev) return;
+      sections().forEach((x, i) => { if (prev[i] !== undefined) x.innerHTML = prev[i]; });
+      place(null); fit();
+    };
+    const note = form.querySelector(".email-note") || document.createElement("p");
+    const alertBox = (msg) => { note.className = "small note warn email-note"; note.textContent = msg; form.append(note); };
+    const setOthers = (disabled) => editors.forEach((c) => {
+      const b = c.querySelector("[data-edit-start]");
+      if (c !== card && b) b.disabled = disabled;
+    });
+    const stop = () => {
+      on = false; editing = null; doc = null; history = [];
+      frame.src = card.dataset.preview; frame.style.height = "";
+      form.hidden = true; start.hidden = false; del.hidden = true;
+      card.querySelectorAll("[data-edit-hide]").forEach((x) => (x.hidden = false));
+      card.classList.remove("is-editing"); setOthers(false);
+    };
+    frame.addEventListener("load", () => {
+      if (!on) return;
+      doc = frame.contentDocument;
+      if (!doc) return;
+      const st = doc.createElement("style");
+      st.textContent = "[data-cw-part]{outline:1px dashed #b8bfcc;outline-offset:4px;margin:0 0 16px;min-height:1em}" +
+        "[data-cw-part]:focus{outline:2px solid #3b5bdb}[data-cw-part] tr:hover td{box-shadow:inset 0 0 0 9999px rgba(220,38,38,.08)}";
+      doc.head.append(st);
+      sections().forEach((x) => { x.contentEditable = "true"; x.spellcheck = true; });
+      initial = snap(); history = [];
+      doc.addEventListener("mouseover", (e) => place(rowOf(e.target)));
+      doc.addEventListener("click", (e) => place(rowOf(e.target)));
+      doc.addEventListener("keyup", () => { const s = doc.getSelection(); place(s && s.rangeCount ? rowOf(s.anchorNode) : null); });
+      doc.addEventListener("scroll", () => place(row));
+      doc.addEventListener("beforeinput", () => { if (Date.now() - lastPush > 800) push(); });
+      doc.addEventListener("input", fit);
+      doc.addEventListener("keydown", (e) => {
+        if ((e.ctrlKey || e.metaKey) && !e.shiftKey && e.key.toLowerCase() === "z") { e.preventDefault(); undo(); return; }
+        if (e.key !== "Backspace" && e.key !== "Delete") return;
+        const sel = doc.getSelection();
+        if (!sel || !sel.rangeCount || sel.isCollapsed) return;
+        const rg = sel.getRangeAt(0);
+        const a = cellOf(rg.startContainer), b = cellOf(rg.endContainer);
+        if (!a || !b || a === b) return;                 // dentro de uma célula ou fora das tabelas: apagar normal
+        const rows = Array.from(doc.querySelectorAll("[data-cw-part] tr")).filter((tr) => tr.querySelector("td") && rg.intersectsNode(tr));
+        if (!rows.length) return;
+        e.preventDefault(); push(); dropRows(rows); sel.removeAllRanges();
+      });
+      fit();
+      const first = sections()[0];
+      if (first) first.focus();
+    });
+    start.addEventListener("click", () => {
+      if (editing) return;
+      on = true;
+      editing = { dirty: () => doc && snap().some((h, i) => h !== initial[i]) };
+      frame.src = card.dataset.editor;
+      form.hidden = false; start.hidden = true;
+      card.querySelectorAll("[data-edit-hide]").forEach((x) => (x.hidden = true));
+      card.classList.add("is-editing"); setOthers(true);
+    });
+    del.addEventListener("click", () => delRow(row));
+    form.querySelector("[data-edit-cancel]").addEventListener("click", () => {
+      if (editing && editing.dirty() && !window.confirm("Descartar as alterações a este email?")) return;
+      stop();
+    });
+    form.querySelectorAll("[data-cmd]").forEach((b) => b.addEventListener("click", () => {
+      if (!doc) return;
+      const cmd = b.dataset.cmd;
+      if (cmd === "undo") return undo();
+      if (cmd === "delcol") return delCol();
+      if (cmd === "delrow") {
+        const s = doc.getSelection();
+        const tr = row || (s && s.rangeCount ? rowOf(s.anchorNode) : null);
+        return tr ? delRow(tr) : alertBox("Clique primeiro na linha da tabela a apagar.");
+      }
+      frame.contentWindow.focus(); push(); doc.execCommand(cmd);
+    }));
+    form.addEventListener("submit", (e) => {
+      if (!doc) { e.preventDefault(); return; }
+      // linhas que ficaram vazias (todas as células apagadas) saem da tabela
+      dropRows(Array.from(doc.querySelectorAll("[data-cw-part] tr")).filter((tr) => tr.querySelector("td") && !tr.textContent.trim()));
+      form.querySelectorAll("input[data-sec]").forEach((x) => x.remove());
+      sections().forEach((x, i) => {
+        if (x.innerHTML === initial[i]) return;
+        const inp = document.createElement("input");
+        inp.type = "hidden"; inp.name = "sec_" + x.dataset.cwPart; inp.value = x.innerHTML; inp.dataset.sec = "1";
+        form.append(inp);
+      });
+      editing = null;
+    });
+  });
 });

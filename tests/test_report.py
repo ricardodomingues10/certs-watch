@@ -236,7 +236,7 @@ def test_edit_texts_report_and_template(data, monkeypatch):
         url = c.post("/relatorio", data={"csrf": token, "desde": "0", "ate": "90", "alerta": "20"}, auth=AUTH,
                      follow_redirects=False).headers["location"]
         page = c.get(url, auth=AUTH).text
-        assert "Editar o texto dos emails" in page and 'name="alertas.alerta_texto"' in page and "{n_alerta}" in page
+        assert "Texto por omissão dos emails" in page and 'name="alertas.alerta_texto"' in page and "{n_alerta}" in page
         # só neste relatório
         r = c.post(url + "/textos", data={"csrf": token, "acao": "relatorio",
                                           "alertas.assunto": "URGENTE: {n_alerta} certificado(s) <b>",
@@ -267,3 +267,52 @@ def test_edit_texts_report_and_template(data, monkeypatch):
         with session_scope() as s:
             assert [a.details["acao"] for a in s.scalars(select(AuditLog).where(AuditLog.action == "relatorio.textos"))] == \
                 ["relatorio", "modelo", "original"]
+
+
+def test_direct_email_edit(data, monkeypatch):
+    from certwatch.models import AuditLog
+    from certwatch.web import app as webapp
+    monkeypatch.setattr(webapp, "get_settings", lambda: data)
+    monkeypatch.setattr(webapp, "SMTP_FACTORY", FakeSMTP)
+    FakeSMTP.sent = []
+    with TestClient(webapp.app) as c:
+        c.get("/relatorio", auth=AUTH)
+        token = c.cookies["cw_csrf"]
+        url = c.post("/relatorio", data={"csrf": token, "desde": "0", "ate": "90", "alerta": "20"}, auth=AUTH,
+                     follow_redirects=False).headers["location"]
+        page = c.get(url, auth=AUTH).text
+        assert "Editar este email" in page and 'data-editor="' + url + '/editor/alertas"' in page
+        # o editor: secções marcadas, mesma origem, sem scripts
+        ed = c.get(url + "/editor/alertas", auth=AUTH)
+        assert 'data-cw-part="inicio"' in ed.text and 'data-cw-part="alertas"' in ed.text and 'data-cw-part="fim"' in ed.text
+        csp = ed.headers["content-security-policy"]
+        assert "sandbox" not in csp and "default-src 'none'" in csp and "script" not in csp
+        assert c.get(url + "/editor/xpto", auth=AUTH).status_code == 404
+        # apagar uma linha e mudar texto: o browser envia o HTML das secções alteradas
+        corpo = ('<p>Só isto interessa:</p><table><tr><td style="padding:6px;border:1px solid #bfbfbf">www.exemplo.pt</td></tr></table>'
+                 '<p onclick="steal()">fim<script>alert(1)</script><img src="https://x/y.png"></p>')
+        r = c.post(url + "/email/alertas", data={"csrf": token, "acao": "guardar", "sec_alertas": corpo,
+                                                  "sec_inicio": "<p>Olá a todos,</p>", "assunto": "Certificados — revisão",
+                                                  "assunto_original": "x"}, auth=AUTH)
+        assert "Email guardado" in r.text and "editado</span> por admin" in r.text and "Assunto: Certificados — revisão" in r.text
+        prev = c.get(url + "/previsao/alertas", auth=AUTH).text
+        assert "Só isto interessa" in prev and "app.exemplo.local" not in prev and "Olá a todos" in prev
+        assert "<script" not in prev and "onclick" not in prev and "<img" not in prev and "padding:6px" in prev
+        # a saudação é comum: aparece também na reconciliação, que não foi editada
+        rec = c.get(url + "/previsao/reconciliacao", auth=AUTH).text
+        assert "Olá a todos" in rec and "renovado.exemplo.pt" in rec
+        # envio: exatamente o email editado, com o assunto editado
+        c.post(url + "/enviar", data={"csrf": token, "para": "ricardo@exemplo.pt", "parte": ["alertas"], "confirmo": "1"}, auth=AUTH)
+        msg = [m for m in FakeSMTP.sent if not isinstance(m, tuple)][0]
+        body = msg.get_body(("html",)).get_content()
+        assert msg["Subject"] == "Certificados — revisão" and "Só isto interessa" in body and "app.exemplo.local" not in body
+        assert "data-cw-part" not in body
+        # voltar ao email gerado
+        r = c.post(url + "/email/alertas", data={"csrf": token, "acao": "repor"}, auth=AUTH)
+        assert "Voltou ao email gerado" in r.text
+        prev = c.get(url + "/previsao/alertas", auth=AUTH).text
+        assert "app.exemplo.local" in prev and "Olá a todos" not in prev
+        with session_scope() as s:
+            assert s.scalar(select(EmailReport).where(EmailReport.id == int(url.rsplit("/", 1)[1]))).editados is None
+            assert [a.details["acao"] for a in s.scalars(select(AuditLog).where(AuditLog.action == "relatorio.editar_email"))] == \
+                ["guardar", "repor"]

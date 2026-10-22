@@ -100,6 +100,7 @@ _ADDED_COLUMNS = [
     ("final_runs", "state", "BYTEA"),
     ("email_reports", "ct_dias", "INTEGER NOT NULL DEFAULT 30"),
     ("email_reports", "textos", "JSON"),
+    ("email_reports", "editados", "JSON"),
 ]
 
 
