@@ -78,15 +78,33 @@ def columns_for_ci(props: dict, settings: Settings) -> dict[str, str]:
     return {col: attr for attr, col in plan if attr and not attr.startswith("(")}
 
 
-def api_value(col: str, text: str, tz: ZoneInfo, as_ms: bool = False):
-    """Texto da célula -> valor para a API. Datas: ISO 8601 (00:00 em Lisboa) ou milissegundos."""
+# Formatos de data tentados, por esta ordem, até a UCMDB aceitar (o primeiro que funcionar fica a ser usado).
+# A UCMDB recusou "2026-12-29T00:00:00Z" ("malformed at Z"): espera a data sem fuso.
+DATE_FORMATS = ("local", "local_ms", "epoch_ms", "utc")
+DATE_FORMAT_LABELS = {"local": "AAAA-MM-DDThh:mm:ss (hora de Lisboa)", "local_ms": "AAAA-MM-DDThh:mm:ss.sss (hora de Lisboa)",
+                      "epoch_ms": "milissegundos desde 1970", "utc": "ISO 8601 em UTC (…Z)"}
+_working_format: list[str] = []
+
+
+def date_formats() -> list[str]:
+    return [*_working_format, *[f for f in DATE_FORMATS if f not in _working_format]]
+
+
+def api_value(col: str, text: str, tz: ZoneInfo, fmt: str = "local"):
+    """Texto da célula -> valor para a API. Datas: 00:00 em Lisboa, no formato pedido."""
     text = (text or "").strip()
     if col in DATE_COLUMNS:
         d = parse_day(text).day
         if d is None:
             return None
         dt = datetime.combine(d, time(0, 0), tz)
-        return int(dt.timestamp() * 1000) if as_ms else dt.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+        if fmt == "epoch_ms":
+            return int(dt.timestamp() * 1000)
+        if fmt == "utc":
+            return dt.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+        if fmt == "local_ms":
+            return dt.strftime("%Y-%m-%dT%H:%M:%S.000")
+        return dt.strftime("%Y-%m-%dT%H:%M:%S")
     return text
 
 
@@ -150,13 +168,13 @@ def _error(r: httpx.Response) -> str:
 
 def _looks_like_date_problem(r: httpx.Response) -> bool:
     t = r.text.lower()
-    return r.status_code == 400 and any(w in t for w in ("date", "data", "parse", "format", "long"))
+    return r.status_code in (400, 500) and any(w in t for w in ("malformed", "invalid format", "date", "parse", "format", "long"))
 
 
-def _props(campos: dict[str, str], col_attr: dict[str, str], tz: ZoneInfo, as_ms: bool) -> dict:
+def _props(campos: dict[str, str], col_attr: dict[str, str], tz: ZoneInfo, fmt: str) -> dict:
     out = {}
     for col, v in campos.items():
-        val = api_value(col, v, tz, as_ms)
+        val = api_value(col, v, tz, fmt)
         if val is None and col in DATE_COLUMNS:
             continue
         out[col_attr[col]] = val
@@ -198,9 +216,12 @@ def execute(s: UcmdbSession, plan: Plan, col_attr: dict[str, str], settings: Set
         ci_type = cur.get("type") or settings.ucmdb_cert_type
     else:
         antes, ci_type = {}, plan.ci_type
-    as_ms = False
-    for attempt in (1, 2):
-        props = _props(plan.campos, col_attr, tz, as_ms)
+    has_date = any(c in DATE_COLUMNS for c in plan.campos)
+    formats = date_formats() if has_date else ["local"]
+    tried: list[str] = []
+    for fmt in formats:
+        props = _props(plan.campos, col_attr, tz, fmt)
+        tried.append(fmt)
         try:
             if plan.acao == "criar":
                 r = s.client.request("POST", "/dataModel", headers=s.headers,
@@ -210,12 +231,15 @@ def execute(s: UcmdbSession, plan: Plan, col_attr: dict[str, str], settings: Set
                                      json={"ucmdbId": plan.ucmdb_id, "type": ci_type, "properties": props})
         except httpx.HTTPError as exc:
             return Outcome("erro", plan.ucmdb_id, enviado=props, antes=antes, detalhe=f"Erro de comunicação: {exc}")
-        if r.status_code == 200 or attempt == 2 or not _looks_like_date_problem(r) \
-                or not any(c in DATE_COLUMNS for c in plan.campos):
+        if r.status_code == 200:
+            if has_date and _working_format[:1] != [fmt]:
+                _working_format[:] = [fmt]
             break
-        as_ms = True                      # a UCMDB não aceitou a data em ISO 8601: tenta em milissegundos
+        if not has_date or not _looks_like_date_problem(r):
+            break                         # outro erro: não adianta mudar o formato da data
     if r.status_code != 200:
-        return Outcome("erro", plan.ucmdb_id, enviado=props, antes=antes, detalhe=_error(r))
+        extra = (" Formatos de data tentados: " + ", ".join(DATE_FORMAT_LABELS[f] for f in tried) + ".") if len(tried) > 1 else ""
+        return Outcome("erro", plan.ucmdb_id, enviado=props, antes=antes, detalhe=_error(r) + extra)
     try:
         resp = r.json() or {}
     except ValueError:
@@ -250,8 +274,8 @@ def execute(s: UcmdbSession, plan: Plan, col_attr: dict[str, str], settings: Set
     if diffs:
         estado = "aviso"
         detalhe += " Verificação: " + "; ".join(diffs)
-    if as_ms:
-        detalhe += " (datas enviadas em milissegundos)"
+    if has_date and fmt != "local":
+        detalhe += f" (data enviada como {DATE_FORMAT_LABELS[fmt]})"
     return Outcome(estado, cid, enviado=props, antes=antes, resposta=lists, verificado=verificado, detalhe=detalhe.strip())
 
 
@@ -318,6 +342,8 @@ def process(lote: str, settings: Settings, client: httpx.Client | None = None) -
         with session_scope() as s:
             for w in s.scalars(select(UcmdbWrite).where(UcmdbWrite.lote == lote, UcmdbWrite.estado.in_(BUSY))):
                 w.estado, w.detalhe, w.feito_em = "erro", str(exc)[:500], utcnow()
+                s.add(AuditLog(actor=w.por, action="ucmdb.escrever", target=f"{w.acao} {w.cn}"[:600],
+                               details={"geracao": w.run_id, "estado": "erro", "detalhe": str(exc)[:300]}))
 
 
 def process_in_background(lote: str, settings: Settings) -> None:
@@ -427,3 +453,16 @@ def edit_signature(form: EditForm, changes: dict[str, tuple[str, str]]) -> str:
     import json
     data = json.dumps({"id": form.ucmdb_id, "atual": form.atual, "mud": changes}, sort_keys=True, ensure_ascii=False)
     return hashlib.sha256(data.encode("utf-8")).hexdigest()[:32]
+
+
+def history_rows(writes: list[UcmdbWrite]) -> list[dict]:
+    """Escritas para o histórico: o que mudou em cada certificado (atributo: antes -> enviado)."""
+    out = []
+    for w in writes:
+        mud = []
+        for attr, v in (w.enviado or {}).items():
+            before = (w.antes or {}).get(attr)
+            mud.append({"atributo": attr, "antes": "" if before is None else str(before), "depois": "" if v is None else str(v)})
+        out.append({"w": w, "mudancas": mud,
+                    "origem": f"geração #{w.run_id}" if w.run_id else "edição à mão"})
+    return out

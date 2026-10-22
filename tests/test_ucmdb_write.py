@@ -26,11 +26,24 @@ class FakeUcmdb:
         self.calls = []
         self.n = 0
 
+    accepts = ("local",)      # formatos de data que esta UCMDB aceita: "local" (sem fuso), "ms"
+
+    def _bad_date(self, props):
+        v = props.get("valid_to")
+        if isinstance(v, str):
+            if v.endswith("Z") or "local" not in self.accepts:
+                return httpx.Response(500, json={"error": f'The following error has occurred: Invalid format: "{v}" is '
+                                                          'malformed at "Z". Please consult logs for more details'})
+        elif isinstance(v, int) and "ms" not in self.accepts:
+            return httpx.Response(500, json={"error": "Invalid format: long"})
+        return None
+
     def _norm(self, props):
         out = dict(props)
         for k, v in props.items():
             if k == "valid_to" and isinstance(v, str):
-                out[k] = int(datetime.fromisoformat(v.replace("Z", "+00:00")).timestamp() * 1000)
+                d = datetime.fromisoformat(v).replace(tzinfo=cf.ZoneInfo("Europe/Lisbon"))
+                out[k] = int(d.timestamp() * 1000)
         return out
 
     def handler(self, request):
@@ -44,6 +57,10 @@ class FakeUcmdb:
             if cid not in self.store:
                 return httpx.Response(404, json={"error": "not found"})
             return httpx.Response(200, json={"ucmdbId": cid, **self.store[cid]})
+        if m in ("PUT", "POST") and "/dataModel" in p:
+            bad = self._bad_date(body["properties"] if m == "PUT" else body["cis"][0]["properties"])
+            if bad is not None:
+                return bad
         if m == "PUT":
             cid = p.rsplit("/", 1)[1]
             self.store[cid]["properties"].update(self._norm(body["properties"]))
@@ -61,6 +78,13 @@ class FakeUcmdb:
 
     def writes(self):
         return [c for c in self.calls if c[0] in ("PUT", "POST") and "/dataModel" in c[1]]
+
+
+@pytest.fixture(autouse=True)
+def _reset_date_format():
+    uw._working_format.clear()
+    yield
+    uw._working_format.clear()
 
 
 @pytest.fixture()
@@ -101,7 +125,7 @@ def test_apply_one_new_and_one_changed(setup):
         assert m == "POST" and body["cis"][0]["type"] == "digital_certificate"
         props = body["cis"][0]["properties"]
         assert props["common_name"] == "novo-avi.exemplo.pt" and props["serial_number"] == "N4"
-        assert props["issuer_name"] == "DigiCert Global G2" and props["valid_to"].startswith("2028-04-")
+        assert props["issuer_name"] == "DigiCert Global G2" and props["valid_to"] == "2028-04-10T00:00:00"
         assert "global_id" not in props
         with session_scope() as s:
             w = s.scalar(select(UcmdbWrite).where(UcmdbWrite.chave == k))
@@ -194,3 +218,36 @@ def test_edit_certificate(setup):
         assert w.estado == "ok" and w.verificado is True
         assert s.scalar(select(AuditLog).where(AuditLog.action == "ucmdb.editar")).details["campos"] == \
             ["Description", "IssuerName", "ValidTo"]
+
+
+def test_date_format_fallback_and_history(setup):
+    st, rid, fake, changes, webapp = setup
+    fake.accepts = ("ms",)          # esta UCMDB só aceita milissegundos
+    with TestClient(webapp.app) as c:
+        c.get(f"/cmdb-final/{rid}", auth=AUTH)
+        token = c.cookies["cw_csrf"]
+        k = changes["renovado.exemplo.pt"]["chave"]
+        c.post(f"/cmdb-final/{rid}/ucmdb", data={"csrf": token, "modo": "um", "chave": k}, auth=AUTH)
+        tries = [b["properties"]["valid_to"] for m, p, b in fake.writes()]
+        assert tries[0] == "2027-11-10T00:00:00" and isinstance(tries[-1], int)
+        with session_scope() as s:
+            w = s.scalar(select(UcmdbWrite).where(UcmdbWrite.chave == k))
+            assert w.estado == "ok" and "milissegundos" in w.detalhe
+        # a seguinte já começa pelo formato que funcionou
+        n = len(fake.writes())
+        k2 = changes["www.exemplo.pt"]["chave"]
+        c.post(f"/cmdb-final/{rid}/ucmdb", data={"csrf": token, "modo": "um", "chave": k2}, auth=AUTH)
+        assert len(fake.writes()) == n + 1 and isinstance(fake.writes()[-1][2]["properties"]["valid_to"], int)
+        # nenhum formato aceite -> erro com os formatos tentados
+        fake.accepts = ()
+        k3 = changes["novo-avi.exemplo.pt"]["chave"]
+        c.post(f"/cmdb-final/{rid}/ucmdb", data={"csrf": token, "modo": "um", "chave": k3}, auth=AUTH)
+        with session_scope() as s:
+            w = s.scalar(select(UcmdbWrite).where(UcmdbWrite.chave == k3))
+            assert w.estado == "erro" and "Formatos de data tentados" in w.detalhe
+        # histórico em Execuções e auditoria + exportação
+        page = c.get("/jobs", auth=AUTH).text
+        assert "Alterações na UCMDB" in page and "renovado.exemplo.pt" in page and "geração #" in page
+        assert "serial_number" in page and "<del>0A01</del>" in page
+        csvt = c.get("/jobs/ucmdb.csv", auth=AUTH).content.decode("utf-8-sig")
+        assert csvt.splitlines()[0].startswith("Quando;Quem;Origem") and "renovado.exemplo.pt" in csvt and "erro" in csvt

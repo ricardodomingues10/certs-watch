@@ -16,7 +16,7 @@ from fastapi import Depends, FastAPI, File, Form, HTTPException, Request, Upload
 from fastapi.responses import JSONResponse, RedirectResponse, Response
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
-from sqlalchemy import select
+from sqlalchemy import func, select
 
 from .. import __version__
 from ..checks import CHECK_BY_ID, CHECKS, LAYERS, STATUS_LABELS, evaluate_endpoint
@@ -33,7 +33,7 @@ from ..collectors.ct import SOURCE_LABELS
 from ..discovery import CT_STATE_HELP, CT_STATES, CT_TABS, TRIAGE_LABELS, classify_ct
 from ..models import (ApiRecord, AuditLog, Certificate, CmdbRecord, CtCert, Endpoint, FinalInput, FinalPublish,
                       EmailReport, EmailTemplate, FinalPublishFile, FinalRun, Finding, ImportFile, JobRun, Renewal, ScanResult, SmaxComment, SmaxFile,
-                      SslLabsResult, TicketBatch, SmaxTicket)
+                      SslLabsResult, TicketBatch, SmaxTicket, UcmdbWrite)
 from .. import ticket_create as tc
 from .. import cmdb_final as cf
 from .. import renewal as rn
@@ -1309,10 +1309,33 @@ def jobs_page(request: Request, user: str = Depends(current_user)):
     with session_scope() as s:
         runs = list(s.scalars(select(JobRun).order_by(JobRun.id.desc()).limit(50)))
         audits = list(s.scalars(select(AuditLog).order_by(AuditLog.id.desc()).limit(50)))
+        writes = list(s.scalars(select(UcmdbWrite).order_by(UcmdbWrite.id.desc()).limit(100)))
+        n_writes = s.scalar(select(func.count()).select_from(UcmdbWrite)) or 0
+        for w in writes:
+            s.expunge(w)
     st = get_settings()
     jobs = [j for j in JOBS if (j != "ingest_apis" or apis_configured(st)) and (j != "ingest_ct" or st.ct_domains)
             and (j != "ssllabs" or st.ssllabs_email) and (j != "ingest_smax" or smax_configured(st))]
-    return render(request, "jobs.html", user, runs=runs, audits=audits, jobs=jobs, daily_at=st.pipeline_daily_at)
+    return render(request, "jobs.html", user, runs=runs, audits=audits, jobs=jobs, daily_at=st.pipeline_daily_at,
+                  ucmdb_writes=uw.history_rows(writes), n_writes=n_writes, WRITE_STATES=uw.STATE_LABELS)
+
+
+@app.get("/jobs/ucmdb.csv")
+def jobs_ucmdb_export(user: str = Depends(current_user)):
+    """Todas as alterações feitas na UCMDB pelo certwatch, uma linha por campo alterado."""
+    out = []
+    tz = _tz()
+    with session_scope() as s:
+        for r in uw.history_rows(list(s.scalars(select(UcmdbWrite).order_by(UcmdbWrite.id)))):
+            w = r["w"]
+            when = w.feito_em or w.pedido_em
+            base = [as_utc(when).astimezone(tz).strftime("%d-%m-%Y %H:%M:%S") if when else "", w.por, r["origem"], w.acao,
+                    w.cn, w.ucmdb_id, uw.STATE_LABELS.get(w.estado, w.estado)]
+            tail = ["" if w.verificado is None else ("sim" if w.verificado else "não"), w.detalhe]
+            for m in r["mudancas"] or [{"atributo": "", "antes": "", "depois": ""}]:
+                out.append(base + [m["atributo"], m["antes"], m["depois"]] + tail)
+    return csv_response("alteracoes-ucmdb.csv", ["Quando", "Quem", "Origem", "Ação", "Certificado", "CI", "Resultado",
+                                                 "Atributo", "Antes", "Depois", "Verificado", "Detalhe"], out)
 
 
 @app.post("/jobs/{job}")

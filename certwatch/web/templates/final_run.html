@@ -109,7 +109,7 @@
   <div class="ucmdb-head">
     <div>
       <h2>Aplicar na UCMDB</h2>
-      <p class="small muted">Em vez de publicar o certs_update.csv, cria e atualiza os certificados diretamente na UCMDB pela REST API. Linhas novas são criadas; nas alteradas só mudam os campos alterados. Antes de escrever confirma-se que o certificado não mudou na UCMDB desde a geração, e depois confirma-se o que ficou.</p>
+      <p class="small muted">Em vez de publicar o certs_update.csv, cria e atualiza os certificados diretamente na UCMDB pela REST API. Linhas novas são criadas; nas alteradas só mudam os campos alterados. Antes de escrever confirma-se que o certificado não mudou na UCMDB desde a geração, e depois confirma-se o que ficou. Tudo fica em <a href="/jobs#ucmdb">Execuções e auditoria</a>.</p>
     </div>
     {% if wvals %}<div class="facts small">
       {% for st in ['ok', 'aviso', 'erro', 'ignorado', 'a_aplicar', 'pendente'] %}{% set n = wvals|selectattr('estado', 'equalto', st)|list|length %}{% if n %}<span><b>{{ n }}</b> {{ WRITE_STATES[st] }}</span>{% endif %}{% endfor %}

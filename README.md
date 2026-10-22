@@ -297,8 +297,9 @@ Cada linha mostra o resultado (criado / atualizado / aviso / erro / não aplicad
 - Antes de atualizar, o CI é lido e os campos a mudar têm de ter ainda o valor da geração (ou o que estava no ecrã ao rever). Se alguém os mudou entretanto, não se escreve e a linha diz o que mudou.
 - Depois de escrever, o CI é lido de novo e confirma-se que ficou o que foi enviado; se não, a linha fica com aviso.
 - Se a UCMDB identificar um certificado "novo" como um CI que já existia (regra de identificação), a linha fica com aviso a dizer qual.
-- Só a geração mais recente pode ser aplicada. Datas: ValidTo é enviado em ISO 8601 (00:00 em Lisboa); se a UCMDB o recusar, tenta em milissegundos.
-- Cada escrita fica registada (quem, quando, o que foi enviado, o antes e a resposta) e na auditoria (`ucmdb.escrever`, `ucmdb.editar`).
+- Só a geração mais recente pode ser aplicada.
+- Datas: ValidTo vai às 00:00 de Lisboa, primeiro como `AAAA-MM-DDThh:mm:ss` (sem fuso: a UCMDB recusa o `Z` do UTC); se a UCMDB recusar o formato, tenta com milissegundos (`.000`), depois em milissegundos desde 1970 e por fim em UTC. O formato que funcionar passa a ser o primeiro a tentar. Uma alteração com erro pode ser repetida com **Tentar de novo**.
+- Tudo fica em **Execuções e auditoria → Alterações na UCMDB**: quando, quem, origem (geração ou edição à mão), certificado, CI, cada campo com o valor que tinha e o que foi enviado, o resultado e se foi confirmado na UCMDB. **Exportar todas (CSV)** dá o histórico completo, uma linha por campo. A auditoria também regista cada escrita (`ucmdb.escrever`, `ucmdb.editar`).
 
 ## 6. Renovação automática e avaliação externa
 
