@@ -540,3 +540,17 @@ table.hide-opt .opt { display: none; }
 /* Matriz de testes: muitas colunas, desliza na horizontal com o nome sempre visível */
 .matrix tbody td:first-child, .matrix thead tr:last-child th:first-child { position: sticky; left: 0; z-index: 1; background: var(--panel); box-shadow: 1px 0 0 var(--line); }
 @media (min-width: 761px) { .filters select { max-width: 280px; text-overflow: ellipsis; } .filters input[type=search] { min-width: 220px; } }
+
+/* Aplicar na UCMDB */
+.ucmdb-panel { margin-bottom: 14px; }
+.ucmdb-head { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 6px 20px; }
+.ucmdb-head h2 { margin: 0 0 4px; }
+.ucmdb-head p { max-width: 90ch; margin: 0 0 8px; }
+.ucmdb-steps { margin: 6px 0 10px; padding-left: 20px; }
+.ucmdb-cell { min-width: 120px; }
+.small-btn { font-size: 12.5px; padding: 4px 10px; min-height: 30px; margin-top: 4px; }
+.edit-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(300px, 100%), 1fr)); gap: 12px 20px; }
+.edit-grid label { display: grid; gap: 4px; font-size: 13px; }
+.edit-grid label .now { color: var(--muted); font-size: 12px; overflow-wrap: anywhere; }
+.edit-grid label.wide { grid-column: 1 / -1; }
+.edit-grid input, .edit-grid textarea { width: 100%; }

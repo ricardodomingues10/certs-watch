@@ -9,6 +9,7 @@
 <form method="post" action="/cmdb-final/gerar"><input type="hidden" name="csrf" value="{{ csrf }}">
   <button class="primary" {{ 'disabled' if missing or busy }} title="{{ 'Falta: ' ~ missing|join(', ') if missing else ('A gerar a versão #' ~ latest.id if busy else 'Lê a CMDB pela API e as fontes, e gera os três ficheiros') }}">Gerar ficheiros</button></form>
 <a class="button" href="/cmdb-final/comparar">Comparar com a CMDB</a>
+<a class="button" href="/ucmdb/certificado">Editar um certificado</a>
 <a class="button" href="/cmdb-final/permissoes">Permissões na UCMDB</a>
 {% endblock %}
 {% block content %}

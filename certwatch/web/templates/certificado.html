@@ -171,7 +171,7 @@
 <section class="card">
   <h2>Registos na CMDB <small>(só nome, validade e emissor são usados)</small></h2>
   <table>
-    <thead><tr><th>UCMDB ID</th><th>CommonName</th><th>Emissor</th><th>Validade</th><th>Ativo</th><th>Última importação</th></tr></thead>
+    <thead><tr><th>UCMDB ID</th><th>CommonName</th><th>Emissor</th><th>Validade</th><th>Ativo</th><th>Última importação</th><th></th></tr></thead>
     <tbody>
     {% for r in recs + inactive %}
       <tr class="{{ 'faded' if not r.active }}">
@@ -181,9 +181,10 @@
         <td>{{ r.valid_to|dt }}</td>
         <td>{{ 'sim' if r.active else 'não' }}</td>
         <td>{{ r.last_seen|dtt }}</td>
+        <td><a href="/ucmdb/certificado/{{ r.ucmdb_id }}">Editar na UCMDB</a></td>
       </tr>
     {% else %}
-      <tr><td colspan="6" class="muted">Não existe na CMDB.</td></tr>
+      <tr><td colspan="7" class="muted">Não existe na CMDB.</td></tr>
     {% endfor %}
     </tbody>
   </table>

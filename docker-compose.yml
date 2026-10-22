@@ -8,7 +8,7 @@ name: certwatch
 
 x-app: &app
   build: .
-  image: certwatch:0.14.2
+  image: certwatch:0.15.0
   network_mode: host
   restart: unless-stopped
   env_file: .env

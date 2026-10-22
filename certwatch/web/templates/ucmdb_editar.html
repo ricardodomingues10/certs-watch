@@ -1,0 +1,82 @@
+{% extends "base.html" %}
+{% block title %}Editar certificado na UCMDB{% endblock %}
+{% block crumb %}<a href="/cmdb-final">Atualizar a CMDB</a>{% endblock %}
+{% block page_title %}Editar um certificado na UCMDB{% endblock %}
+{% block lede %}Corrija um certificado diretamente na UCMDB: a data de expiração, o emissor, o número de série ou outro campo. Primeiro revê o que muda; só depois grava. Só os campos alterados são enviados.{% endblock %}
+{% block content %}
+{% if write_problem %}<div class="note warn">{{ write_problem }}</div>{% endif %}
+{% if erro %}<div class="note bad">{{ erro }}</div>{% endif %}
+
+<form class="filters" method="get" action="/ucmdb/certificado">
+  <input type="search" name="q" value="{{ q }}" placeholder="CommonName, Global Id ou ID do CI" aria-label="Procurar certificado" required>
+  <button>Procurar</button>
+</form>
+
+{% if q and not form %}
+<div class="card flush scroll">
+<table>
+  <thead><tr><th>Certificado</th><th>Emissor</th><th>Válido até</th><th>Estado</th><th></th></tr></thead>
+  <tbody>
+  {% for r in rows %}
+  <tr><td class="mono">{{ r.cn }}<div class="small muted">{{ r.id }}</div></td><td class="small">{{ r.issuer or '—' }}</td>
+    <td class="nowrap">{{ r.valid_to|dt if r.valid_to else '—' }}</td><td class="small">{{ 'ativo' if r.active else 'inativo' }}</td>
+    <td><a class="button" href="/ucmdb/certificado/{{ r.id }}">Editar</a></td></tr>
+  {% else %}
+  <tr><td colspan="5"><div class="empty"><b>Nenhum certificado encontrado</b>A pesquisa usa a cópia da CMDB lida pelo certwatch.</div></td></tr>
+  {% endfor %}
+  </tbody>
+</table>
+</div>
+{% endif %}
+
+{% if result %}
+<div class="note {{ 'bad' if result.estado == 'erro' else ('warn' if result.estado in ('aviso', 'ignorado') else '') }}">
+  <b>{{ {'ok': 'Gravado na UCMDB.', 'aviso': 'Gravado na UCMDB, com aviso.', 'erro': 'Não foi gravado.', 'ignorado': 'Não foi gravado.'}[result.estado] }}</b>
+  {{ result.detalhe }}
+</div>
+{% endif %}
+
+{% if form %}
+<section class="card">
+  <h2 class="mono">{{ form.cn }}</h2>
+  <p class="small muted">CI <span class="mono">{{ form.ucmdb_id }}</span> · {{ form.ci_type }} · valores lidos agora da UCMDB</p>
+
+  {% if changes %}
+  <div class="note mt" id="rever">
+    <b>Vai mudar na UCMDB:</b>
+    <table class="compact mt">
+      <thead><tr><th>Campo</th><th>Agora</th><th>Passa a</th></tr></thead>
+      <tbody>
+      {% for c, (a, b) in changes.items() %}
+      <tr><td>{{ c }}</td><td class="small"><del>{{ a or '(vazio)' }}</del></td><td class="small"><ins>{{ b or '(vazio)' }}</ins></td></tr>
+      {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% endif %}
+
+  <form method="post" action="/ucmdb/certificado/{{ form.ucmdb_id }}" class="mt">
+    <input type="hidden" name="csrf" value="{{ csrf }}">
+    <div class="edit-grid">
+    {% for col in EDIT_COLUMNS %}{% if col in form.col_attr %}{% set i = loop.index0 %}{% set val = novo.get(col, form.atual.get(col, '')) if novo else form.atual.get(col, '') %}
+      <label class="{{ 'wide' if col == 'Description' }}">{{ col }} <span class="mono small muted">{{ form.col_attr[col] }}</span>
+        {% if col == 'ValidTo' %}<input type="date" name="f_{{ i }}" value="{{ val }}">
+        {% elif col == 'Description' %}<textarea name="f_{{ i }}" rows="3" maxlength="4000">{{ val }}</textarea>
+        {% else %}<input type="text" name="f_{{ i }}" value="{{ val }}" maxlength="1000">{% endif %}
+        {% if novo and col in novo and changes and col in changes %}<span class="now">agora: {{ form.atual.get(col) or '(vazio)' }}</span>{% endif %}
+      </label>
+    {% endif %}{% endfor %}
+    </div>
+    <label class="small mt"><input type="checkbox" name="registar" value="1" {{ 'checked' if registar is not defined or registar }}> Registar a alteração na Description ("{{ settings.final_description }} - … alterado de … para …"), se não a mudar à mão</label>
+    {% if changes %}
+    <input type="hidden" name="assinatura" value="{{ assinatura }}">
+    <label class="small mt"><input type="checkbox" name="confirmo" value="1"> Revi e quero gravar estas alterações na UCMDB</label>
+    <div class="selbar mt"><button name="acao" value="rever">Rever de novo</button>
+      <button class="primary" name="acao" value="gravar" {{ 'disabled' if write_problem }}>Gravar na UCMDB</button></div>
+    {% else %}
+    <div class="mt"><button class="primary" name="acao" value="rever">Rever alterações</button></div>
+    {% endif %}
+  </form>
+</section>
+{% endif %}
+{% endblock %}

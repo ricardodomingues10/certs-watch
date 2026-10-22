@@ -188,6 +188,9 @@ class Settings:
     admin_password: str | None = None
     cookie_secure: bool = False
 
+    # Escrever na UCMDB pela REST API (criar e atualizar certificados em vez do certs_update.csv)
+    ucmdb_write: bool = False
+    ucmdb_cert_type: str = "digital_certificate"
     smax_files_max: int = 200                      # imagens/anexos novos descarregados por leitura do SMAX
     # Fechar / reabrir pedidos no SMAX (bulk UPDATE). Os campos dependem do modelo de change.
     smax_update_enabled: bool = False
@@ -328,6 +331,8 @@ class Settings:
             admin_user=_env("CERTWATCH_ADMIN_USER", "admin"),
             admin_password=_secret("admin_password", "CERTWATCH_ADMIN_PASSWORD"),
             cookie_secure=_env("CERTWATCH_COOKIE_SECURE", "false").lower() == "true",
+            ucmdb_write=_env("CERTWATCH_UCMDB_WRITE", "false").lower() == "true",
+            ucmdb_cert_type=_env("CERTWATCH_UCMDB_CERT_TYPE", "digital_certificate"),
             smax_files_max=int(_env("CERTWATCH_SMAX_FILES_MAX", "200")),
             smax_update_enabled=_env("CERTWATCH_SMAX_UPDATE_ENABLED",
                                      _env("CERTWATCH_SMAX_CREATE_ENABLED", "false")).lower() == "true",

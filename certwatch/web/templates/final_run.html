@@ -1,6 +1,6 @@
 {% extends "base.html" %}
 {% block title %}Geração #{{ run.id }}{% endblock %}
-{% block head %}{% if run.status == 'a_gerar' %}<meta http-equiv="refresh" content="4">{% endif %}{% endblock %}
+{% block head %}{% if run.status == 'a_gerar' or write_busy %}<meta http-equiv="refresh" content="4">{% endif %}{% endblock %}
 {% block crumb %}<a href="/cmdb-final">Atualizar a CMDB</a>{% endblock %}
 {% block page_title %}Geração #{{ run.id }} <small><span class="tag {{ {'pronto': 'tag-ok', 'bloqueado': 'tag-run', 'erro': 'tag-err', 'a_gerar': 'tag-acc'}[run.status] }}">{{ FINAL_STATES[run.status] }}</span></small>{% endblock %}
 {% block lede %}Pedida por {{ run.created_by }} em {{ run.created_at|dtt }}{% if run.finished_at %}, concluída às {{ run.finished_at|dtt|replace(run.finished_at|dt ~ ' ', '') }}{% endif %}.{% if run.published_at %} Publicada em {{ run.published_at|dtt }} por {{ run.published_by }}.{% endif %}{% endblock %}
@@ -9,6 +9,8 @@
 {% endblock %}
 {% block content %}
 {% set sm = run.summary or {} %}
+{% if msg %}<div class="note">{{ msg }}</div>{% endif %}
+{% if erro_msg %}<div class="note bad">{{ erro_msg }}</div>{% endif %}
 {% if run.status == 'a_gerar' %}
 <div class="note">A ler a CMDB pela API e os ficheiros das fontes. Os certificados com data anterior à da CMDB são verificados no servidor. Esta página atualiza-se sozinha.</div>
 {% elif run.status == 'erro' %}
@@ -102,6 +104,40 @@
 {% set qs = '&tipo=' ~ tipo ~ '&fonte=' ~ fonte ~ '&incluida=' ~ incluida ~ ('&pendente=1' if pendente) ~ ('&q=' ~ q|urlencode if q) %}
 <p class="muted">{% if can_edit %}Escolha o que entra nos ficheiros: desmarque uma alteração para a deixar de fora (uma linha nova sai do Excel; uma linha alterada volta ao que está na CMDB) e use "Guardar seleção". A escolha fica guardada para as próximas gerações.{% else %}Só a geração mais recente pode ser alterada.{% endif %}
   {% if n_excl %}<a href="?vista=alteracoes&amp;incluida=nao"><b>{{ n_excl }}</b> excluída{{ 's' if n_excl != 1 }}</a>.{% endif %}</p>
+{% set wvals = writes.values()|list %}
+<section class="card ucmdb-panel" id="ucmdb" aria-label="Aplicar na UCMDB">
+  <div class="ucmdb-head">
+    <div>
+      <h2>Aplicar na UCMDB</h2>
+      <p class="small muted">Em vez de publicar o certs_update.csv, cria e atualiza os certificados diretamente na UCMDB pela REST API. Linhas novas são criadas; nas alteradas só mudam os campos alterados. Antes de escrever confirma-se que o certificado não mudou na UCMDB desde a geração, e depois confirma-se o que ficou.</p>
+    </div>
+    {% if wvals %}<div class="facts small">
+      {% for st in ['ok', 'aviso', 'erro', 'ignorado', 'a_aplicar', 'pendente'] %}{% set n = wvals|selectattr('estado', 'equalto', st)|list|length %}{% if n %}<span><b>{{ n }}</b> {{ WRITE_STATES[st] }}</span>{% endif %}{% endfor %}
+    </div>{% endif %}
+  </div>
+  {% if write_problem %}
+  <div class="note warn small">{{ write_problem }}</div>
+  {% elif not can_edit %}
+  <p class="small">Só a geração mais recente pode ser aplicada na UCMDB.</p>
+  {% elif write_busy %}
+  <div class="note small">A aplicar na UCMDB… {{ wvals|selectattr('estado', 'in', ['ok', 'aviso', 'erro', 'ignorado'])|list|length }} de {{ wvals|length }} feitas. Esta página atualiza-se sozinha.</div>
+  {% else %}
+  <ol class="small ucmdb-steps">
+    <li><b>Teste com um certificado:</b> carregue em <b>Aplicar</b> na linha de um certificado da lista abaixo e confirme o resultado na UCMDB.</li>
+    <li><b>Depois, todos:</b> aplique as alterações incluídas que ainda não foram aplicadas{% if to_apply %} ({{ to_apply|length }}){% endif %}.</li>
+  </ol>
+  {% if to_apply %}
+  <form method="post" action="/cmdb-final/{{ run.id }}/ucmdb" class="inline">
+    <input type="hidden" name="csrf" value="{{ csrf }}"><input type="hidden" name="modo" value="todas">
+    <label class="small"><input type="checkbox" name="confirmo" value="1" required> Revi as alterações e quero aplicar as {{ to_apply|length }} na UCMDB</label>
+    <button class="primary">Aplicar todas na UCMDB</button>
+  </form>
+  {% else %}<p class="small"><span class="tag tag-ok">feito</span> Todas as alterações incluídas já foram aplicadas na UCMDB.</p>{% endif %}
+  {% endif %}
+</section>
+<form id="ucmdb-one" method="post" action="/cmdb-final/{{ run.id }}/ucmdb" hidden>
+  <input type="hidden" name="csrf" value="{{ csrf }}"><input type="hidden" name="modo" value="um">
+</form>
 <form class="filters" method="get">
   <input type="hidden" name="vista" value="alteracoes">
   <select name="tipo" aria-label="Tipo"><option value="">Novos e alterados</option><option value="novo" {{ 'selected' if tipo == 'novo' }}>Só novos</option><option value="alterado" {{ 'selected' if tipo == 'alterado' }}>Só alterados</option></select>
@@ -122,10 +158,10 @@
 {% endif %}
 <div class="card flush scroll">
 <table>
-  <thead><tr><th>Incluir</th><th>Certificado</th><th>Tipo</th><th>O que muda</th><th class="opt">Description</th></tr></thead>
+  <thead><tr><th>Incluir</th><th>Certificado</th><th>Tipo</th><th>O que muda</th><th class="opt">Description</th><th>UCMDB</th></tr></thead>
   <tbody>
   {% for c in changes %}{% set inc = c.incluir if c.incluir is defined else true %}
-  <tr class="{{ 'faded' if not inc }}">
+  <tr class="{{ 'faded' if not inc }}" id="alt-{{ c.chave }}">
     <td><input type="hidden" name="k" value="{{ c.chave }}">
       <input type="checkbox" name="incluir" value="{{ c.chave }}" {{ 'checked' if inc }} {{ 'disabled' if not can_edit }} aria-label="Incluir {{ c.cn }}">
       {% if c.porque %}<div class="small muted motivo">{{ c.porque }}</div>{% endif %}
@@ -144,9 +180,21 @@
       {% endif %}
     </dl></td>
     <td class="opt"><div class="desc">{{ c.descricao }}</div></td>
+    <td class="ucmdb-cell">{% set w = writes.get(c.chave) %}
+      {% if w %}
+        <span class="tag {{ {'ok': 'tag-ok', 'aviso': 'tag-run', 'erro': 'tag-err', 'ignorado': 'tag-off', 'a_aplicar': 'tag-acc', 'pendente': 'tag-acc'}[w.estado] }}">{{ 'criado' if w.estado == 'ok' and w.acao == 'criar' else ('atualizado' if w.estado == 'ok' else WRITE_STATES[w.estado]) }}</span>
+        {% if w.ucmdb_id %}<div class="small mono">{{ w.ucmdb_id }}</div>{% endif %}
+        {% if w.detalhe and w.estado != 'ok' %}<div class="small muted">{{ w.detalhe }}</div>{% endif %}
+        {% if w.feito_em %}<div class="small muted">{{ w.por }}, {{ w.feito_em|dtt }}</div>{% endif %}
+        {% if w.ucmdb_id and w.estado in ('ok', 'aviso') %}<div class="small"><a href="/ucmdb/certificado/{{ w.ucmdb_id }}">Ver / editar</a></div>{% endif %}
+      {% endif %}
+      {% if can_edit and not write_problem and not write_busy and not (w and w.estado in ('ok', 'aviso')) %}
+        <button form="ucmdb-one" name="chave" value="{{ c.chave }}" class="small-btn" data-confirm="Aplicar na UCMDB: {{ 'criar' if c.tipo == 'novo' else 'atualizar' }} {{ c.cn }}?">{{ 'Tentar de novo' if w else 'Aplicar' }}</button>
+      {% endif %}
+    </td>
   </tr>
   {% else %}
-  <tr><td colspan="5"><div class="empty"><b>Sem alterações{{ ' nesta vista' if tipo or q or fonte or incluida or pendente }}</b>{{ 'A CMDB coincide com as fontes.' if not (tipo or q or fonte or incluida or pendente) }}</div></td></tr>
+  <tr><td colspan="6"><div class="empty"><b>Sem alterações{{ ' nesta vista' if tipo or q or fonte or incluida or pendente }}</b>{{ 'A CMDB coincide com as fontes.' if not (tipo or q or fonte or incluida or pendente) }}</div></td></tr>
   {% endfor %}
   </tbody>
 </table>

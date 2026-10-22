@@ -221,4 +221,8 @@ document.addEventListener("DOMContentLoaded", () => {
       editing = null;
     });
   });
+  // Botões que pedem confirmação antes de enviar (ex.: aplicar na UCMDB)
+  document.querySelectorAll("button[data-confirm]").forEach((b) => b.addEventListener("click", (e) => {
+    if (!window.confirm(b.dataset.confirm)) e.preventDefault();
+  }));
 });

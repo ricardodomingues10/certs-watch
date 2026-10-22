@@ -501,3 +501,26 @@ class EmailTemplate(Base):
     updated_by: Mapped[str] = mapped_column(String(128), default="")
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 
+
+class UcmdbWrite(Base):
+    """Cada certificado criado ou atualizado na UCMDB pela REST API (a partir de uma geração ou editado à mão)."""
+
+    __tablename__ = "ucmdb_writes"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    run_id: Mapped[int | None] = mapped_column(Integer, nullable=True, index=True)   # geração (None = edição à mão)
+    chave: Mapped[int | None] = mapped_column(Integer, nullable=True)                # alteração da geração
+    lote: Mapped[str] = mapped_column(String(32), default="", index=True)
+    acao: Mapped[str] = mapped_column(String(16))              # criar | atualizar
+    cn: Mapped[str] = mapped_column(String(512), default="")
+    ucmdb_id: Mapped[str] = mapped_column(String(64), default="")
+    estado: Mapped[str] = mapped_column(String(16), default="pendente", index=True)   # pendente|a_aplicar|ok|aviso|erro|ignorado
+    enviado: Mapped[dict] = mapped_column(JSON, default=dict)    # atributo -> valor enviado
+    antes: Mapped[dict] = mapped_column(JSON, default=dict)      # atributo -> valor na UCMDB antes
+    resposta: Mapped[dict] = mapped_column(JSON, default=dict)   # addedCis/updatedCis/ignoredCis/removedCis
+    verificado: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
+    detalhe: Mapped[str] = mapped_column(Text, default="")
+    por: Mapped[str] = mapped_column(String(128), default="")
+    pedido_em: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    feito_em: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+

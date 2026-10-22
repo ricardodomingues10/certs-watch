@@ -39,6 +39,7 @@ from .. import cmdb_final as cf
 from .. import renewal as rn
 from .. import report as rp
 from .. import ucmdb_access as ua
+from .. import ucmdb_write as uw
 from ..collectors.smax import ticket_url
 from ..tickets import TICKET_HELP, TICKET_ORDER, TICKET_STATES, TICKET_VIEWS, comment_files, filter_tickets, ticket_list, tickets_by_label, link as ticket_link, tickets_by_endpoint
 from ..reconcile import REC_HELP, REC_STATES, REC_TABS, scan_import_dir, reconcile
@@ -1560,6 +1561,114 @@ def final_fingerprint(request: Request, csrf: str = Form(""), user: str = Depend
 SFTP_FACTORY = None    # nos testes: substitui a ligação SSH
 
 
+@app.post("/cmdb-final/{run_id}/ucmdb")
+def final_apply_ucmdb(request: Request, run_id: int, csrf: str = Form(""), modo: str = Form("um"), chave: int = Form(-1),
+                      confirmo: str = Form(""), user: str = Depends(current_user)):
+    """Aplica na UCMDB, pela REST API, uma alteração (modo=um) ou todas as incluídas e ainda não aplicadas."""
+    check_csrf(request, csrf)
+    settings = get_settings()
+    back = f"/cmdb-final/{run_id}?vista=alteracoes"
+    problem = uw.enabled_problem(settings)
+    if problem:
+        return RedirectResponse(f"{back}&{urlencode({'erro': problem})}#ucmdb", status_code=303)
+    try:
+        with session_scope() as s:
+            run = _run_or_404(s, run_id)
+            if not cf.editable(s, run):
+                raise uw.WriteError("Só a geração mais recente pode ser aplicada na UCMDB. Gere de novo.")
+            if modo == "todas":
+                if confirmo != "1":
+                    raise uw.WriteError("Confirme a aplicação na UCMDB.")
+                keys = [c["chave"] for c in (run.changes or []) if c.get("incluir", True)]
+            else:
+                keys = [chave]
+            lote = uw.queue(s, run, keys, user)
+            n = len(keys)
+    except uw.WriteError as exc:
+        return RedirectResponse(f"{back}&{urlencode({'erro': str(exc)})}#ucmdb", status_code=303)
+    if modo == "um" or UCMDB_WRITE_SYNC:
+        uw.process(lote, settings, UCMDB_CLIENT)
+        msg = "Aplicado na UCMDB: veja o resultado na linha." if modo == "um" else "Aplicado na UCMDB."
+    else:
+        uw.process_in_background(lote, settings)
+        msg = f"A aplicar {n} alteração(ões) na UCMDB. A página atualiza-se sozinha."
+    anchor = f"#alt-{chave}" if modo == "um" else "#ucmdb"
+    return RedirectResponse(f"{back}&{urlencode({'msg': msg})}{anchor}", status_code=303)
+
+
+@app.get("/ucmdb/certificado")
+def ucmdb_cert_search(request: Request, q: str = "", user: str = Depends(current_user)):
+    """Procurar um certificado da CMDB para o editar na UCMDB."""
+    settings = get_settings()
+    rows = []
+    if q.strip():
+        ql = q.strip().lower()
+        with session_scope() as s:
+            stmt = select(CmdbRecord).where((CmdbRecord.cn_norm.contains(ql)) | (CmdbRecord.ucmdb_id == q.strip())
+                                            | (CmdbRecord.global_id == q.strip())).order_by(CmdbRecord.cn_norm).limit(50)
+            for r in s.scalars(stmt):
+                rows.append({"id": r.ucmdb_id, "cn": r.common_name, "issuer": r.issuer_name or r.issuer,
+                             "valid_to": r.valid_to, "active": r.active})
+    return render(request, "ucmdb_editar.html", user, EDIT_COLUMNS=uw.EDIT_COLUMNS, settings=settings, q=q, rows=rows, form=None, changes=None,
+                  result=None, write_problem=uw.enabled_problem(settings), erro="")
+
+
+def _edit_form(settings, ucmdb_id: str):
+    if not re.fullmatch(r"[0-9a-zA-Z_-]{1,64}", ucmdb_id):
+        raise HTTPException(404)
+    try:
+        return uw.load_for_edit(settings, ucmdb_id, UCMDB_CLIENT), ""
+    except ua.UcmdbError as exc:
+        return None, str(exc)
+
+
+@app.get("/ucmdb/certificado/{ucmdb_id}")
+def ucmdb_cert_edit(request: Request, ucmdb_id: str, user: str = Depends(current_user)):
+    settings = get_settings()
+    form, erro = _edit_form(settings, ucmdb_id)
+    return render(request, "ucmdb_editar.html", user, EDIT_COLUMNS=uw.EDIT_COLUMNS, settings=settings, q="", rows=[], form=form, changes=None,
+                  result=None, write_problem=uw.enabled_problem(settings), erro=erro, novo={})
+
+
+@app.post("/ucmdb/certificado/{ucmdb_id}")
+async def ucmdb_cert_save(request: Request, ucmdb_id: str, user: str = Depends(current_user)):
+    """Passo "rever" (mostra o que muda) e passo "gravar" (escreve na UCMDB)."""
+    data = await request.form()
+    check_csrf(request, data.get("csrf"))
+    settings = get_settings()
+    form, erro = _edit_form(settings, ucmdb_id)
+    if form is None:
+        return render(request, "ucmdb_editar.html", user, EDIT_COLUMNS=uw.EDIT_COLUMNS, settings=settings, q="", rows=[], form=None, changes=None,
+                      result=None, write_problem=uw.enabled_problem(settings), erro=erro)
+    novo = {c: str(data.get(f"f_{i}") or "") for i, c in enumerate(uw.EDIT_COLUMNS) if data.get(f"f_{i}") is not None}
+    changes = uw.edit_changes(form, novo)
+    if changes and "Description" not in changes and data.get("registar") == "1":
+        desc = uw.describe_edit(settings, changes)
+        if desc and "Description" in form.col_attr:
+            changes["Description"] = (form.atual.get("Description", ""), desc)
+    result = None
+    if data.get("acao") == "gravar" and changes:
+        problem = uw.enabled_problem(settings)
+        if problem:
+            erro = problem
+        elif data.get("confirmo") != "1":
+            erro = "Confirme a gravação na UCMDB."
+        elif data.get("assinatura") != uw.edit_signature(form, changes):
+            erro = "O certificado mudou na UCMDB ou o formulário foi alterado depois de rever. Reveja de novo."
+        else:
+            result = uw.apply_edit(settings, form, changes, user, UCMDB_CLIENT)
+            form, _ = _edit_form(settings, ucmdb_id)
+    elif data.get("acao") == "gravar":
+        erro = "Nada mudou."
+    return render(request, "ucmdb_editar.html", user, EDIT_COLUMNS=uw.EDIT_COLUMNS, settings=settings, q="", rows=[], form=form,
+                  changes=None if result else changes, result=result, write_problem=uw.enabled_problem(settings),
+                  erro=erro, novo=novo if not result else {}, registar=data.get("registar") == "1",
+                  assinatura=uw.edit_signature(form, changes) if changes and form and not result else "")
+
+
+UCMDB_WRITE_SYNC = False    # nos testes: aplica o lote no próprio pedido
+
+
 @app.get("/cmdb-final/permissoes")
 def ucmdb_permissoes(request: Request, user: str = Depends(current_user)):
     settings = get_settings()
@@ -1783,6 +1892,10 @@ def final_run(request: Request, run_id: int, vista: str = "alteracoes", tipo: st
                                           .where(FinalPublishFile.publish_id == p.id))) for p in pubs}
         sizes = {k: len(v) if v else 0 for k, v in (("xlsx", run.xlsx), ("csv", run.csv), ("csv_sem", run.csv_sem))}
         can_edit = cf.editable(s, run)
+        uw.recover_stale(s)
+        writes = uw.writes_for_run(s, run_id)
+        for w in writes.values():
+            s.expunge(w)
         s.expunge(run)
         for p in pubs:
             s.expunge(p)
@@ -1803,7 +1916,12 @@ def final_run(request: Request, run_id: int, vista: str = "alteracoes", tipo: st
     return render(request, "final_run.html", user, run=run, vista=vista, views=FINAL_VIEWS, changes=changes[:3000],
                   n_changes=len(changes), tipo=tipo, q=q, newest=newest, pubs=pubs, pub_files=pub_files, sizes=sizes,
                   folder=folder, FINAL_STATES=FINAL_STATES, settings=settings, fonte=fonte, incluida=incluida,
-                  pendente=bool(pendente), can_edit=can_edit, fontes=sorted({c.get("fonte") for c in all_changes if c.get("fonte")}),
+                  pendente=bool(pendente), can_edit=can_edit, writes=writes, WRITE_STATES=uw.STATE_LABELS,
+                  write_problem=uw.enabled_problem(settings),
+                  write_busy=any(w.estado in uw.BUSY for w in writes.values()),
+                  to_apply=[c["chave"] for c in all_changes if c.get("incluir", True)
+                            and not (writes.get(c["chave"]) and writes[c["chave"]].estado in uw.DONE)],
+                  msg=request.query_params.get("msg", ""), erro_msg=request.query_params.get("erro", ""), fontes=sorted({c.get("fonte") for c in all_changes if c.get("fonte")}),
                   n_excl=sum(1 for c in all_changes if not c.get("incluir", True)),
                   age_min=(utcnow() - as_utc(run.created_at)).total_seconds() / 60)
 

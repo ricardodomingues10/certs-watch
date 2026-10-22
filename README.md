@@ -280,6 +280,26 @@ Em **Atualizar a CMDB → Permissões na UCMDB** verifica-se o que a conta confi
 
 Cada verificação fica na auditoria (`ucmdb.permissoes`, `ucmdb.teste_criacao`), sem credenciais.
 
+### Escrever diretamente na UCMDB (sem a pasta de rede)
+
+Com `CERTWATCH_UCMDB_WRITE=true` no `.env`, a aplicação cria e atualiza os certificados na UCMDB pela REST API, com a mesma conta da leitura. A pasta de rede continua disponível.
+
+**A partir de uma geração** (Atualizar a CMDB → geração → Alterações → **Aplicar na UCMDB**):
+1. **Um certificado:** botão **Aplicar** na linha. Linha nova → `POST /rest-api/dataModel` (cria). Linha alterada → `PUT /rest-api/dataModel/ci/{id}` só com os campos que mudaram (ValidTo, SerialNumber, Issuer, IssuerName, Description…).
+2. **Todos:** **Aplicar todas na UCMDB** aplica as alterações incluídas que ainda não foram aplicadas, uma a uma, em segundo plano; a página mostra o progresso.
+
+Cada linha mostra o resultado (criado / atualizado / aviso / erro / não aplicado) e o ID do CI. Uma alteração já aplicada não é enviada de novo.
+
+**Editar um certificado** (Atualizar a CMDB → **Editar um certificado**, ou **Editar na UCMDB** na página do certificado): procura-se pelo CommonName, Global Id ou ID do CI; os valores são lidos na hora da UCMDB. Muda-se o que for preciso (data, emissor, série, estado, Description…), **Rever alterações** mostra o antes e o depois e **Gravar na UCMDB** envia só esses campos. Por omissão a Description regista a alteração ("Changed with n8n - Data de expiracao alterado de … para …").
+
+**Proteções:**
+- Só se escrevem estes campos: Display Label, Name, CommonName, ValidTo, Localização, Certificate Status, SerialNumber, Issuer, IssuerName, Subject Alternative Names, Certificate Type e Description. Nunca o Global Id nem datas de criação.
+- Antes de atualizar, o CI é lido e os campos a mudar têm de ter ainda o valor da geração (ou o que estava no ecrã ao rever). Se alguém os mudou entretanto, não se escreve e a linha diz o que mudou.
+- Depois de escrever, o CI é lido de novo e confirma-se que ficou o que foi enviado; se não, a linha fica com aviso.
+- Se a UCMDB identificar um certificado "novo" como um CI que já existia (regra de identificação), a linha fica com aviso a dizer qual.
+- Só a geração mais recente pode ser aplicada. Datas: ValidTo é enviado em ISO 8601 (00:00 em Lisboa); se a UCMDB o recusar, tenta em milissegundos.
+- Cada escrita fica registada (quem, quando, o que foi enviado, o antes e a resposta) e na auditoria (`ucmdb.escrever`, `ucmdb.editar`).
+
 ## 6. Renovação automática e avaliação externa
 
 **Renovação automática.** Um certificado é marcado como renovado automaticamente quando o Issuer ou o IssuerName da CMDB, ou o emissor visto no servidor, é Let's Encrypt: pelo nome (`Let's Encrypt`, `ISRG`) ou pelo CN das intermédias (`R3`, `R10`, `R11`, `E5`, `E6`…), que muitas vezes é o único texto no campo. Estes certificados duram 90 dias e são renovados pelo servidor a cerca de 30 dias do fim, por isso o aviso dos 90 dias seria ruído: só há alerta quando faltam `CERTWATCH_AUTO_RENEW_ALERT_DAYS` dias ou menos (20 por omissão), o que significa que a renovação falhou. Os padrões ajustam-se em `CERTWATCH_AUTO_RENEW_ISSUERS`.
