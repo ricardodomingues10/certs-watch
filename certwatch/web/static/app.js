@@ -45,7 +45,39 @@ document.addEventListener("DOMContentLoaded", () => {
       });
     }));
     table.classList.add("stack");
+    // primeira coluna com texto (normalmente o nome): ocupa mais espaço no modo cartão
+    Array.from(table.tBodies).forEach((tb) => Array.from(tb.rows).forEach((tr) => {
+      const lead = Array.from(tr.cells).find((td) => !td.classList.contains("full") && td.textContent.trim() && !td.querySelector("input[type=checkbox]"));
+      if (lead) lead.classList.add("lead");
+    }));
+    fitTable(table);
   });
+
+  // Adaptar cada tabela à largura que tem (ecrã, coluna ou cartão onde está) e voltar a adaptar quando muda
+  function fitTable(table) {
+    const wrap = table.parentElement;
+    if (!wrap) return;
+    const width = wrap.clientWidth;
+    if (!width || table.dataset.fitWidth === String(width)) return;
+    table.dataset.fitWidth = String(width);
+    table.classList.remove("is-stacked", "hide-opt");
+    if (window.innerWidth <= 760) return;                     // telemóvel: o CSS já faz cartões
+    const over = () => table.getBoundingClientRect().width > wrap.clientWidth + 1;
+    if (!over()) return;
+    if (table.querySelector(".opt")) {
+      table.classList.add("hide-opt");
+      if (!over()) return;
+      table.classList.remove("hide-opt");
+    }
+    table.classList.add("is-stacked");
+  }
+  if ("ResizeObserver" in window) {
+    const ro = new ResizeObserver((entries) => entries.forEach((en) => {
+      const t = en.target.querySelector(":scope > table.stack");
+      if (t) fitTable(t);
+    }));
+    document.querySelectorAll("table.stack").forEach((t) => t.parentElement && ro.observe(t.parentElement));
+  }
   // Relatório por email: editar o email diretamente (escrever, apagar, tirar linhas e colunas das tabelas)
   const editors = Array.from(document.querySelectorAll("[data-email]"));
   let editing = null;

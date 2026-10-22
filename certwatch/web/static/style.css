@@ -96,7 +96,7 @@ a:focus-visible, button:focus-visible, input:focus-visible, select:focus-visible
 .topbar input[type=search] { width: 100%; padding: 8px 12px 8px 34px; border-radius: 10px; background: var(--panel-2)
   url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16' fill='none' stroke='%238b93a8' stroke-width='1.7'%3E%3Ccircle cx='7' cy='7' r='4.6'/%3E%3Cpath d='M10.6 10.6 14 14' stroke-linecap='round'/%3E%3C/svg%3E") no-repeat 11px center / 15px; }
 .topbar .who { margin-left: auto; color: var(--muted); font-size: 13px; white-space: nowrap; }
-main { padding: 26px 32px 56px; max-width: 1480px; width: 100%; }
+main { padding: 26px 32px 56px; width: 100%; min-width: 0; }   /* ocupa a largura toda do ecrã */
 footer { color: var(--faint); font-size: 12px; padding: 0 32px 24px; }
 
 /* Cabeçalho de página */
@@ -516,3 +516,27 @@ form.stack label > input[type=text], form.stack label > input[type=date], form.s
 @media (max-width: 760px) { .email-toolbar .grow { flex-basis: 100%; height: 0; } }
 
 [hidden] { display: none !important; }
+
+/* Tabelas que não cabem na largura disponível (qualquer ecrã acima do telemóvel): app.js primeiro esconde as colunas
+   secundárias (.opt); se ainda não couber, cada linha passa a cartão com os campos em grelha. */
+table.hide-opt .opt { display: none; }
+@media (min-width: 761px) {
+  table.stack.is-stacked, table.stack.is-stacked tbody { display: block; width: 100%; }
+  table.stack.is-stacked thead { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
+  table.stack.is-stacked tr { display: grid; grid-template-columns: repeat(auto-fill, minmax(190px, 1fr)); gap: 10px 20px;
+    padding: 12px 18px; border-bottom: 1px solid var(--line); }
+  table.stack.is-stacked tbody tr:last-child { border-bottom: 0; }
+  table.stack.is-stacked td, table.stack.is-stacked td.opt { display: block; padding: 0; border: 0; min-width: 0;
+    white-space: normal; overflow-wrap: anywhere; text-align: left; }
+  table.stack.is-stacked td::before { content: attr(data-label); display: block; color: var(--muted); font-size: 11.5px;
+    font-weight: 600; margin-bottom: 2px; }
+  table.stack.is-stacked td > .cv { display: block; min-width: 0; }
+  table.stack.is-stacked td.full, table.stack.is-stacked td[data-label=""] { grid-column: 1 / -1; }
+  table.stack.is-stacked td.full::before, table.stack.is-stacked td[data-label=""]::before { content: none; }
+  table.stack.is-stacked td:empty { display: none; }
+  table.stack.is-stacked td.lead { grid-column: span 2; }
+  table.stack.is-stacked .nowrap, table.stack.is-stacked .days { white-space: normal; }
+}
+/* Matriz de testes: muitas colunas, desliza na horizontal com o nome sempre visível */
+.matrix tbody td:first-child, .matrix thead tr:last-child th:first-child { position: sticky; left: 0; z-index: 1; background: var(--panel); box-shadow: 1px 0 0 var(--line); }
+@media (min-width: 761px) { .filters select { max-width: 280px; text-overflow: ellipsis; } .filters input[type=search] { min-width: 220px; } }

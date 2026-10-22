@@ -95,7 +95,7 @@ ssh -L 8088:127.0.0.1:8088 utilizador@servidor
 
 Abrir `http://localhost:8088`. O utilizador é `admin` e a palavra-passe é o conteúdo de `secrets/admin_password`.
 
-A interface adapta-se ao telemóvel (menu no botão do canto, colunas secundárias escondidas, tabelas que deslizam). A navegação lateral está agrupada por tarefa: **Inventário** (o que existe), **Verificação** (o que está bem ou mal), **Descoberta** (o que existe e ninguém registou) e **Operação**. A caixa no topo procura em tudo.
+A interface ocupa a largura toda do ecrã e adapta-se a qualquer tamanho. Cada tabela ajusta-se ao espaço que tem: se não couber, escondem-se primeiro as colunas secundárias e, se ainda não couber, cada linha passa a cartão com os campos em grelha. No telemóvel há menu no botão do canto e cartões com o nome de cada campo à esquerda. A matriz de testes desliza na horizontal, com o nome sempre visível. A navegação lateral está agrupada por tarefa: **Inventário** (o que existe), **Verificação** (o que está bem ou mal), **Descoberta** (o que existe e ninguém registou) e **Operação**. A caixa no topo procura em tudo.
 
 | Página | Para que serve |
 |---|---|
