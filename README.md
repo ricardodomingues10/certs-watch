@@ -268,6 +268,14 @@ O certwatch corre com o uid 10001 e precisa de **escrita** na pasta. Para ver co
 
 Depois de `docker compose up -d`, use **Testar escrita** na página: cria e apaga um ficheiro temporário. Os ficheiros são escritos com um nome temporário e depois renomeados, e a escrita é verificada pelo SHA-256.
 
+### Permissões da conta na UCMDB
+
+Em **Atualizar a CMDB → Permissões na UCMDB** verifica-se o que a conta configurada (segredo `ucmdb_user`) consegue fazer pela REST API:
+- **Leitura** (não muda nada): `POST /rest-api/authenticate`, execução de cada TQL configurado (`POST /rest-api/topology`) e leitura de um CI completo (`GET /rest-api/dataModel/ci/{id}`).
+- **Escrita** (só com confirmação, num certificado escolhido): `PUT /rest-api/dataModel/ci/{id}` com a Description (ou o Display Label) igual ao valor que já tem. A UCMDB verifica a permissão de atualização, mas nenhum valor muda. Criar (`POST /rest-api/dataModel`) e apagar (`DELETE /rest-api/dataModel/ci/{id}`) não são testados, porque o único teste seria criar ou apagar um CI de verdade.
+
+Cada verificação fica na auditoria (`ucmdb.permissoes`), sem credenciais.
+
 ## 6. Renovação automática e avaliação externa
 
 **Renovação automática.** Um certificado é marcado como renovado automaticamente quando o Issuer ou o IssuerName da CMDB, ou o emissor visto no servidor, é Let's Encrypt: pelo nome (`Let's Encrypt`, `ISRG`) ou pelo CN das intermédias (`R3`, `R10`, `R11`, `E5`, `E6`…), que muitas vezes é o único texto no campo. Estes certificados duram 90 dias e são renovados pelo servidor a cerca de 30 dias do fim, por isso o aviso dos 90 dias seria ruído: só há alerta quando faltam `CERTWATCH_AUTO_RENEW_ALERT_DAYS` dias ou menos (20 por omissão), o que significa que a renovação falhou. Os padrões ajustam-se em `CERTWATCH_AUTO_RENEW_ISSUERS`.

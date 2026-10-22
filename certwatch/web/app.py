@@ -38,6 +38,7 @@ from .. import ticket_create as tc
 from .. import cmdb_final as cf
 from .. import renewal as rn
 from .. import report as rp
+from .. import ucmdb_access as ua
 from ..collectors.smax import ticket_url
 from ..tickets import TICKET_HELP, TICKET_ORDER, TICKET_STATES, TICKET_VIEWS, comment_files, filter_tickets, ticket_list, tickets_by_label, link as ticket_link, tickets_by_endpoint
 from ..reconcile import REC_HELP, REC_STATES, REC_TABS, scan_import_dir, reconcile
@@ -1557,6 +1558,44 @@ def final_fingerprint(request: Request, csrf: str = Form(""), user: str = Depend
 
 
 SFTP_FACTORY = None    # nos testes: substitui a ligação SSH
+
+
+@app.get("/cmdb-final/permissoes")
+def ucmdb_permissoes(request: Request, user: str = Depends(current_user)):
+    settings = get_settings()
+    return render(request, "ucmdb_permissoes.html", user, settings=settings, rep=None, write_ci="", erro="")
+
+
+@app.post("/cmdb-final/permissoes")
+def ucmdb_permissoes_testar(request: Request, csrf: str = Form(""), escrita: str = Form(""), ci: str = Form(""),
+                            confirmo: str = Form(""), user: str = Depends(current_user)):
+    """Verifica o que a conta da UCMDB pode fazer. A escrita só é testada com confirmação e num CI escolhido."""
+    check_csrf(request, csrf)
+    settings = get_settings()
+    write_ci, erro = "", ""
+    if escrita:
+        ref = ci.strip()
+        with session_scope() as s:
+            rec = None
+            if ref:
+                rec = s.scalar(select(CmdbRecord).where((CmdbRecord.ucmdb_id == ref) | (CmdbRecord.global_id == ref)))
+                if rec is None:
+                    rec = s.scalar(select(CmdbRecord).where(CmdbRecord.cn_norm == ref.lower(), CmdbRecord.active.is_(True))
+                                   .order_by(CmdbRecord.valid_to.desc()))
+            write_ci = rec.ucmdb_id if rec is not None else ""
+        if not write_ci:
+            erro = f"Não encontrei na CMDB o certificado \"{ref}\" (use o CommonName, o Global Id ou o ID do CI)."
+        elif confirmo != "1":
+            erro = "Confirme o teste de escrita."
+            write_ci = ""
+    rep = ua.check(settings, write_ci or None, UCMDB_CLIENT)
+    with session_scope() as s:
+        audit(s, user, "ucmdb.permissoes", write_ci or "leitura",
+              resultado={st.call: st.ok for st in rep.steps})
+    return render(request, "ucmdb_permissoes.html", user, settings=settings, rep=rep, write_ci=write_ci or ci, erro=erro)
+
+
+UCMDB_CLIENT = None    # nos testes: cliente httpx para a UCMDB simulada
 
 
 @app.get("/cmdb-final/comparar")

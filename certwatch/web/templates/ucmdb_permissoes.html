@@ -1,0 +1,53 @@
+{% extends "base.html" %}
+{% block title %}Permissões na UCMDB{% endblock %}
+{% block crumb %}<a href="/cmdb-final">Atualizar a CMDB</a>{% endblock %}
+{% block page_title %}Permissões da conta na UCMDB{% endblock %}
+{% block lede %}Verifica o que a conta configurada no certwatch (segredo <span class="mono">ucmdb_user</span>) consegue fazer pela REST API da UCMDB: entrar, ler as listas (TQL) e, se pedir, atualizar um CI. A password nunca aparece aqui nem nos registos.{% endblock %}
+{% block content %}
+{% if erro %}<div class="note bad">{{ erro }}</div>{% endif %}
+
+<div class="grid2">
+<section class="card">
+  <h2>Leitura</h2>
+  <p class="small muted">Entra na UCMDB, executa os TQL configurados ({{ [settings.ucmdb_tql, settings.ucmdb_tql_apis]|select|join(', ') or 'nenhum' }}) e lê um CI completo. Não muda nada.</p>
+  <form method="post" action="/cmdb-final/permissoes">
+    <input type="hidden" name="csrf" value="{{ csrf }}">
+    <button class="primary">Verificar leitura</button>
+  </form>
+</section>
+
+<section class="card">
+  <h2>Escrita</h2>
+  <p class="small muted">Reenvia para um certificado um atributo com o valor que já tem (Description, ou Display Label se a Description estiver vazia) com <span class="mono">PUT /rest-api/dataModel/ci/{id}</span>. A UCMDB verifica se a conta pode atualizar CIs, mas nenhum valor muda. Não cria nem apaga nada.</p>
+  <form method="post" action="/cmdb-final/permissoes" class="stack">
+    <input type="hidden" name="csrf" value="{{ csrf }}"><input type="hidden" name="escrita" value="1">
+    <label class="small">Certificado para o teste (CommonName, Global Id ou ID do CI)
+      <input type="text" name="ci" value="{{ write_ci }}" required placeholder="ex.: intranet.exemplo.local"></label>
+    <label class="small"><input type="checkbox" name="confirmo" value="1" required> Percebo que é enviado um pedido de atualização à UCMDB, com o mesmo valor.</label>
+    <div><button>Verificar leitura e escrita</button></div>
+  </form>
+</section>
+</div>
+
+{% if rep %}
+<section class="card mt" aria-label="Resultado">
+  <h2>Resultado</h2>
+  <table class="compact">
+    <thead><tr><th>Verificação</th><th>Chamada</th><th>Resultado</th><th>Detalhe</th></tr></thead>
+    <tbody>
+    {% for st in rep.steps %}
+    <tr><td>{{ st.what }}</td><td class="mono small">{{ st.call }}</td>
+      <td>{% if st.ok %}<span class="tag tag-ok">pode</span>{% elif st.ok is sameas false %}<span class="tag tag-err">não pode</span>{% else %}<span class="tag tag-run">inconclusivo</span>{% endif %}</td>
+      <td class="small">{{ st.detail }}</td></tr>
+    {% endfor %}
+    </tbody>
+  </table>
+  {% set w = rep.verdict('PUT') %}
+  {% if w %}
+  <div class="note mt">A conta <b>pode atualizar CIs</b> pela REST API. Em princípio também pode criá-los (<span class="mono">POST /rest-api/dataModel</span>), mas isso só se confirma criando um CI.</div>
+  {% elif w is sameas false %}
+  <div class="note warn mt">A conta <b>não pode atualizar CIs</b> pela REST API. Para escrever na UCMDB, o administrador tem de lhe dar, no Roles Manager, permissão de escrita sobre os CIs de certificado (ou uma função de integração).</div>
+  {% endif %}
+</section>
+{% endif %}
+{% endblock %}
