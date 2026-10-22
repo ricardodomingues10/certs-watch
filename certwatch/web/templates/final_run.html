@@ -21,11 +21,12 @@
 {% set pv = (run.summary or {}).get('por_verificar', 0) %}
 {% if pv and run.status in ('pronto', 'bloqueado') %}
 <div class="note warn"><b>{{ pv }} certificado{{ 's' if pv != 1 }} com dados por confirmar.</b>
-  O emissor não foi encontrado em nenhuma fonte (ficheiros, renovações, servidores verificados e internet), por isso os certificados novos
-  ficam com Issuer e IssuerName <span class="mono">Por verificar</span>; ou a fonte não trouxe o SerialNumber e ficou o que estava na CMDB. Confirme-os na CMDB depois do carregamento.
+  Não foram encontrados em nenhuma fonte (ficheiros, renovações, servidores verificados e internet): o emissor ficou
+  <span class="mono">Por verificar</span> (Issuer e IssuerName), o SerialNumber de um certificado da internet ficou <span class="mono">x</span>,
+  ou a fonte não trouxe a série e ficou a que estava na CMDB. Confirme-os na CMDB depois do carregamento.
   <a href="?vista=alteracoes&amp;pendente=1">Ver quais</a>.
   {% set rep = (run.summary or {}).get('por_verificar_repetidos', 0) %}
-  {% if rep %}<div class="small mt">{{ rep }} linhas novas ficam com o mesmo par IssuerName + SerialNumber por causa de <span class="mono">Por verificar</span>. Se a UCMDB usar este par como chave, podem ficar num só CI: confirme o resultado depois do carregamento ou exclua-as até ter os dados.</div>{% endif %}
+  {% if rep %}<div class="small mt">{{ rep }} linhas novas ficam com o mesmo par IssuerName + SerialNumber por causa de <span class="mono">Por verificar</span> ou <span class="mono">x</span>. Se a UCMDB usar este par como chave, podem ficar num só CI: confirme o resultado depois do carregamento ou exclua-as até ter os dados.</div>{% endif %}
 </div>
 {% endif %}
 

@@ -21,8 +21,9 @@ Diferenças deliberadas em relação ao workflow (para não estragar a CMDB):
   escrito de outra forma não é alteração);
 - a verificação no servidor usa o scan do certwatch (ou uma ligação TLS na hora) em vez do OpenSSL;
 - emissor ou série em falta: procurados nas outras fontes e nos certificados já vistos pelo certwatch; um
-  certificado novo sem emissor fica com Issuer/IssuerName "Por verificar" (regra da equipa) em vez de bloquear os
-  CSV; sem série, fica fora dos CSV por omissão (IssuerName + SerialNumber é a chave primária na CMDB);
+  certificado novo sem emissor fica com Issuer/IssuerName "Por verificar" e, se vier da internet sem série, com
+  SerialNumber "x" (regra da equipa), em vez de bloquear os CSV; dos ficheiros sem série, fica fora dos CSV por
+  omissão (IssuerName + SerialNumber é a chave primária na CMDB);
 - numa linha existente, uma fonte sem série não apaga a série que está na CMDB.
 """
 from __future__ import annotations
@@ -81,8 +82,10 @@ _STOP = {"de", "da", "do", "das", "dos", "para", "a", "o", "e", "the", "of"}
 
 FILE_MARKER = "Validado pelo ficheiro do certificado"
 # Certificado novo sem emissor em nenhuma das fontes: Issuer/IssuerName "Por verificar" (regra da equipa).
-# O "x" é só do Global Id (marca as linhas novas); o SerialNumber nunca é inventado.
+# Certificado novo encontrado na internet sem número de série: SerialNumber "x". Nos ficheiros (CA1/CA2/AVI) a
+# série vem sempre; se faltar, a linha fica fora dos CSV por omissão.
 MISSING_ISSUER = "Por verificar"
+MISSING_SERIAL = "x"
 GREEN, YELLOW, RED = "E2F0D9", "FFF2CC", "F4CCCC"
 COLOR_STATE = {GREEN: "novo", YELLOW: "alterado", RED: "expirado"}
 
@@ -818,7 +821,8 @@ def reconcile_final(table: CmdbTable, sources: dict[str, list[SourceItem]], sett
         p = []
         if (rows[i].get(H("IssuerName")) or "").strip() == MISSING_ISSUER:
             p.append("IssuerName")
-        if not (rows[i].get(H("SerialNumber")) or "").strip() or i in serial_unknown:
+        ser_ = (rows[i].get(H("SerialNumber")) or "").strip()
+        if not ser_ or ser_ == MISSING_SERIAL or i in serial_unknown:
             p.append("SerialNumber")
         if p:
             pending[i] = p
@@ -871,6 +875,8 @@ def reconcile_final(table: CmdbTable, sources: dict[str, list[SourceItem]], sett
             iss, serial = complete(it)
             if serial:
                 set_serial(i, serial)
+            elif it["source"] == INTERNET and not (rows[i].get(H("SerialNumber")) or "").strip():
+                set_field(i, H("SerialNumber"), MISSING_SERIAL)
             if iss and (rows[i].get(H("IssuerName")) or "").strip() in ("", MISSING_ISSUER):
                 set_field(i, H("Issuer"), iss)
                 set_field(i, H("IssuerName"), iss)
@@ -882,6 +888,8 @@ def reconcile_final(table: CmdbTable, sources: dict[str, list[SourceItem]], sett
         else:
             iss, serial = complete(it)
             iss = iss or MISSING_ISSUER          # Issuer e IssuerName sempre preenchidos nas linhas novas
+            if not serial and it["source"] == INTERNET:
+                serial = MISSING_SERIAL
             row = {h: "" for h in t.headers}
             row.update({
                 H("Display Label"): it["cn"], H("Name"): it["cn"], H("CommonName"): it["cn"],
@@ -1020,8 +1028,8 @@ def validate_delta(rows: list[dict[str, str]]) -> list[str]:
     seen, dup = set(), []
     for r in rows:
         iss, ser = r["IssuerName"].strip().lower(), r["SerialNumber"].strip().lower()
-        if not iss or not ser or iss == MISSING_ISSUER.lower():
-            continue                     # "Por verificar" não identifica o emissor: avisado à parte
+        if not iss or not ser or iss == MISSING_ISSUER.lower() or ser == MISSING_SERIAL.lower():
+            continue                     # "Por verificar" / "x" não identificam o certificado: avisado à parte
         if (iss, ser) in seen:
             dup.append(f"{r['IssuerName']} + {r['SerialNumber']}")
         seen.add((iss, ser))
@@ -1031,13 +1039,13 @@ def validate_delta(rows: list[dict[str, str]]) -> list[str]:
 
 
 def _placeholder_clashes(rows: list[dict[str, str]]) -> int:
-    """Linhas novas com o mesmo par IssuerName + SerialNumber por causa de "Por verificar"."""
+    """Linhas novas com o mesmo par IssuerName + SerialNumber por causa de "Por verificar" / "x"."""
     seen: dict[tuple[str, str], int] = {}
     for r in rows:
         if r["Global Id"].strip().lower() != "x":
             continue
         iss, ser = r["IssuerName"].strip().lower(), r["SerialNumber"].strip().lower()
-        if iss == MISSING_ISSUER.lower() and ser:
+        if ser and (iss == MISSING_ISSUER.lower() or ser == MISSING_SERIAL.lower()):
             seen[(iss, ser)] = seen.get((iss, ser), 0) + 1
     return sum(n for n in seen.values() if n > 1)
 
