@@ -585,7 +585,8 @@ def test_missing_serial_and_issuer(settings):
     """Linhas novas (Global Id = x): Issuer e IssuerName sempre preenchidos ("Por verificar" se não houver em nenhuma
     fonte); o SerialNumber nunca é inventado. Antes disso, procura noutras fontes e nos certificados já vistos."""
     cis = [ci(1, "renovado.exemplo.pt", date(2026, 11, 10), serial="0A01"),
-           ci(2, "igual.exemplo.pt", date(2027, 3, 1), serial="AA01")]
+           ci(2, "igual.exemplo.pt", date(2027, 3, 1), serial="AA01"),
+           ci(3, "carregado-antes.exemplo.pt", date(2027, 9, 1), serial="x7")]      # já na CMDB de outra vez
     t = cf.build_cmdb_table(cis, settings)
     st = replace(settings, import_issuers={})
     S = cf.SourceItem
@@ -613,9 +614,10 @@ def test_missing_serial_and_issuer(settings):
         ("DigiCert G2", "N2", [])
     assert (by["novo3.exemplo.pt"]["issuer_name"], by["novo3.exemplo.pt"]["serial"]) == ("Corp CA03", "C3")
     assert by["novo4.exemplo.pt"]["serial"] == "" and by["novo4.exemplo.pt"]["pendente"] == ["IssuerName", "SerialNumber"]
-    assert not any(c["serial"] == "x" for c in res.changes if c["fonte"] != "INTERNET")
-    for n in ("net1.exemplo.pt", "net2.exemplo.pt"):
-        assert (by[n]["issuer_name"], by[n]["serial"], by[n]["global_id"]) == ("Por verificar", "x", "x")
+    assert not any(cf.is_placeholder_serial(c["serial"]) for c in res.changes if c["fonte"] != "INTERNET")
+    # sem série na internet: x8, x9 (a seguir ao x7 que já está na CMDB), cada um com a sua chave
+    for n, x in (("net1.exemplo.pt", "x8"), ("net2.exemplo.pt", "x9")):
+        assert (by[n]["issuer_name"], by[n]["serial"], by[n]["global_id"]) == ("Por verificar", x, "x")
         assert by[n]["pendente"] == ["IssuerName", "SerialNumber"]
     # sem série: fica fora dos CSV por omissão; o resto é gerado
     for c in res.changes:
@@ -624,9 +626,9 @@ def test_missing_serial_and_issuer(settings):
     assert by["net1.exemplo.pt"]["incluir"]
     xlsx, csv, csv_sem, problems, counts = cf.build_outputs(cf.unpack_state(cf.pack_state(res)), res.changes)
     assert not problems and csv and counts["por_verificar"] == 4
-    assert counts["por_verificar_repetidos"] == 2        # net1 e net2: "Por verificar" + "x" (aviso, não bloqueia)
+    assert counts["por_verificar_repetidos"] == 0        # x8 e x9: chaves diferentes
     net = next(ln for ln in csv.decode().splitlines() if "net1.exemplo.pt" in ln)
-    assert '"Por verificar"|"Por verificar"|"x"' in net
+    assert '"Por verificar"|"Por verificar"|"x8"' in net
     text = csv.decode()
     assert "novo4.exemplo.pt" not in text
     line = next(ln for ln in text.splitlines() if "novo1.exemplo.pt" in ln).split("|")
