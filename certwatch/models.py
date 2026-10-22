@@ -485,3 +485,17 @@ class EmailReport(Base):
     ct_dias: Mapped[int] = mapped_column(Integer, default=30)     # internet: encontrados nos últimos N dias (0 = todos)
     excluded: Mapped[list] = mapped_column(JSON, default=list)
     sends: Mapped[list] = mapped_column(JSON, default=list)
+    textos: Mapped[dict | None] = mapped_column(JSON, nullable=True)     # texto alterado só neste relatório
+
+
+class EmailTemplate(Base):
+    """Texto dos emails guardado como modelo para os próximos relatórios (só o que difere do original)."""
+
+    __tablename__ = "email_templates"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    key: Mapped[str] = mapped_column(String(32), unique=True, default="default")
+    textos: Mapped[dict] = mapped_column(JSON, default=dict)
+    updated_by: Mapped[str] = mapped_column(String(128), default="")
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+

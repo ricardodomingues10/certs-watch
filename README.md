@@ -377,6 +377,11 @@ Depois pré-visualiza-se e envia-se:
 - **Certificados novos na internet, para aprovação**: os certificados encontrados na internet (Certificate Transparency) nos últimos N dias que não estão na CMDB e não foram ignorados na triagem. Ficam separados em "nome desconhecido" e "nome já na CMDB, com outro certificado". O email pede à equipa de Sistemas que aprove ou não o registo de cada um e leva em anexo `Certificados_Internet.xlsx`, com uma coluna "Aprovado (Sim/Não)" para preencher.
 - **Várias partes**: num só email ou um email por parte.
 
+**Editar o texto dos emails.** Na página do relatório, em **Editar o texto dos emails**, muda-se o assunto, a saudação, os parágrafos antes de cada tabela, o fecho e a assinatura de cada email. As tabelas e os anexos continuam a ser gerados pela aplicação.
+- **Variáveis** entre chavetas são trocadas no envio: `{n_alerta}`, `{alerta}`, `{janela}`, `{desde}`, `{ate}`, `{n_internos}`, `{n_externos}`, `{n_renovados}`, `{n_internet}`, `{periodo}`, `{data}`, `{saudacao}` (Bom dia/Boa tarde) e `{assinatura}`.
+- `**texto**` fica a negrito e cada linha nova é uma quebra de linha. O texto é sempre tratado como texto simples (não aceita HTML). Um bloco vazio não aparece no email.
+- **Guardar neste relatório** muda só este relatório. **Guardar como modelo para os próximos** passa a ser o texto de todos os relatórios novos. **Repor o texto original da aplicação** apaga o modelo. As alterações ficam na auditoria (`relatorio.textos`).
+
 Configuração no `.env`: `CERTWATCH_SMTP_HOST`, `_PORT`, `_SECURITY` (starttls/ssl/none), `_FROM` e `_USER`. A password vai no segredo `secrets/smtp_password`. Este ficheiro tem de existir, nem que seja vazio (`touch secrets/smtp_password`), tal como `secrets/publish_ssh`. `CERTWATCH_REPORT_ALLOWED_DOMAINS` limita os destinatários aos domínios da organização. Os envios ficam registados no relatório e na auditoria.
 
 ## 8. Classificação

@@ -31,7 +31,7 @@ from ..jobs import apis_configured, JOBS, enqueue
 from ..collectors.ct import SOURCE_LABELS
 from ..discovery import CT_STATE_HELP, CT_STATES, CT_TABS, TRIAGE_LABELS, classify_ct
 from ..models import (ApiRecord, AuditLog, Certificate, CmdbRecord, CtCert, Endpoint, FinalInput, FinalPublish,
-                      EmailReport, FinalPublishFile, FinalRun, Finding, ImportFile, JobRun, Renewal, ScanResult, SmaxComment, SmaxFile,
+                      EmailReport, EmailTemplate, FinalPublishFile, FinalRun, Finding, ImportFile, JobRun, Renewal, ScanResult, SmaxComment, SmaxFile,
                       SslLabsResult, TicketBatch, SmaxTicket)
 from .. import ticket_create as tc
 from .. import cmdb_final as cf
@@ -916,9 +916,25 @@ def _report_data(rep: EmailReport, settings):
     return rows, rp.select_rows(rows, rep.desde, rep.ate, set(rep.excluded or []), internet)
 
 
-def _group_subject(group: list[str], sel: dict, rep: EmailReport) -> str:
+def _template(s) -> EmailTemplate | None:
+    return s.scalar(select(EmailTemplate).where(EmailTemplate.key == "default"))
+
+
+def _texts(rep: EmailReport) -> dict:
+    """Texto efetivo do relatório: original ⊕ modelo guardado ⊕ alterações deste relatório."""
+    with session_scope() as s:
+        t = _template(s)
+        base = dict(t.textos or {}) if t else {}
+    return rp.texts_for(base, rep.textos)
+
+
+def _subject(key: str, sel: dict, rep: EmailReport, texts: dict) -> str:
+    return rp.subject_for(key, sel, rep.desde, rep.ate, rep.alerta, texts, rep.ct_dias or 0, utcnow().astimezone(_tz()))
+
+
+def _group_subject(group: list[str], sel: dict, rep: EmailReport, texts: dict) -> str:
     key = "alertas" if "alertas" in group else ("reconciliacao" if "reconciliacao" in group else "internet")
-    return rp.subject_for(key, sel, rep.desde, rep.ate, rep.alerta)
+    return _subject(key, sel, rep, texts)
 
 
 def _group_attachments(group: list[str], sel: dict, rep: EmailReport) -> list[tuple[str, bytes]]:
@@ -970,10 +986,21 @@ def relatorio_ver(request: Request, rid: int, user: str = Depends(current_user))
     janela = sorted(sel["todos_janela"], key=lambda r: (r["dias"], r["cn"]))
     extra = [r for r in sel["todos_renovados"] if r not in sel["todos_janela"]]
     alerta = [r for r in sel["janela"] if 0 <= r["dias"] <= rep.alerta]
+    with session_scope() as s:
+        t = _template(s)
+        modelo = {"textos": dict(t.textos or {}), "por": t.updated_by, "em": t.updated_at} if t and t.textos else None
+    texts = rp.texts_for(modelo["textos"] if modelo else None, rep.textos)
+    base = rp.texts_for(modelo["textos"] if modelo else None)
+    groups = {}
+    for k in rp.DEFAULT_TEXTS:
+        groups.setdefault(k.split(".")[0], []).append(k)
     return render(request, "relatorio_ver.html", user, rep=rep, janela=janela, extra=extra, excl=excl, sel=sel,
                   n_alerta=len(alerta), problems=rp.smtp_problems(settings), settings=settings,
                   para=prev_to or ", ".join(settings.report_to),
-                  assuntos={k: rp.subject_for(k, sel, rep.desde, rep.ate, rep.alerta) for k in ("alertas", "reconciliacao", "internet")},
+                  assuntos={k: _subject(k, sel, rep, texts) for k in ("alertas", "reconciliacao", "internet")},
+                  texts=texts, base_texts=base, text_groups=groups, TEXT_GROUPS=rp.TEXT_GROUPS, TEXT_LABELS=rp.TEXT_LABELS,
+                  TEXT_VARS=rp.TEXT_VARS, ORIGINAL=rp.DEFAULT_TEXTS, modelo=modelo, MAX_TEXT=rp.MAX_TEXT,
+                  n_proprios=len(rep.textos or {}),
                   internet=sel["todos_internet"], INTERNET_EXCEL=rp.INTERNET_EXCEL,
                   msg=request.query_params.get("msg", ""), erro=request.query_params.get("erro", ""))
 
@@ -991,6 +1018,44 @@ async def relatorio_selecao(request: Request, rid: int, user: str = Depends(curr
     return RedirectResponse(f"/relatorio/{rid}#previsao", status_code=303)
 
 
+@app.post("/relatorio/{rid}/textos")
+async def relatorio_textos(request: Request, rid: int, user: str = Depends(current_user)):
+    """Edição do texto dos emails: neste relatório, como modelo para os próximos, ou repor."""
+    form = await request.form()
+    check_csrf(request, form.get("csrf"))
+    acao = str(form.get("acao") or "")
+    if acao not in ("relatorio", "modelo", "repor", "original"):
+        raise HTTPException(400, "Ação desconhecida.")
+    sent = rp.clean_texts({k: form.get(k) for k in rp.DEFAULT_TEXTS if form.get(k) is not None})
+    with session_scope() as s:
+        rep = _report_or_404(s, rid)
+        t = _template(s)
+        base = rp.texts_for(t.textos if t else None)
+        if acao == "relatorio":
+            rep.textos = {k: v for k, v in sent.items() if v != base[k]} or None
+            msg = (f"Texto deste relatório guardado ({len(rep.textos)} bloco(s) diferente(s) do modelo)." if rep.textos
+                   else "O texto é igual ao do modelo: nada a guardar neste relatório.")
+        elif acao == "modelo":
+            effective = {**base, **(rep.textos or {}), **sent}
+            if t is None:
+                t = EmailTemplate(key="default")
+                s.add(t)
+            t.textos = {k: v for k, v in effective.items() if v != rp.DEFAULT_TEXTS[k]}
+            t.updated_by, t.updated_at = user, utcnow()
+            rep.textos = None
+            msg = "Texto guardado como modelo: os próximos relatórios usam este texto."
+        elif acao == "repor":
+            rep.textos = None
+            msg = "Alterações deste relatório descartadas: usa o texto do modelo."
+        else:
+            if t is not None:
+                t.textos, t.updated_by, t.updated_at = {}, user, utcnow()
+            rep.textos = None
+            msg = "Reposto o texto original da aplicação (o modelo guardado foi apagado)."
+        audit(s, user, "relatorio.textos", f"relatório {rid}", acao=acao, blocos=sorted(sent) if acao in ("relatorio", "modelo") else [])
+    return RedirectResponse(f"/relatorio/{rid}?{urlencode({'msg': msg})}#texto", status_code=303)
+
+
 @app.get("/relatorio/{rid}/previsao/{parte}")
 def relatorio_previsao(rid: int, parte: str, user: str = Depends(current_user)):
     if parte not in ("alertas", "reconciliacao", "internet", "ambos"):
@@ -1001,7 +1066,7 @@ def relatorio_previsao(rid: int, parte: str, user: str = Depends(current_user)):
         s.expunge(rep)
     _, sel = _report_data(rep, settings)
     body = rp.email_html(parte, sel, rep.desde, rep.ate, rep.alerta, settings.report_signature, utcnow().astimezone(_tz()),
-                         rep.ct_dias or 0)
+                         rep.ct_dias or 0, _texts(rep))
     page = f'<!doctype html><html lang="pt-PT"><head><meta charset="utf-8"></head><body style="margin:12px;background:#fff">{body}</body></html>'
     return Response(page, media_type="text/html; charset=utf-8", headers={
         "Content-Security-Policy": "default-src 'none'; style-src 'unsafe-inline'; frame-ancestors 'self'; sandbox",
@@ -1041,12 +1106,13 @@ async def relatorio_enviar(request: Request, rid: int, user: str = Depends(curre
         _, sel = _report_data(rep, settings)
         now = utcnow().astimezone(_tz())
         groups = [partes] if modo == "junto" else [[p] for p in partes]
+        texts = _texts(rep)
         msgs, subjects = [], []
         for g in groups:
-            subj = _group_subject(g, sel, rep)
+            subj = _group_subject(g, sel, rep, texts)
             msgs.append(rp.build_message(settings, to, subj,
                                          rp.email_html(g, sel, rep.desde, rep.ate, rep.alerta, settings.report_signature, now,
-                                                       rep.ct_dias or 0), _group_attachments(g, sel, rep)))
+                                                       rep.ct_dias or 0, texts), _group_attachments(g, sel, rep)))
             subjects.append(subj)
         rp.send(settings, msgs, SMTP_FACTORY)
         ok, erro = True, ""

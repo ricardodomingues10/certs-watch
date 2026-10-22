@@ -177,29 +177,134 @@ def _table(rows: list[dict], alert: bool = False) -> str:
 
 
 def _greeting(now: datetime) -> str:
-    return "Bom dia," if now.hour < 13 else "Boa tarde,"
+    return "Bom dia" if now.hour < 13 else "Boa tarde"
 
 
-def alerts_html(sel: dict, desde: int, ate: int, alert_days: int) -> str:
+# ------------------------------------------------------------------ texto dos emails (editável na página)
+# Texto simples: {variáveis} são substituídas, **texto** fica a negrito e cada linha nova é uma quebra de linha.
+DEFAULT_TEXTS = {
+    "comum.saudacao": "{saudacao},",
+    "comum.inicio": "",
+    "comum.fim": "",
+    "comum.fecho": "Cumprimentos,",
+    "comum.assinatura": "{assinatura}",
+    "alertas.assunto": "ALERTA | {n_alerta} certificado(s) a {alerta} dias ou menos da expiração",
+    "alertas.assunto_sem_alerta": "Certificados a expirar {janela}",
+    "alertas.alerta_titulo": "⚠ ALERTA — Certificados fora do prazo de renovação ({alerta} dias antes da sua expiração)",
+    "alertas.alerta_texto": "Os certificados abaixo encontram-se a {alerta} dias ou menos da respetiva data de expiração "
+                            "efetiva e devem ser acompanhados com prioridade:",
+    "alertas.sem_alerta": "**Certificados fora do prazo de renovação ({alerta} dias antes da sua expiração):** "
+                          "não foram identificados certificados nesta situação.",
+    "alertas.internos": "Verificamos que {janela} os seguintes certificados internos têm data de expiração:",
+    "alertas.externos": "Verificamos, também, que os seguintes certificados externos têm data de expiração {janela}:",
+    "reconciliacao.assunto": "Reconciliação de certificados | {n_renovados} renovado(s) por refletir na CMDB",
+    "reconciliacao.assunto_sem": "Reconciliação de certificados | CMDB coincide com os servidores",
+    "reconciliacao.nota": "**Nota:** foram identificados {n_renovados} certificado(s) cuja validade apresentada pelo "
+                          "servidor é posterior à registada na CMDB. Provável renovação ainda não refletida na CMDB:",
+    "reconciliacao.sem": "**Reconciliação:** não foram identificados certificados com validade no servidor posterior "
+                         "à registada na CMDB.",
+    "reconciliacao.anexo": "Segue em anexo o ficheiro Excel com o detalhe da análise, incluindo a verificação dos servidores.",
+    "internet.assunto": "Aprovação | {n_internet} certificado(s) novo(s) encontrado(s) na internet",
+    "internet.assunto_sem": "Certificados encontrados na internet | nada novo",
+    "internet.intro": "Foram encontrados na internet (registos públicos de Certificate Transparency), {periodo}, "
+                      "**{n_internet} certificado(s)** emitido(s) para os domínios da organização que não constam da CMDB. "
+                      "Pedimos à equipa de Sistemas que confirme, para cada um, se é conhecido e deve ser registado na CMDB, "
+                      "indicando Aprovado ou Não aprovado na resposta a este email ou na coluna \"Aprovado\" do Excel em anexo.",
+    "internet.desconhecidos": "Nomes que não existem na CMDB:",
+    "internet.diferentes": "Nomes que já existem na CMDB, mas com outro certificado (outra data de fim):",
+    "internet.sem": "**Certificados novos na internet:** {periodo} não foram encontrados certificados emitidos para os "
+                    "domínios da organização que não constem da CMDB.",
+    "internet.anexo": "Segue em anexo o ficheiro Excel com o detalhe de cada certificado.",
+}
+TEXT_GROUPS = {"comum": "Em todos os emails", "alertas": "Alertas", "reconciliacao": "Reconciliação",
+               "internet": "Certificados novos na internet"}
+TEXT_LABELS = {
+    "comum.saudacao": "Saudação", "comum.inicio": "Texto a seguir à saudação (opcional)",
+    "comum.fim": "Texto antes do fecho (opcional)", "comum.fecho": "Fecho", "comum.assinatura": "Assinatura",
+    "alertas.assunto": "Assunto, quando há alertas", "alertas.assunto_sem_alerta": "Assunto, sem alertas",
+    "alertas.alerta_titulo": "Título da caixa de alerta", "alertas.alerta_texto": "Texto da caixa de alerta",
+    "alertas.sem_alerta": "Texto quando não há alertas", "alertas.internos": "Antes da tabela dos internos",
+    "alertas.externos": "Antes da tabela dos externos",
+    "reconciliacao.assunto": "Assunto, quando há renovados", "reconciliacao.assunto_sem": "Assunto, sem renovados",
+    "reconciliacao.nota": "Antes da tabela dos renovados", "reconciliacao.sem": "Texto quando não há renovados",
+    "reconciliacao.anexo": "Texto sobre o anexo",
+    "internet.assunto": "Assunto, quando há certificados", "internet.assunto_sem": "Assunto, sem certificados",
+    "internet.intro": "Introdução e pedido de aprovação", "internet.desconhecidos": "Antes da tabela dos nomes desconhecidos",
+    "internet.diferentes": "Antes da tabela dos nomes já na CMDB", "internet.sem": "Texto quando não há certificados",
+    "internet.anexo": "Texto sobre o anexo",
+}
+TEXT_VARS = {
+    "saudacao": "Bom dia / Boa tarde, conforme a hora", "assinatura": "assinatura do .env (CERTWATCH_REPORT_SIGNATURE)",
+    "janela": "\"nos próximos 90 dias\" ou \"entre 30 e 90 dias\"", "desde": "início do intervalo (dias)",
+    "ate": "fim do intervalo (dias)", "alerta": "prazo de alerta (dias)", "n_alerta": "n.º de certificados em alerta",
+    "n_internos": "n.º de internos no intervalo", "n_externos": "n.º de externos no intervalo",
+    "n_renovados": "n.º de renovados por refletir na CMDB", "n_internet": "n.º de certificados novos na internet",
+    "periodo": "\"nos últimos 30 dias\" ou \"até à data\"", "data": "data de hoje (DD/MM/AAAA)",
+}
+MAX_TEXT = 3000
+_VAR = re.compile(r"\{(\w+)\}")
+
+
+def texts_for(*layers: dict | None) -> dict:
+    """Texto efetivo: o original, por cima o texto por omissão guardado e por cima o deste relatório."""
+    out = dict(DEFAULT_TEXTS)
+    for layer in layers:
+        for k, v in (layer or {}).items():
+            if k in DEFAULT_TEXTS and isinstance(v, str):
+                out[k] = v
+    return out
+
+
+def text_context(sel: dict, desde: int, ate: int, alert_days: int, ct_dias: int, now: datetime, signature: str) -> dict:
+    rel = sel["janela"]
+    return {"saudacao": _greeting(now), "assinatura": signature or "certwatch",
+            "janela": f"nos próximos {ate} dias" if desde <= 0 else f"entre {desde} e {ate} dias",
+            "desde": desde, "ate": ate, "alerta": alert_days,
+            "n_alerta": sum(1 for r in rel if 0 <= r["dias"] <= alert_days),
+            "n_internos": sum(1 for r in rel if r["scope"] == "interno"),
+            "n_externos": sum(1 for r in rel if r["scope"] != "interno"),
+            "n_renovados": len(sel["renovados"]), "n_internet": len(sel.get("internet") or []),
+            "periodo": f"nos últimos {ct_dias} dias" if ct_dias > 0 else "até à data", "data": now.strftime("%d/%m/%Y")}
+
+
+def fill(template: str, ctx: dict) -> str:
+    """Substitui {variável}; as desconhecidas ficam como estão."""
+    return _VAR.sub(lambda m: str(ctx[m.group(1)]) if m.group(1) in ctx else m.group(0), template or "")
+
+
+def _t(texts: dict, key: str, ctx: dict) -> str:
+    """Texto de um bloco em HTML: escapado, **negrito** e quebras de linha."""
+    out = _e(fill(texts.get(key, ""), ctx))
+    out = re.sub(r"\*\*(.+?)\*\*", r"<strong>\1</strong>", out, flags=re.S)
+    return out.replace("\r\n", "\n").replace("\n", "<br>")
+
+
+def _p(texts: dict, key: str, ctx: dict) -> str:
+    v = _t(texts, key, ctx)
+    return f"<p>{v}</p>" if v.strip() else ""
+
+
+def alerts_html(sel: dict, desde: int, ate: int, alert_days: int, texts: dict | None = None, ctx: dict | None = None) -> str:
+    texts = texts or DEFAULT_TEXTS
+    ctx = ctx or text_context(sel, desde, ate, alert_days, 0, utcnow(), "")
     rel = sorted(sel["janela"], key=lambda r: (r["dias"], r["cn"]))
     internos = [r for r in rel if r["scope"] == "interno"]
     externos = [r for r in rel if r["scope"] != "interno"]
     alerta = [r for r in rel if 0 <= r["dias"] <= alert_days]
-    janela = f"nos próximos {ate} dias" if desde <= 0 else f"entre {desde} e {ate} dias"
     if alerta:
         box = ('<div style="border:2px solid #d97706;background:#fff7ed;padding:12px;margin:16px 0;">'
-               f"<p><strong>⚠ ALERTA — Certificados fora do prazo de renovação ({alert_days} dias antes da sua expiração)</strong></p>"
-               f"<p>Os certificados abaixo encontram-se a {alert_days} dias ou menos da respetiva data de expiração efetiva "
-               f"e devem ser acompanhados com prioridade:</p>{_table(alerta, True)}</div>")
+               f"<p><strong>{_t(texts, 'alertas.alerta_titulo', ctx)}</strong></p>"
+               f"{_p(texts, 'alertas.alerta_texto', ctx)}{_table(alerta, True)}</div>")
     else:
         box = ('<div style="border:1px solid #bfbfbf;background:#f7f7f7;padding:10px;margin:16px 0;">'
-               f"<strong>Certificados fora do prazo de renovação ({alert_days} dias antes da sua expiração):</strong> "
-               "não foram identificados certificados nesta situação.</div>")
-    return (f"{box}<p>Verificamos que {janela} os seguintes certificados internos têm data de expiração:</p>{_table(internos)}"
-            f"<p>Verificamos, também, que os seguintes certificados externos têm data de expiração {janela}:</p>{_table(externos)}")
+               f"{_t(texts, 'alertas.sem_alerta', ctx)}</div>")
+    return (f"{box}{_p(texts, 'alertas.internos', ctx)}{_table(internos)}"
+            f"{_p(texts, 'alertas.externos', ctx)}{_table(externos)}")
 
 
-def reconciliation_html(sel: dict) -> str:
+def reconciliation_html(sel: dict, texts: dict | None = None, ctx: dict | None = None) -> str:
+    texts = texts or DEFAULT_TEXTS
+    ctx = ctx or text_context(sel, 0, 0, 0, 0, utcnow(), "")
     ren = sorted(sel["renovados"], key=lambda r: r["cn"])
     if ren:
         rows = "".join(f"<tr><td {_TD}>{_e(r['common_name'])}</td><td {_TD}>{_d(r['cmdb'])}</td><td {_TD}>{_d(r['servidor'])}</td>"
@@ -207,20 +312,18 @@ def reconciliation_html(sel: dict) -> str:
         table = ('<table style="border-collapse:collapse;font-family:Arial,sans-serif;font-size:14px;"><thead><tr>'
                  f"<th {_TH}>CommonName</th><th {_TH}>ValidTo na CMDB</th><th {_TH}>ValidTo no servidor</th><th {_TH}>Alteração</th>"
                  f"</tr></thead><tbody>{rows}</tbody></table>")
-        note = (f"<p><strong>Nota:</strong> foram identificados {len(ren)} certificado(s) cuja validade apresentada pelo "
-                f"servidor é posterior à registada na CMDB. Provável renovação ainda não refletida na CMDB:</p>{table}")
+        note = f"{_p(texts, 'reconciliacao.nota', ctx)}{table}"
     else:
-        note = ("<p><strong>Reconciliação:</strong> não foram identificados certificados com validade no servidor "
-                "posterior à registada na CMDB.</p>")
-    return note + "<p>Segue em anexo o ficheiro Excel com o detalhe da análise, incluindo a verificação dos servidores.</p>"
+        note = _p(texts, "reconciliacao.sem", ctx)
+    return note + _p(texts, "reconciliacao.anexo", ctx)
 
 
-def internet_html(sel: dict, ct_dias: int) -> str:
+def internet_html(sel: dict, ct_dias: int, texts: dict | None = None, ctx: dict | None = None) -> str:
+    texts = texts or DEFAULT_TEXTS
+    ctx = ctx or text_context(sel, 0, 0, 0, ct_dias, utcnow(), "")
     rows = sel["internet"]
-    quando = f"nos últimos {ct_dias} dias" if ct_dias > 0 else "até à data"
     if not rows:
-        return (f"<p><strong>Certificados novos na internet:</strong> {quando} não foram encontrados certificados "
-                "emitidos para os domínios da organização que não constem da CMDB.</p>")
+        return _p(texts, "internet.sem", ctx)
     desconhecidos = [r for r in rows if r["estado"] == "desconhecido"]
     diferentes = [r for r in rows if r["estado"] != "desconhecido"]
 
@@ -236,43 +339,54 @@ def internet_html(sel: dict, ct_dias: int) -> str:
         return ('<table style="border-collapse:collapse;font-family:Arial,sans-serif;font-size:14px;">'
                 f"<thead><tr>{head}</tr></thead><tbody>{body}</tbody></table>")
 
-    return (f"<p>Foram encontrados na internet (registos públicos de Certificate Transparency), {quando}, "
-            f"<strong>{len(rows)} certificado(s)</strong> emitido(s) para os domínios da organização que não constam da CMDB. "
-            "Pedimos à equipa de Sistemas que confirme, para cada um, se é conhecido e deve ser registado na CMDB, "
-            "indicando Aprovado ou Não aprovado na resposta a este email ou na coluna \"Aprovado\" do Excel em anexo.</p>"
-            f"<p>Nomes que não existem na CMDB:</p>{table(desconhecidos, False)}"
-            f"<p>Nomes que já existem na CMDB, mas com outro certificado (outra data de fim):</p>{table(diferentes, True)}"
-            "<p>Segue em anexo o ficheiro Excel com o detalhe de cada certificado.</p>")
+    return (f"{_p(texts, 'internet.intro', ctx)}"
+            f"{_p(texts, 'internet.desconhecidos', ctx)}{table(desconhecidos, False)}"
+            f"{_p(texts, 'internet.diferentes', ctx)}{table(diferentes, True)}"
+            f"{_p(texts, 'internet.anexo', ctx)}")
 
 
-def subject_for(part: str, sel: dict, desde: int, ate: int, alert_days: int) -> str:
-    alerta = [r for r in sel["janela"] if 0 <= r["dias"] <= alert_days]
+def subject_for(part: str, sel: dict, desde: int, ate: int, alert_days: int, texts: dict | None = None,
+                ct_dias: int = 0, now: datetime | None = None) -> str:
+    texts = texts or DEFAULT_TEXTS
+    ctx = text_context(sel, desde, ate, alert_days, ct_dias, now or utcnow(), "")
     if part == "internet":
-        n = len(sel.get("internet") or [])
-        return (f"Aprovação | {n} certificado(s) novo(s) encontrado(s) na internet" if n
-                else "Certificados encontrados na internet | nada novo")
-    if part in ("alertas", "ambos"):
-        if alerta:
-            return f"ALERTA | {len(alerta)} certificado(s) a {alert_days} dias ou menos da expiração"
-        return f"Certificados a expirar nos próximos {ate} dias" if desde <= 0 else f"Certificados a expirar entre {desde} e {ate} dias"
-    n = len(sel["renovados"])
-    return (f"Reconciliação de certificados | {n} renovado(s) por refletir na CMDB" if n
-            else "Reconciliação de certificados | CMDB coincide com os servidores")
+        key = "internet.assunto" if ctx["n_internet"] else "internet.assunto_sem"
+    elif part in ("alertas", "ambos"):
+        key = "alertas.assunto" if ctx["n_alerta"] else "alertas.assunto_sem_alerta"
+    else:
+        key = "reconciliacao.assunto" if ctx["n_renovados"] else "reconciliacao.assunto_sem"
+    # O assunto é uma só linha (nunca quebras de linha num cabeçalho de email)
+    return re.sub(r"\s+", " ", fill(texts.get(key, ""), ctx)).strip()[:250] or "Certificados"
 
 
 def email_html(part: str | list[str], sel: dict, desde: int, ate: int, alert_days: int, signature: str, now: datetime,
-               ct_dias: int = 0) -> str:
+               ct_dias: int = 0, texts: dict | None = None) -> str:
+    texts = texts or DEFAULT_TEXTS
+    ctx = text_context(sel, desde, ate, alert_days, ct_dias, now, signature)
     parts = {"ambos": ["alertas", "reconciliacao"]}.get(part, [part]) if isinstance(part, str) else list(part)
     body = ""
     if "alertas" in parts:
-        body += alerts_html(sel, desde, ate, alert_days)
+        body += alerts_html(sel, desde, ate, alert_days, texts, ctx)
     if "reconciliacao" in parts:
-        body += reconciliation_html(sel)
+        body += reconciliation_html(sel, texts, ctx)
     if "internet" in parts:
-        body += internet_html(sel, ct_dias)
-    sig = "<br>".join(_e(x) for x in signature.splitlines()) or "certwatch"
-    return (f'<div style="font-family:Arial,sans-serif;font-size:14px;color:#222;"><p>{_greeting(now)}</p>{body}'
-            f"<p>Cumprimentos,<br>{sig}</p></div>")
+        body += internet_html(sel, ct_dias, texts, ctx)
+    closing = "<br>".join(x for x in (_t(texts, "comum.fecho", ctx), _t(texts, "comum.assinatura", ctx)) if x.strip())
+    return (f'<div style="font-family:Arial,sans-serif;font-size:14px;color:#222;">{_p(texts, "comum.saudacao", ctx)}'
+            f'{_p(texts, "comum.inicio", ctx)}{body}{_p(texts, "comum.fim", ctx)}'
+            + (f"<p>{closing}</p>" if closing else "") + "</div>")
+
+
+def clean_texts(form: dict) -> dict:
+    """Textos vindos do formulário: só as chaves conhecidas, com tamanho limitado."""
+    out = {}
+    for k in DEFAULT_TEXTS:
+        if k in form:
+            v = str(form[k]).replace("\r\n", "\n")[:MAX_TEXT]
+            if k.endswith(("assunto", "assunto_sem", "assunto_sem_alerta")):
+                v = re.sub(r"\s+", " ", v).strip()
+            out[k] = v
+    return out
 
 
 # ------------------------------------------------------------------ Excel de análise

@@ -67,7 +67,49 @@
   </form>
 </details>
 
+<details class="card" id="texto" {{ 'open' if n_proprios or request.query_params.get('msg', '').startswith(('Texto', 'Alterações', 'Reposto', 'O texto')) }}>
+  <summary>Editar o texto dos emails{% if n_proprios %} — {{ n_proprios }} bloco(s) alterado(s) neste relatório{% elif modelo %} — a usar o modelo guardado{% endif %}</summary>
+  <p class="small muted mt">As tabelas e os anexos são gerados pela aplicação; aqui muda o texto à volta deles: assunto, saudação, parágrafos, fecho e assinatura.
+    Pode guardar só para este relatório ou como modelo para os próximos.
+    {% if modelo %}Modelo guardado por {{ modelo.por or '—' }} em {{ modelo.em|dtt }}.{% endif %}</p>
+  <form method="post" action="/relatorio/{{ rep.id }}/textos" class="text-edit">
+    <input type="hidden" name="csrf" value="{{ csrf }}">
+    <div class="text-blocks">
+    {% for g, keys in text_groups.items() %}
+      <fieldset class="text-group"><legend>{{ TEXT_GROUPS[g] }}</legend>
+      {% for k in keys %}
+        {% set changed = texts[k] != ORIGINAL[k] %}
+        <label class="text-block">
+          <span class="small">{{ TEXT_LABELS[k] }}
+            {% if rep.textos and k in rep.textos %}<span class="tag tag-run">só neste relatório</span>{% elif changed %}<span class="tag tag-acc">do modelo</span>{% endif %}</span>
+          {% if '.assunto' in k %}
+          <input type="text" name="{{ k }}" value="{{ texts[k] }}" maxlength="250" spellcheck="true">
+          {% else %}
+          <textarea name="{{ k }}" rows="{{ [2, (texts[k]|length // 90) + 1 + texts[k].count("\n")]|max }}" maxlength="{{ MAX_TEXT }}" spellcheck="true">{{ texts[k] }}</textarea>
+          {% endif %}
+          {% if changed %}<details class="orig small"><summary>Ver o texto original</summary><div class="muted">{{ ORIGINAL[k] or '(vazio)' }}</div></details>{% endif %}
+        </label>
+      {% endfor %}
+      </fieldset>
+    {% endfor %}
+    </div>
+    <aside class="text-vars small">
+      <b>Variáveis</b>
+      <p class="muted">Escreva-as entre chavetas; são trocadas pelo valor no momento do envio.</p>
+      <dl>{% for v, d in TEXT_VARS.items() %}<dt class="mono">{{ '{' ~ v ~ '}' }}</dt><dd>{{ d }}</dd>{% endfor %}</dl>
+      <p class="muted">**texto** fica a negrito. Cada linha nova é uma quebra de linha. Um bloco vazio não aparece no email.</p>
+    </aside>
+    <div class="selbar text-actions">
+      <button class="primary" name="acao" value="relatorio">Guardar neste relatório</button>
+      <button name="acao" value="modelo">Guardar como modelo para os próximos</button>
+      {% if n_proprios %}<button name="acao" value="repor" formnovalidate>Descartar as alterações deste relatório</button>{% endif %}
+      {% if modelo %}<button name="acao" value="original" formnovalidate>Repor o texto original da aplicação</button>{% endif %}
+    </div>
+  </form>
+</details>
+
 <h2 id="previsao">Pré-visualização</h2>
+<p class="small muted">Mostra o texto guardado: depois de editar, guarde para atualizar.</p>
 <div>
   <section class="card">
     <h3>Alertas</h3>

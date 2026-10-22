@@ -213,3 +213,57 @@ def test_internet_approval_email(data, monkeypatch):
         c.post(url + "/enviar", data={"csrf": token, "para": "sistemas@exemplo.pt", "parte": ["alertas", "reconciliacao", "internet"],
                                       "modo": "separado", "confirmo": "1"}, auth=AUTH)
         assert len([m for m in FakeSMTP.sent if not isinstance(m, tuple)]) == 3
+
+
+def test_texts_fill_escape_and_bold():
+    ctx = {"n_alerta": 3, "alerta": 20}
+    assert rp.fill("{n_alerta} em {alerta} dias, {desconhecida}", ctx) == "3 em 20 dias, {desconhecida}"
+    html = rp._t({"x": "<script>alert(1)</script> **forte**\nlinha"}, "x", {})
+    assert "<script>" not in html and "&lt;script&gt;" in html and "<strong>forte</strong>" in html and "<br>linha" in html
+    assert rp.clean_texts({"alertas.assunto": "a\r\nb  c", "nao.existe": "x"}) == {"alertas.assunto": "a b c"}
+    assert rp.texts_for({"comum.fecho": "Obrigado,"}, {"comum.fecho": "Até breve,", "lixo": "x"})["comum.fecho"] == "Até breve,"
+
+
+def test_edit_texts_report_and_template(data, monkeypatch):
+    from certwatch.models import AuditLog, EmailTemplate
+    from certwatch.web import app as webapp
+    monkeypatch.setattr(webapp, "get_settings", lambda: data)
+    monkeypatch.setattr(webapp, "SMTP_FACTORY", FakeSMTP)
+    FakeSMTP.sent = []
+    with TestClient(webapp.app) as c:
+        c.get("/relatorio", auth=AUTH)
+        token = c.cookies["cw_csrf"]
+        url = c.post("/relatorio", data={"csrf": token, "desde": "0", "ate": "90", "alerta": "20"}, auth=AUTH,
+                     follow_redirects=False).headers["location"]
+        page = c.get(url, auth=AUTH).text
+        assert "Editar o texto dos emails" in page and 'name="alertas.alerta_texto"' in page and "{n_alerta}" in page
+        # só neste relatório
+        r = c.post(url + "/textos", data={"csrf": token, "acao": "relatorio",
+                                          "alertas.assunto": "URGENTE: {n_alerta} certificado(s) <b>",
+                                          "comum.inicio": "Olá equipa,\n**leiam** com atenção.",
+                                          "comum.fecho": "Obrigado,"}, auth=AUTH)
+        assert "Texto deste relatório guardado (3 bloco" in r.text and "só neste relatório" in r.text
+        prev = c.get(url + "/previsao/alertas", auth=AUTH).text
+        assert "Olá equipa,<br><strong>leiam</strong> com atenção." in prev and "Obrigado,<br>Equipa de Segurança" in prev
+        c.post(url + "/enviar", data={"csrf": token, "para": "ricardo@exemplo.pt", "parte": ["alertas"], "confirmo": "1"}, auth=AUTH)
+        msg = [m for m in FakeSMTP.sent if not isinstance(m, tuple)][0]
+        assert msg["Subject"] == "URGENTE: 1 certificado(s) <b>"
+        assert "Olá equipa" in msg.get_body(("html",)).get_content()
+        # como modelo: o próximo relatório já usa este texto
+        c.post(url + "/textos", data={"csrf": token, "acao": "modelo", "comum.fecho": "Com os melhores cumprimentos,"}, auth=AUTH)
+        with session_scope() as s:
+            t = s.scalar(select(EmailTemplate))
+            assert t.textos["comum.fecho"] == "Com os melhores cumprimentos," and t.textos["comum.inicio"].startswith("Olá equipa")
+            assert t.updated_by == "admin" and s.get(EmailReport, int(url.rsplit("/", 1)[1])).textos is None
+        url2 = c.post("/relatorio", data={"csrf": token, "desde": "0", "ate": "60", "alerta": "20"}, auth=AUTH,
+                      follow_redirects=False).headers["location"]
+        assert "Com os melhores cumprimentos," in c.get(url2 + "/previsao/reconciliacao", auth=AUTH).text
+        assert "Modelo guardado por admin" in c.get(url2, auth=AUTH).text
+        # repor o original apaga o modelo
+        c.post(url2 + "/textos", data={"csrf": token, "acao": "original"}, auth=AUTH)
+        prev = c.get(url2 + "/previsao/alertas", auth=AUTH).text
+        assert "Cumprimentos,<br>Equipa de Segurança" in prev and "Olá equipa" not in prev
+        assert c.post(url2 + "/textos", data={"csrf": token, "acao": "xpto"}, auth=AUTH).status_code == 400
+        with session_scope() as s:
+            assert [a.details["acao"] for a in s.scalars(select(AuditLog).where(AuditLog.action == "relatorio.textos"))] == \
+                ["relatorio", "modelo", "original"]
