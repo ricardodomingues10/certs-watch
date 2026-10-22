@@ -19,7 +19,9 @@ Diferenças deliberadas em relação ao workflow (para não estragar a CMDB):
   caía na verificação no servidor por "regressão");
 - ValidTo e SerialNumber só contam como alterados se mudarem de facto (mesmo dia / mesmo número de série
   escrito de outra forma não é alteração);
-- a verificação no servidor usa o scan do certwatch (ou uma ligação TLS na hora) em vez do OpenSSL.
+- a verificação no servidor usa o scan do certwatch (ou uma ligação TLS na hora) em vez do OpenSSL;
+- emissor ou série em falta: procurados nas outras fontes e nos certificados já vistos pelo certwatch; se não
+  aparecerem, ficam "Por verificar" / "x" (regra da equipa) em vez de bloquear os CSV.
 """
 from __future__ import annotations
 
@@ -76,6 +78,9 @@ DATE_ATTR = re.compile(r"date|time|valid|expir|not_?after|not_?before|create_?on
 _STOP = {"de", "da", "do", "das", "dos", "para", "a", "o", "e", "the", "of"}
 
 FILE_MARKER = "Validado pelo ficheiro do certificado"
+# Certificados sem número de série ou sem emissor em nenhuma das fontes (regra da equipa: "x" e "Por verificar")
+MISSING_SERIAL = "x"
+MISSING_ISSUER = "Por verificar"
 GREEN, YELLOW, RED = "E2F0D9", "FFF2CC", "F4CCCC"
 COLOR_STATE = {GREEN: "novo", YELLOW: "alterado", RED: "expirado"}
 
@@ -639,8 +644,11 @@ def _identity(row: dict, t: CmdbTable) -> tuple[str, str | None]:
     return "", None
 
 
+KnownLookup = Callable[[str, "date | None"], dict]
+
+
 def reconcile_final(table: CmdbTable, sources: dict[str, list[SourceItem]], settings: Settings,
-                    live_lookup: LiveLookup, today: date) -> Result:
+                    live_lookup: LiveLookup, today: date, known: KnownLookup | None = None) -> Result:
     t = table
     H = t.h
     if not t.rows:
@@ -776,6 +784,40 @@ def reconcile_final(table: CmdbTable, sources: dict[str, list[SourceItem]], sett
             return issuer_by_source[it["source"]]
         return (it["issuer"] or "").strip()
 
+    # Emissor e número de série de cada certificado (nome + data de fim) em qualquer das fontes
+    hints: dict[tuple[str, date | None], dict] = {}
+    for src_items in sources.values():
+        for x in src_items:
+            h = hints.setdefault((x.cn.lower().strip(), x.day), {"issuer": "", "serial": ""})
+            iss = issuer_by_source.get(x.source.upper()) or (x.issuer or "").strip()
+            if iss and not h["issuer"]:
+                h["issuer"] = iss
+            if x.serial and not h["serial"]:
+                h["serial"] = x.serial
+
+    def complete(it: dict) -> tuple[str, str]:
+        """Emissor e série do certificado: a própria linha, outra fonte com o mesmo certificado ou um certificado
+        já visto pelo certwatch (servidores ou internet) com o mesmo nome e a mesma data de fim."""
+        cn_ = it["cn"].lower().strip()
+        iss, ser = resolve_issuer(it), (it["serial"] or "").strip()
+        if not iss or not ser:
+            h = hints.get((cn_, it["day"])) or {}
+            iss, ser = iss or h.get("issuer", ""), ser or h.get("serial", "")
+        if (not iss or not ser) and known is not None:
+            k = known(cn_, it["day"]) or {}
+            iss, ser = iss or (k.get("issuer") or "").strip(), ser or (k.get("serial") or "").strip()
+        return iss, ser
+
+    pending: dict[int, list[str]] = {}
+
+    def mark_pending(i: int) -> None:
+        p = [c for c, v in (("IssuerName", MISSING_ISSUER), ("SerialNumber", MISSING_SERIAL))
+             if (rows[i].get(H(c)) or "").strip() == v]
+        if p:
+            pending[i] = p
+        else:
+            pending.pop(i, None)
+
     row_src: dict[int, dict] = {}
 
     def note_src(i: int, it: dict) -> None:
@@ -799,8 +841,14 @@ def reconcile_final(table: CmdbTable, sources: dict[str, list[SourceItem]], sett
                 target = cands[0]
             if not (rows[target].get(H("CommonName")) or "").strip():
                 set_field(target, H("CommonName"), it["cn"])
+            serial = (it["serial"] or "").strip() or complete(it)[1]
+            if not serial:
+                # sem série em nenhuma fonte: certificado novo (outra data) -> "x"; mesmo certificado -> fica como está
+                serial = MISSING_SERIAL if parse_day(rows[target].get(H("ValidTo"))).day != it["day"] else None
             set_valid_to(target, it["day"])
-            set_serial(target, it["serial"])
+            if serial is not None:
+                set_serial(target, serial)
+                mark_pending(target)
             if target in mods:
                 note_src(target, it)
             if it["live"] or it.get("auth") == "ficheiro":
@@ -813,22 +861,27 @@ def reconcile_final(table: CmdbTable, sources: dict[str, list[SourceItem]], sett
             i = new_by_cn[cn]
             note_src(i, it)
             set_valid_to(i, it["day"])
-            set_serial(i, it["serial"])
-            iss = resolve_issuer(it)
-            if iss and not (rows[i].get(H("IssuerName")) or "").strip():
+            iss, serial = complete(it)
+            if serial:
+                set_serial(i, serial)
+            elif parse_day(rows[i].get(H("ValidTo"))).day != it["day"] or not (rows[i].get(H("SerialNumber")) or "").strip():
+                set_field(i, H("SerialNumber"), MISSING_SERIAL)
+            if iss and (rows[i].get(H("IssuerName")) or "").strip() in ("", MISSING_ISSUER):
                 set_field(i, H("Issuer"), iss)
                 set_field(i, H("IssuerName"), iss)
+            mark_pending(i)
             if it["san"] and not (rows[i].get(H("Subject Alternative Names")) or "").strip():
                 set_field(i, H("Subject Alternative Names"), it["san"])
             if it["live"]:
                 live_rows.add(i)
         else:
-            iss = resolve_issuer(it)
+            iss, serial = complete(it)
+            iss, serial = iss or MISSING_ISSUER, serial or MISSING_SERIAL
             row = {h: "" for h in t.headers}
             row.update({
                 H("Display Label"): it["cn"], H("Name"): it["cn"], H("CommonName"): it["cn"],
                 H("ValidTo"): valid_to_text(it["day"]), H("Localização"): it["source"],
-                H("Certificate Status"): "Ativo", H("SerialNumber"): it["serial"] or "",
+                H("Certificate Status"): "Ativo", H("SerialNumber"): serial,
                 H("Issuer"): iss, H("IssuerName"): iss, H("Subject Alternative Names"): it["san"] or "",
                 H("Certificate Type"): "SSL", H("Description"): f"{settings.final_description} - novo certificado",
                 H("Global Id"): "x",
@@ -839,6 +892,7 @@ def reconcile_final(table: CmdbTable, sources: dict[str, list[SourceItem]], sett
             new_rows.add(i)
             new_by_cn[cn] = i
             note_src(i, it)
+            mark_pending(i)
             if it["live"]:
                 live_rows.add(i)
 
@@ -884,7 +938,8 @@ def reconcile_final(table: CmdbTable, sources: dict[str, list[SourceItem]], sett
                  "fonte": src.get("fonte", ""), "triagem": src.get("triagem", ""),
                  "servidor": i in live_rows, "descricao": row.get(H("Description"), ""),
                  "validto": row.get(H("ValidTo"), ""), "issuer": row.get(H("Issuer"), ""),
-                 "issuer_name": row.get(H("IssuerName"), ""), "serial": row.get(H("SerialNumber"), "")}
+                 "issuer_name": row.get(H("IssuerName"), ""), "serial": row.get(H("SerialNumber"), ""),
+                 "pendente": pending.get(i, [])}
         if i not in new_rows:
             entry["campos"] = [{"campo": inv.get(c, c), "antes": originals[i].get(c, ""), "depois": row.get(c, "")}
                                for c in mods[i] if c != H("Description")]
@@ -959,14 +1014,26 @@ def validate_delta(rows: list[dict[str, str]]) -> list[str]:
     seen, dup = set(), []
     for r in rows:
         iss, ser = r["IssuerName"].strip().lower(), r["SerialNumber"].strip().lower()
-        if not iss or not ser:
-            continue
+        if not iss or not ser or ser == MISSING_SERIAL.lower() or iss == MISSING_ISSUER.lower():
+            continue                     # "x" / "Por verificar" não identificam o certificado: avisado à parte
         if (iss, ser) in seen:
             dup.append(f"{r['IssuerName']} + {r['SerialNumber']}")
         seen.add((iss, ser))
     if dup:
         problems.append("Chave primária repetida (IssuerName + SerialNumber): " + " | ".join(sorted(set(dup))[:10]))
     return problems
+
+
+def _placeholder_clashes(rows: list[dict[str, str]]) -> int:
+    """Linhas novas com o mesmo par IssuerName + SerialNumber por causa de "Por verificar"/"x"."""
+    seen: dict[tuple[str, str], int] = {}
+    for r in rows:
+        if r["Global Id"].strip().lower() != "x":
+            continue
+        iss, ser = r["IssuerName"].strip().lower(), r["SerialNumber"].strip().lower()
+        if ser == MISSING_SERIAL.lower() or iss == MISSING_ISSUER.lower():
+            seen[(iss, ser)] = seen.get((iss, ser), 0) + 1
+    return sum(n for n in seen.values() if n > 1)
 
 
 def _csv_text(v: str) -> str:
@@ -1063,7 +1130,9 @@ def build_outputs(state: dict, changes: list[dict]) -> tuple[bytes, bytes | None
     if not problems:
         csv, csv_sem = build_csv(delta, True), build_csv(delta, False)
     counts = {"novos": len(m.new_rows), "alterados": len(m.mods), "excluidos": len(excluded), "delta": len(delta),
-              "final_linhas": len(m.table.rows), "expirados": len(m.expired_rows)}
+              "final_linhas": len(m.table.rows), "expirados": len(m.expired_rows),
+              "por_verificar": sum(1 for c in changes if c.get("pendente") and c.get("incluir", True)),
+              "por_verificar_repetidos": _placeholder_clashes(delta)}
     return build_xlsx(m), csv, csv_sem, problems, counts
 
 
@@ -1136,6 +1205,38 @@ def make_live_lookup(session: Session, settings: Settings) -> LiveLookup:
     return look
 
 
+def make_known_lookup(session: Session, settings: Settings) -> KnownLookup:
+    """Certificados já vistos pelo certwatch (nos servidores ou na internet), por nome e data de fim (±1 dia)."""
+    tz = ZoneInfo(settings.timezone)
+    index: dict[str, list[tuple[date, str, str, int]]] = {}
+
+    def add(names, not_after, issuer, serial, rank):
+        if not_after is None or not (issuer or serial):
+            return
+        d = as_utc(not_after).astimezone(tz).date()
+        for n in {(x or "").strip().lower() for x in names if x}:
+            index.setdefault(n, []).append((d, (issuer or "").strip(), (serial or "").upper(), rank))
+
+    for cn, sans, na, iss, ser in session.execute(select(Certificate.subject_cn, Certificate.sans_dns, Certificate.not_after,
+                                                         Certificate.issuer_cn, Certificate.serial_hex)
+                                                  .where(Certificate.is_ca.is_(False))):
+        add([cn, *(sans or [])], na, iss, ser, 0)
+    for names, primary, na, iss, ser in session.execute(select(CtCert.names, CtCert.primary_name, CtCert.not_after,
+                                                               CtCert.issuer_cn, CtCert.serial_hex)):
+        add([primary, *(names or [])], na, iss, ser, 1)
+
+    def look(cn: str, day: date | None) -> dict:
+        if day is None:
+            return {}
+        best = None
+        for d, iss, ser, rank in index.get(cn, []):
+            diff = abs((d - day).days)
+            if diff <= 1 and (best is None or (diff, rank) < best[0]):
+                best = ((diff, rank), iss, ser)
+        return {"issuer": best[1], "serial": best[2]} if best else {}
+    return look
+
+
 # ------------------------------------------------------------------ execução
 def start_run(session: Session, actor: str) -> FinalRun:
     busy = session.scalar(select(FinalRun).where(FinalRun.status == "a_gerar").limit(1))
@@ -1184,7 +1285,8 @@ def generate(run_id: int, settings: Settings, fetch: Callable | None = None,
                 if ct_items:
                     sources[INTERNET] = ct_items
                     src_info[INTERNET] = {**ct_info, "origem": "internet"}
-            res = reconcile_final(table, sources, settings, (live_factory or make_live_lookup)(s, settings), today)
+            res = reconcile_final(table, sources, settings, (live_factory or make_live_lookup)(s, settings), today,
+                                  make_known_lookup(s, settings))
             decisions = {d.key: d for d in s.scalars(select(FinalDecision))}
             for c in res.changes:
                 c["incluir"], c["porque"] = default_include(c, decisions)

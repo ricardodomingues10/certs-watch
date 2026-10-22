@@ -1680,7 +1680,7 @@ def final_compare_export(origem: str = "", vista: str = "diferencas", q: str = "
 
 @app.get("/cmdb-final/{run_id}")
 def final_run(request: Request, run_id: int, vista: str = "alteracoes", tipo: str = "", q: str = "", fonte: str = "",
-              incluida: str = "", user: str = Depends(current_user)):
+              incluida: str = "", pendente: str = "", user: str = Depends(current_user)):
     settings = get_settings()
     vista = vista if vista in FINAL_VIEWS else "alteracoes"
     with session_scope() as s:
@@ -1706,13 +1706,15 @@ def final_run(request: Request, run_id: int, vista: str = "alteracoes", tipo: st
         changes = [c for c in changes if c.get("fonte") == fonte]
     if incluida in ("sim", "nao"):
         changes = [c for c in changes if c.get("incluir", True) == (incluida == "sim")]
+    if pendente:
+        changes = [c for c in changes if c.get("pendente")]
     if q:
         changes = [c for c in changes if q.lower() in (c["cn"] or "").lower() or q.lower() in (c["global_id"] or "").lower()]
     folder = cf.folder_status(settings) if run.status == "pronto" else None
     return render(request, "final_run.html", user, run=run, vista=vista, views=FINAL_VIEWS, changes=changes[:3000],
                   n_changes=len(changes), tipo=tipo, q=q, newest=newest, pubs=pubs, pub_files=pub_files, sizes=sizes,
                   folder=folder, FINAL_STATES=FINAL_STATES, settings=settings, fonte=fonte, incluida=incluida,
-                  can_edit=can_edit, fontes=sorted({c.get("fonte") for c in all_changes if c.get("fonte")}),
+                  pendente=bool(pendente), can_edit=can_edit, fontes=sorted({c.get("fonte") for c in all_changes if c.get("fonte")}),
                   n_excl=sum(1 for c in all_changes if not c.get("incluir", True)),
                   age_min=(utcnow() - as_utc(run.created_at)).total_seconds() / 60)
 

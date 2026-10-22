@@ -325,7 +325,7 @@ def test_generate_blocked_and_error(settings):
     with session_scope() as s:
         run = s.get(FinalRun, run_id)
         assert run.status == "erro" and "CA2" in run.error
-    # emissor de CA2 não configurado -> novos sem Issuer -> CSV bloqueados, Excel disponível
+    # emissor de CA2 não configurado e não encontrado noutra fonte -> "Por verificar" (os CSV são gerados)
     (settings.import_dir / "ca2.xlsx").write_bytes(ca2_xlsx())
     st2 = replace(settings, import_issuers={"CA1": "Corp CA01"})
     with session_scope() as s:
@@ -335,10 +335,12 @@ def test_generate_blocked_and_error(settings):
                 live_factory=lambda s, st: live, today=TODAY)
     with session_scope() as s:
         run = s.get(FinalRun, run_id)
-        assert run.status == "bloqueado" and run.xlsx and run.csv is None
-        assert "novo-ca2.exemplo.pt" in run.validation[0]
-        with pytest.raises(cf.FinalError):
-            cf.publish(s, st2, run, ["xlsx"], "admin")
+        assert run.status == "pronto" and run.csv and not run.validation
+        novo = next(c for c in run.changes if c["cn"] == "novo-ca2.exemplo.pt")
+        assert novo["issuer_name"] == "Por verificar" and "IssuerName" in novo["pendente"]
+        assert run.summary["por_verificar"] >= 1
+        line = next(x for x in run.csv.decode().splitlines() if "novo-ca2.exemplo.pt" in x)
+        assert '"Por verificar"' in line
 
 
 def test_folder_status_missing(settings, tmp_path):
@@ -536,20 +538,21 @@ def test_internet_source_and_selection(settings):
             cf.apply_selection(s, old, [0], set(), "ana")
 
 
-def test_exclusion_unblocks(settings):
+def test_exclusion_updates_pending(settings):
     (settings.import_dir / "ca1.csv").write_bytes(CA1)
     (settings.import_dir / "ca2.xlsx").write_bytes(ca2_xlsx())
     (settings.import_dir / "avi.csv").write_bytes(AVI)
-    st = replace(settings, import_issuers={"CA1": "Corp CA01"}, final_ct=False)    # CA2 sem emissor -> bloqueado
+    st = replace(settings, import_issuers={"CA1": "Corp CA01"}, final_ct=False)    # CA2 sem emissor -> "Por verificar"
     with session_scope() as s:
         run_id = cf.start_run(s, "admin").id
     cf.generate(run_id, st, fetch=_fetch, live_factory=lambda s, st: live, today=TODAY)
     with session_scope() as s:
         run = s.get(FinalRun, run_id)
-        assert run.status == "bloqueado" and run.csv is None
+        assert run.status == "pronto" and run.summary["por_verificar"] >= 1
         bad = [c["chave"] for c in run.changes if c["fonte"] == "CA2"]
         cf.apply_selection(s, run, bad, set(), "ana")
-        assert run.status == "pronto" and run.csv and not run.validation
+        assert run.status == "pronto" and run.csv and run.summary["por_verificar"] == 0
+        assert "Por verificar" not in run.csv.decode()
 
 
 def test_exclude_from_compare_page(settings, monkeypatch):
@@ -576,3 +579,70 @@ def test_exclude_from_compare_page(settings, monkeypatch):
         assert r.status_code == 200 and "1 já excluída" in r.text and "novo-avi.exemplo.pt" not in r.text
     with session_scope() as s:
         assert "novo-avi.exemplo.pt" not in s.get(FinalRun, run_id).csv.decode()
+
+
+def test_missing_serial_and_issuer(settings):
+    """Sem série em nenhuma fonte -> "x"; sem emissor -> "Por verificar"; antes disso, procura noutras fontes e
+    nos certificados já vistos pelo certwatch (mesmo nome e mesma data de fim)."""
+    cis = [ci(1, "renovado.exemplo.pt", date(2026, 11, 10), serial="0A01"),
+           ci(2, "igual.exemplo.pt", date(2027, 3, 1), serial="AA01")]
+    t = cf.build_cmdb_table(cis, settings)
+    st = replace(settings, import_issuers={})
+    S = cf.SourceItem
+    sources = {
+        "CA1": [S("CA1", 2, "renovado.exemplo.pt", date(2027, 11, 10)),          # renovado, sem série -> "x"
+                S("CA1", 3, "igual.exemplo.pt", date(2027, 3, 1)),               # mesmo certificado -> série fica
+                S("CA1", 4, "novo1.exemplo.pt", date(2028, 1, 1)),               # nada em lado nenhum
+                S("CA1", 5, "novo2.exemplo.pt", date(2028, 2, 1)),               # outra fonte tem os dados
+                S("CA1", 6, "novo3.exemplo.pt", date(2028, 3, 1))],              # certwatch já o viu
+        "AVI": [S("AVI", 2, "novo2.exemplo.pt", date(2028, 2, 1), serial="N2", issuer="DigiCert G2")],
+    }
+    known = lambda cn, day: {"issuer": "Corp CA03", "serial": "C3"} if (cn, day) == ("novo3.exemplo.pt", date(2028, 3, 1)) else {}
+    res = cf.reconcile_final(t, sources, st, live, TODAY, known)
+    by = {c["cn"]: c for c in res.changes}
+    assert by["renovado.exemplo.pt"]["serial"] == "x" and by["renovado.exemplo.pt"]["pendente"] == ["SerialNumber"]
+    assert "igual.exemplo.pt" not in by
+    assert (by["novo1.exemplo.pt"]["issuer_name"], by["novo1.exemplo.pt"]["serial"]) == ("Por verificar", "x")
+    assert by["novo1.exemplo.pt"]["pendente"] == ["IssuerName", "SerialNumber"]
+    assert (by["novo2.exemplo.pt"]["issuer_name"], by["novo2.exemplo.pt"]["serial"], by["novo2.exemplo.pt"]["pendente"]) == \
+        ("DigiCert G2", "N2", [])
+    assert (by["novo3.exemplo.pt"]["issuer_name"], by["novo3.exemplo.pt"]["serial"]) == ("Corp CA03", "C3")
+    # os CSV são gerados: "x"/"Por verificar" não bloqueiam nem contam como chave repetida
+    xlsx, csv, csv_sem, problems, counts = cf.build_outputs(cf.unpack_state(cf.pack_state(res)), res.changes)
+    assert not problems and csv and counts["por_verificar"] == 2 and counts["por_verificar_repetidos"] == 0
+    rows = [ln for ln in csv.decode().splitlines() if "novo1.exemplo.pt" in ln]
+    assert '"Por verificar"' in rows[0] and '"x"' in rows[0]
+
+
+def test_known_lookup_from_certwatch(settings):
+    from certwatch.models import Certificate, CtCert
+    with session_scope() as s:
+        s.add(Certificate(sha256="a" * 64, subject_cn="visto.exemplo.pt", issuer_cn="Corp CA01", serial_hex="0abc",
+                          not_after=datetime(2028, 3, 1, 23, 30, tzinfo=timezone.utc), sans_dns=["alt.exemplo.pt"]))
+        s.add(CtCert(names=["ct.exemplo.pt"], primary_name="ct.exemplo.pt", issuer_cn="R11", serial_hex="dd",
+                     not_after=datetime(2028, 4, 1, 12, 0, tzinfo=timezone.utc)))
+    with session_scope() as s:
+        look = cf.make_known_lookup(s, settings)
+        assert look("visto.exemplo.pt", date(2028, 3, 2)) == {"issuer": "Corp CA01", "serial": "0ABC"}   # 23:30 UTC = dia 2 em Lisboa? ±1 dia
+        assert look("alt.exemplo.pt", date(2028, 3, 1))["serial"] == "0ABC"
+        assert look("ct.exemplo.pt", date(2028, 4, 1)) == {"issuer": "R11", "serial": "DD"}
+        assert look("visto.exemplo.pt", date(2028, 6, 1)) == {}
+        assert look("outro.exemplo.pt", date(2028, 3, 1)) == {}
+
+
+def test_run_page_shows_pending(settings, monkeypatch):
+    from fastapi.testclient import TestClient
+    from certwatch.web import app as webapp
+    st = replace(settings, import_issuers={"CA1": "Corp CA01"}, final_ct=False)
+    monkeypatch.setattr(webapp, "get_settings", lambda: st)
+    (st.import_dir / "ca1.csv").write_bytes(CA1)
+    (st.import_dir / "ca2.xlsx").write_bytes(ca2_xlsx())
+    (st.import_dir / "avi.csv").write_bytes(AVI)
+    with session_scope() as s:
+        run_id = cf.start_run(s, "admin").id
+    cf.generate(run_id, st, fetch=_fetch, live_factory=lambda s, x: live, today=TODAY)
+    with TestClient(webapp.app) as c:
+        page = c.get(f"/cmdb-final/{run_id}", auth=("admin", "teste-admin-123")).text
+        assert "com dados por confirmar" in page and "Os CSV não foram gerados" not in page
+        only = c.get(f"/cmdb-final/{run_id}?vista=alteracoes&pendente=1", auth=("admin", "teste-admin-123")).text
+        assert "novo-ca2.exemplo.pt" in only and "novo-avi.exemplo.pt" not in only

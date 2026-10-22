@@ -198,20 +198,22 @@ Página **Atualizar a CMDB**. Faz o mesmo que o workflow n8n "Reconciliação de
   - nomes sem domínio.
 - Linhas da CMDB que já existem: são atualizados ValidTo e SerialNumber na linha de data mais próxima.
 - Certificados novos: linha com `Global Id = x`, com o emissor de `CERTWATCH_IMPORT_ISSUERS` para CA1/CA2 ou o `Issuer_CommonName` no AVI.
+- **Emissor ou número de série em falta**: procura-se primeiro noutra fonte com o mesmo certificado (mesmo nome e mesma data de fim) e depois nos certificados já vistos pelo certwatch nos servidores ou na internet (mesmo nome, data de fim com ±1 dia). Se não aparecer em lado nenhum: SerialNumber `x` e Issuer/IssuerName `Por verificar`. Numa linha que já existe na CMDB, a série só passa a `x` se o certificado mudou (outra data); com a mesma data, fica a que lá está. A geração avisa quantos ficaram assim, com o filtro "Só com dados por confirmar".
 - Fonte com data anterior à CMDB: decide o certificado apresentado na porta 443.
 - A Description regista o que mudou, a começar por "Changed with n8n" (`CERTWATCH_FINAL_DESCRIPTION`).
 - Os CSV levam só o delta: 26 colunas fixas, separador `|`, CRLF, UTF-8 sem BOM.
-- Os CSV são recusados se um certificado novo não tiver Issuer, IssuerName e SerialNumber, ou se `IssuerName + SerialNumber` se repetir. Nesse caso o Excel continua disponível.
+- Os CSV são recusados se `IssuerName + SerialNumber` se repetir com valores reais. Nesse caso o Excel continua disponível. Linhas novas com o mesmo par por causa de `Por verificar`/`x` não bloqueiam, mas são avisadas: se a UCMDB usar o par como chave, podem ficar num só CI.
 - O Excel não leva as colunas Created By, Created Time e Is Candidate For Deletion. Cores: verde para linhas novas, amarelo para alteradas, vermelho para expiradas.
 
 **Diferenças em relação ao workflow**:
 - A verificação no servidor usa o scan do certwatch, se tiver menos de `CERTWATCH_FINAL_LIVE_MAX_AGE_H` horas, ou uma ligação na hora, em vez do OpenSSL. A Description diz "Validado via TLS" (`CERTWATCH_FINAL_LIVE_MARKER`).
 - Uma data vazia na fonte vai para o relatório de erros.
 - ValidTo e SerialNumber só contam como alterados se mudarem de facto: mesmo dia, ou mesmo número escrito de outra forma, não conta.
+- Emissor/série em falta: `Por verificar`/`x` em vez de bloquear os CSV (ver acima).
 
-Com os mesmos dados, os ficheiros gerados são iguais byte a byte aos do workflow.
+Com os mesmos dados (e todos os emissores e séries presentes), os ficheiros gerados são iguais byte a byte aos do workflow.
 
-**Emissores das CAs**: os certificados novos de CA1/CA2 precisam de emissor (chave primária IssuerName + SerialNumber). Defina-o no `.env` com o texto usado pelo workflow: `CERTWATCH_IMPORT_ISSUERS=CA1=<nome da CA01>;CA2=<nome da CA02>`.
+**Emissores das CAs**: os ficheiros do certutil não trazem o emissor. Para os certificados novos de CA1/CA2 não ficarem com `Por verificar`, defina-o no `.env` com o texto usado pelo workflow: `CERTWATCH_IMPORT_ISSUERS=CA1=<nome da CA01>;CA2=<nome da CA02>`.
 
 **Colunas**: os atributos da UCMDB passam a colunas com os cabeçalhos do export (`[Digital Certificate] : CommonName`). Se o layout do TQL só tiver alguns atributos, os restantes são pedidos à REST API (`CERTWATCH_FINAL_ENRICH=auto`). A correspondência atributo → coluna é automática (`issuer_name` → IssuerName, `responsabilidade_instalacao` → Responsabilidade de instalação). Para corrigir: na geração, separador **Colunas**, descarregue o modelo `cmdb-colunas.csv`, ajuste-o e coloque-o em `import/`. Em cada linha fica `atributo;coluna`; a coluna vazia exclui o atributo e a ordem das linhas é a ordem das colunas.
 
