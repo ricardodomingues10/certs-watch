@@ -21,11 +21,11 @@
 {% set pv = (run.summary or {}).get('por_verificar', 0) %}
 {% if pv and run.status in ('pronto', 'bloqueado') %}
 <div class="note warn"><b>{{ pv }} certificado{{ 's' if pv != 1 }} com dados por confirmar.</b>
-  O emissor ou o número de série não foram encontrados em nenhuma fonte (ficheiros, renovações, servidores verificados e internet), por isso
-  ficam com IssuerName <span class="mono">Por verificar</span> e/ou SerialNumber <span class="mono">x</span>. Confirme-os na CMDB depois do carregamento.
+  O emissor não foi encontrado em nenhuma fonte (ficheiros, renovações, servidores verificados e internet), por isso os certificados novos
+  ficam com Issuer e IssuerName <span class="mono">Por verificar</span>; ou a fonte não trouxe o SerialNumber e ficou o que estava na CMDB. Confirme-os na CMDB depois do carregamento.
   <a href="?vista=alteracoes&amp;pendente=1">Ver quais</a>.
   {% set rep = (run.summary or {}).get('por_verificar_repetidos', 0) %}
-  {% if rep %}<div class="small mt">{{ rep }} linhas novas ficam com o mesmo par IssuerName + SerialNumber (por exemplo <span class="mono">Por verificar</span> + <span class="mono">x</span>). Se a UCMDB usar este par como chave, podem ficar num só CI: confirme o resultado depois do carregamento ou exclua-as até ter os dados.</div>{% endif %}
+  {% if rep %}<div class="small mt">{{ rep }} linhas novas ficam com o mesmo par IssuerName + SerialNumber por causa de <span class="mono">Por verificar</span>. Se a UCMDB usar este par como chave, podem ficar num só CI: confirme o resultado depois do carregamento ou exclua-as até ter os dados.</div>{% endif %}
 </div>
 {% endif %}
 
@@ -136,7 +136,7 @@
       {% if c.tipo == 'novo' %}
         <dt>ValidTo</dt><dd><ins>{{ c.validto }}</ins></dd>
         <dt>IssuerName</dt><dd>{% if 'IssuerName' in (c.pendente or []) %}<span class="tag tag-run" title="Não encontrado em nenhuma fonte">{{ c.issuer_name }}</span>{% elif c.issuer_name %}<ins>{{ c.issuer_name }}</ins>{% else %}<span class="tag tag-err">vazio</span>{% endif %}</dd>
-        <dt>SerialNumber</dt><dd class="mono">{% if 'SerialNumber' in (c.pendente or []) %}<span class="tag tag-run" title="Não encontrado em nenhuma fonte">{{ c.serial }}</span>{% elif c.serial %}<ins>{{ c.serial }}</ins>{% else %}<span class="tag tag-err">vazio</span>{% endif %}</dd>
+        <dt>SerialNumber</dt><dd class="mono">{% if 'SerialNumber' in (c.pendente or []) %}<span class="tag tag-err" title="Não encontrado em nenhuma fonte">{{ c.serial or 'vazio' }}</span>{% elif c.serial %}<ins>{{ c.serial }}</ins>{% else %}<span class="tag tag-err">vazio</span>{% endif %}</dd>
       {% else %}
         {% for f in c.campos %}<dt>{{ f.campo }}</dt><dd><del>{{ f.antes or '(vazio)' }}</del> → <ins>{{ f.depois or '(vazio)' }}</ins>{% if f.campo in (c.pendente or []) %} <span class="tag tag-run">não encontrado em nenhuma fonte</span>{% endif %}</dd>{% endfor %}
       {% endif %}

@@ -582,36 +582,68 @@ def test_exclude_from_compare_page(settings, monkeypatch):
 
 
 def test_missing_serial_and_issuer(settings):
-    """Sem série em nenhuma fonte -> "x"; sem emissor -> "Por verificar"; antes disso, procura noutras fontes e
-    nos certificados já vistos pelo certwatch (mesmo nome e mesma data de fim)."""
+    """Linhas novas (Global Id = x): Issuer e IssuerName sempre preenchidos ("Por verificar" se não houver em nenhuma
+    fonte); o SerialNumber nunca é inventado. Antes disso, procura noutras fontes e nos certificados já vistos."""
     cis = [ci(1, "renovado.exemplo.pt", date(2026, 11, 10), serial="0A01"),
            ci(2, "igual.exemplo.pt", date(2027, 3, 1), serial="AA01")]
     t = cf.build_cmdb_table(cis, settings)
     st = replace(settings, import_issuers={})
     S = cf.SourceItem
     sources = {
-        "CA1": [S("CA1", 2, "renovado.exemplo.pt", date(2027, 11, 10)),          # renovado, sem série -> "x"
-                S("CA1", 3, "igual.exemplo.pt", date(2027, 3, 1)),               # mesmo certificado -> série fica
-                S("CA1", 4, "novo1.exemplo.pt", date(2028, 1, 1)),               # nada em lado nenhum
+        "CA1": [S("CA1", 2, "renovado.exemplo.pt", date(2027, 11, 10)),          # renovado, sem série -> fica a anterior
+                S("CA1", 3, "igual.exemplo.pt", date(2027, 3, 1)),               # mesmo certificado -> nada muda
+                S("CA1", 4, "novo1.exemplo.pt", date(2028, 1, 1), serial="N1"),  # sem emissor em lado nenhum
                 S("CA1", 5, "novo2.exemplo.pt", date(2028, 2, 1)),               # outra fonte tem os dados
-                S("CA1", 6, "novo3.exemplo.pt", date(2028, 3, 1))],              # certwatch já o viu
+                S("CA1", 6, "novo3.exemplo.pt", date(2028, 3, 1)),               # certwatch já o viu
+                S("CA1", 7, "novo4.exemplo.pt", date(2028, 4, 1))],              # sem série nem emissor
         "AVI": [S("AVI", 2, "novo2.exemplo.pt", date(2028, 2, 1), serial="N2", issuer="DigiCert G2")],
     }
     known = lambda cn, day: {"issuer": "Corp CA03", "serial": "C3"} if (cn, day) == ("novo3.exemplo.pt", date(2028, 3, 1)) else {}
     res = cf.reconcile_final(t, sources, st, live, TODAY, known)
     by = {c["cn"]: c for c in res.changes}
-    assert by["renovado.exemplo.pt"]["serial"] == "x" and by["renovado.exemplo.pt"]["pendente"] == ["SerialNumber"]
+    ren = by["renovado.exemplo.pt"]
+    assert ren["serial"] == "0A01" and ren["pendente"] == ["SerialNumber"] and ren["global_id"] != "x"
     assert "igual.exemplo.pt" not in by
-    assert (by["novo1.exemplo.pt"]["issuer_name"], by["novo1.exemplo.pt"]["serial"]) == ("Por verificar", "x")
-    assert by["novo1.exemplo.pt"]["pendente"] == ["IssuerName", "SerialNumber"]
+    assert (by["novo1.exemplo.pt"]["issuer"], by["novo1.exemplo.pt"]["issuer_name"], by["novo1.exemplo.pt"]["serial"]) == \
+        ("Por verificar", "Por verificar", "N1")
+    assert by["novo1.exemplo.pt"]["pendente"] == ["IssuerName"] and by["novo1.exemplo.pt"]["global_id"] == "x"
     assert (by["novo2.exemplo.pt"]["issuer_name"], by["novo2.exemplo.pt"]["serial"], by["novo2.exemplo.pt"]["pendente"]) == \
         ("DigiCert G2", "N2", [])
     assert (by["novo3.exemplo.pt"]["issuer_name"], by["novo3.exemplo.pt"]["serial"]) == ("Corp CA03", "C3")
-    # os CSV são gerados: "x"/"Por verificar" não bloqueiam nem contam como chave repetida
+    assert by["novo4.exemplo.pt"]["serial"] == "" and by["novo4.exemplo.pt"]["pendente"] == ["IssuerName", "SerialNumber"]
+    assert not any(c["serial"] == "x" for c in res.changes)
+    # sem série: fica fora dos CSV por omissão; o resto é gerado
+    for c in res.changes:
+        c["incluir"], c["porque"] = cf.default_include(c, {})
+    assert not by["novo4.exemplo.pt"]["incluir"] and "SerialNumber" in by["novo4.exemplo.pt"]["porque"]
     xlsx, csv, csv_sem, problems, counts = cf.build_outputs(cf.unpack_state(cf.pack_state(res)), res.changes)
-    assert not problems and csv and counts["por_verificar"] == 2 and counts["por_verificar_repetidos"] == 0
-    rows = [ln for ln in csv.decode().splitlines() if "novo1.exemplo.pt" in ln]
-    assert '"Por verificar"' in rows[0] and '"x"' in rows[0]
+    assert not problems and csv and counts["por_verificar"] == 2
+    text = csv.decode()
+    assert "novo4.exemplo.pt" not in text
+    line = next(ln for ln in text.splitlines() if "novo1.exemplo.pt" in ln).split("|")
+    head = text.splitlines()[0].split("|")
+    col = {h.strip('"'): n for n, h in enumerate(head)}
+    assert line[col["Issuer"]] == line[col["IssuerName"]] == '"Por verificar"' and line[col["SerialNumber"]] == '"N1"'
+    assert line[col["Global Id"]] == '"x"'
+    # incluído à força sem série -> bloqueia (chave primária incompleta)
+    by["novo4.exemplo.pt"]["incluir"] = True
+    assert cf.build_outputs(cf.unpack_state(cf.pack_state(res)), res.changes)[3]
+
+
+def test_csv_format_is_fixed(settings):
+    res = build(settings)
+    _, csv, csv_sem, problems, _ = cf.build_outputs(cf.unpack_state(cf.pack_state(res)), res.changes)
+    expected = ["Display Label", "ValidTo", "Aplicação", "Localização", "Responsabilidade de instalação",
+                "Certificate Status", "Certificado Gerido", "Ambiente", "Name", "CommonName", "Issuer", "IssuerName",
+                "SerialNumber", "Certificate Type", "IsSelfSigned", "Global Id", "Link para a Documentação",
+                "Subject Alternative Names", "Organization", "Version", "Type", "Subject", "CreateOn", "Hostname",
+                "Description", "OrganizationUnit"]
+    lines = csv.decode("utf-8").split("\r\n")
+    assert [h.strip('"') for h in lines[0].split("|")] == expected
+    assert all(len(ln.split("|")) == 26 for ln in lines if ln)
+    assert all(len(ln.split("|")) == 26 for ln in csv_sem.decode("utf-8").split("\r\n") if ln)
+    # mesmo sem alterações, o ficheiro com cabeçalho tem o cabeçalho
+    assert cf.build_csv([], True).decode().split("\r\n")[0].count("|") == 25
 
 
 def test_known_lookup_from_certwatch(settings):

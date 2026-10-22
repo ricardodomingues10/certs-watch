@@ -20,8 +20,10 @@ Diferenças deliberadas em relação ao workflow (para não estragar a CMDB):
 - ValidTo e SerialNumber só contam como alterados se mudarem de facto (mesmo dia / mesmo número de série
   escrito de outra forma não é alteração);
 - a verificação no servidor usa o scan do certwatch (ou uma ligação TLS na hora) em vez do OpenSSL;
-- emissor ou série em falta: procurados nas outras fontes e nos certificados já vistos pelo certwatch; se não
-  aparecerem, ficam "Por verificar" / "x" (regra da equipa) em vez de bloquear os CSV.
+- emissor ou série em falta: procurados nas outras fontes e nos certificados já vistos pelo certwatch; um
+  certificado novo sem emissor fica com Issuer/IssuerName "Por verificar" (regra da equipa) em vez de bloquear os
+  CSV; sem série, fica fora dos CSV por omissão (IssuerName + SerialNumber é a chave primária na CMDB);
+- numa linha existente, uma fonte sem série não apaga a série que está na CMDB.
 """
 from __future__ import annotations
 
@@ -78,8 +80,8 @@ DATE_ATTR = re.compile(r"date|time|valid|expir|not_?after|not_?before|create_?on
 _STOP = {"de", "da", "do", "das", "dos", "para", "a", "o", "e", "the", "of"}
 
 FILE_MARKER = "Validado pelo ficheiro do certificado"
-# Certificados sem número de série ou sem emissor em nenhuma das fontes (regra da equipa: "x" e "Por verificar")
-MISSING_SERIAL = "x"
+# Certificado novo sem emissor em nenhuma das fontes: Issuer/IssuerName "Por verificar" (regra da equipa).
+# O "x" é só do Global Id (marca as linhas novas); o SerialNumber nunca é inventado.
 MISSING_ISSUER = "Por verificar"
 GREEN, YELLOW, RED = "E2F0D9", "FFF2CC", "F4CCCC"
 COLOR_STATE = {GREEN: "novo", YELLOW: "alterado", RED: "expirado"}
@@ -810,9 +812,14 @@ def reconcile_final(table: CmdbTable, sources: dict[str, list[SourceItem]], sett
 
     pending: dict[int, list[str]] = {}
 
+    serial_unknown: set[int] = set()     # linha alterada (outra data) sem série nas fontes: ficou a anterior
+
     def mark_pending(i: int) -> None:
-        p = [c for c, v in (("IssuerName", MISSING_ISSUER), ("SerialNumber", MISSING_SERIAL))
-             if (rows[i].get(H(c)) or "").strip() == v]
+        p = []
+        if (rows[i].get(H("IssuerName")) or "").strip() == MISSING_ISSUER:
+            p.append("IssuerName")
+        if not (rows[i].get(H("SerialNumber")) or "").strip() or i in serial_unknown:
+            p.append("SerialNumber")
         if p:
             pending[i] = p
         else:
@@ -842,12 +849,12 @@ def reconcile_final(table: CmdbTable, sources: dict[str, list[SourceItem]], sett
             if not (rows[target].get(H("CommonName")) or "").strip():
                 set_field(target, H("CommonName"), it["cn"])
             serial = (it["serial"] or "").strip() or complete(it)[1]
-            if not serial:
-                # sem série em nenhuma fonte: certificado novo (outra data) -> "x"; mesmo certificado -> fica como está
-                serial = MISSING_SERIAL if parse_day(rows[target].get(H("ValidTo"))).day != it["day"] else None
+            if not serial and parse_day(rows[target].get(H("ValidTo"))).day != it["day"]:
+                serial_unknown.add(target)     # outro certificado, série desconhecida: não se apaga a que lá está
             set_valid_to(target, it["day"])
-            if serial is not None:
+            if serial:
                 set_serial(target, serial)
+            if serial or target in serial_unknown:
                 mark_pending(target)
             if target in mods:
                 note_src(target, it)
@@ -864,8 +871,6 @@ def reconcile_final(table: CmdbTable, sources: dict[str, list[SourceItem]], sett
             iss, serial = complete(it)
             if serial:
                 set_serial(i, serial)
-            elif parse_day(rows[i].get(H("ValidTo"))).day != it["day"] or not (rows[i].get(H("SerialNumber")) or "").strip():
-                set_field(i, H("SerialNumber"), MISSING_SERIAL)
             if iss and (rows[i].get(H("IssuerName")) or "").strip() in ("", MISSING_ISSUER):
                 set_field(i, H("Issuer"), iss)
                 set_field(i, H("IssuerName"), iss)
@@ -876,7 +881,7 @@ def reconcile_final(table: CmdbTable, sources: dict[str, list[SourceItem]], sett
                 live_rows.add(i)
         else:
             iss, serial = complete(it)
-            iss, serial = iss or MISSING_ISSUER, serial or MISSING_SERIAL
+            iss = iss or MISSING_ISSUER          # Issuer e IssuerName sempre preenchidos nas linhas novas
             row = {h: "" for h in t.headers}
             row.update({
                 H("Display Label"): it["cn"], H("Name"): it["cn"], H("CommonName"): it["cn"],
@@ -1009,13 +1014,14 @@ def validate_delta(rows: list[dict[str, str]]) -> list[str]:
         ex = " | ".join(f"{r['CommonName'] or '(sem CommonName)'} [Issuer={r['Issuer'] or 'VAZIO'}; "
                         f"IssuerName={r['IssuerName'] or 'VAZIO'}; SerialNumber={r['SerialNumber'] or 'VAZIO'}]"
                         for r in bad[:10])
-        problems.append(f"{len(bad)} certificado(s) novo(s) sem Issuer, IssuerName ou SerialNumber. Como IssuerName + "
-                        f"SerialNumber formam a chave primária na CMDB, os CSV não são gerados. Exemplos: {ex}")
+        problems.append(f"{len(bad)} certificado(s) novo(s) (Global Id = x) sem Issuer, IssuerName ou SerialNumber. Como "
+                        f"IssuerName + SerialNumber formam a chave primária na CMDB, os CSV não são gerados: exclua-os ou "
+                        f"complete a fonte. Exemplos: {ex}")
     seen, dup = set(), []
     for r in rows:
         iss, ser = r["IssuerName"].strip().lower(), r["SerialNumber"].strip().lower()
-        if not iss or not ser or ser == MISSING_SERIAL.lower() or iss == MISSING_ISSUER.lower():
-            continue                     # "x" / "Por verificar" não identificam o certificado: avisado à parte
+        if not iss or not ser or iss == MISSING_ISSUER.lower():
+            continue                     # "Por verificar" não identifica o emissor: avisado à parte
         if (iss, ser) in seen:
             dup.append(f"{r['IssuerName']} + {r['SerialNumber']}")
         seen.add((iss, ser))
@@ -1025,13 +1031,13 @@ def validate_delta(rows: list[dict[str, str]]) -> list[str]:
 
 
 def _placeholder_clashes(rows: list[dict[str, str]]) -> int:
-    """Linhas novas com o mesmo par IssuerName + SerialNumber por causa de "Por verificar"/"x"."""
+    """Linhas novas com o mesmo par IssuerName + SerialNumber por causa de "Por verificar"."""
     seen: dict[tuple[str, str], int] = {}
     for r in rows:
         if r["Global Id"].strip().lower() != "x":
             continue
         iss, ser = r["IssuerName"].strip().lower(), r["SerialNumber"].strip().lower()
-        if ser == MISSING_SERIAL.lower() or iss == MISSING_ISSUER.lower():
+        if iss == MISSING_ISSUER.lower() and ser:
             seen[(iss, ser)] = seen.get((iss, ser), 0) + 1
     return sum(n for n in seen.values() if n > 1)
 
@@ -1066,6 +1072,8 @@ def default_include(change: dict, decisions: dict) -> tuple[bool, str]:
         return d.include, f"{'incluída' if d.include else 'excluída'} por {d.by} em {as_utc(d.at):%d-%m-%Y}"
     if change.get("fonte") == INTERNET and change.get("triagem") != "adicionar":
         return False, 'encontrado na internet e ainda não marcado "Adicionar à CMDB"'
+    if change.get("tipo") == "novo" and not (change.get("serial") or "").strip():
+        return False, "sem SerialNumber em nenhuma fonte (IssuerName + SerialNumber é a chave primária na CMDB)"
     return True, ""
 
 
@@ -1126,6 +1134,8 @@ def build_outputs(state: dict, changes: list[dict]) -> tuple[bytes, bytes | None
         c["linha"] = m.line_of.get(c["chave"])
     delta = _delta_rows(m)
     problems = validate_delta(delta)
+    if any(list(r) != OUTPUT_COLUMNS for r in delta):       # o formato do certs_update é fixo
+        problems.append("Formato do certs_update diferente das 26 colunas fixas.")
     csv = csv_sem = None
     if not problems:
         csv, csv_sem = build_csv(delta, True), build_csv(delta, False)
