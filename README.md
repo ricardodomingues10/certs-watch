@@ -276,7 +276,7 @@ Em **Atualizar a CMDB → Permissões na UCMDB** verifica-se o que a conta confi
 
 - **Criação** (dois passos, com confirmação):
   1. **Descobrir o atributo de estado** (só leitura): os atributos do certificado com "status/estado/ativo" no nome, ou com o valor "Ativo", com o valor que têm na lista dos ativos e quantos certificados há com cada valor.
-  2. **Criar o certificado de teste**: `POST /rest-api/dataModel` com um certificado **não ativo** (o valor escolhido), nome `certwatch-teste-<código>.invalid`, emissor e série de teste únicos e a Description a dizer que é um teste. Depois lê-o, confirma que não aparece no TQL dos ativos e apaga-o (`DELETE`), o que também testa a permissão de apagar. Só apaga se foi mesmo criado agora (está em `addedCis` e a Description é a do teste). Se não o puder apagar, a página diz o ID para o apagar na UCMDB.
+  2. **Criar o certificado de teste**: `POST /rest-api/dataModel` com um certificado **não ativo** (o valor escolhido), nome `certwatch-teste-<código>.invalid`, emissor e série de teste únicos e a Description a dizer que é um teste. Depois lê-o, confirma que não aparece no TQL dos ativos e apaga-o (`DELETE`), o que também testa a permissão de apagar. Só apaga se foi mesmo criado agora (está em `addedCis` e a Description é a do teste). Para o ver na UCMDB antes de desaparecer, desmarque "Apagar no fim": a página mostra o nome e o ID e um botão para o apagar depois. Em "Apagar um certificado de teste que ficou na UCMDB" apaga-se pelo ID, mas só CIs com o nome `certwatch-teste-….invalid` e a Description do teste.
 
 Cada verificação fica na auditoria (`ucmdb.permissoes`, `ucmdb.teste_criacao`), sem credenciais.
 

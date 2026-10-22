@@ -36,6 +36,14 @@
     <input type="hidden" name="csrf" value="{{ csrf }}">
     <button>1. Descobrir o atributo de estado</button>
   </form>
+  <details class="small mt"><summary>Apagar um certificado de teste que ficou na UCMDB</summary>
+    <form method="post" action="/cmdb-final/permissoes/criacao/apagar" class="inline mt">
+      <input type="hidden" name="csrf" value="{{ csrf }}">
+      <input type="text" name="ci_id" required pattern="[0-9a-fA-F]{8,64}" placeholder="ID do CI" aria-label="ID do CI">
+      <button>Apagar</button>
+    </form>
+    <p class="muted">Só apaga CIs com o nome certwatch-teste-….invalid e a Description do teste.</p>
+  </details>
 </section>
 </div>
 
@@ -65,7 +73,7 @@
       <select name="atributo_outro" aria-label="Atributo">{% for a in status.attrs %}<option>{{ a }}</option>{% endfor %}</select>
       <input type="text" name="valor_outro" maxlength="120" placeholder="valor não ativo" aria-label="Valor">
     </details>
-    <label class="small"><input type="checkbox" name="apagar" value="1" checked> Apagar o certificado de teste no fim (também testa a permissão de apagar)</label>
+    <label class="small"><input type="checkbox" name="apagar" value="1" checked> Apagar o certificado de teste no fim (também testa a permissão de apagar). Desmarque para o poder ver na UCMDB e apagá-lo depois aqui.</label>
     <label class="small"><input type="checkbox" name="confirmo" value="1" required> Percebo que é criado na UCMDB um certificado de teste (<span class="mono">certwatch-teste-….invalid</span>).</label>
     <div><button class="primary">Criar o certificado de teste</button></div>
   </form>
@@ -88,7 +96,11 @@
   {% if created.created_id and not created.left_behind %}
   <div class="note mt">A conta <b>pode criar e apagar certificados</b> pela REST API. O certificado de teste já foi apagado.</div>
   {% elif created.left_behind %}
-  <div class="note warn mt">O certificado de teste <b>ficou na UCMDB</b> (CI <span class="mono">{{ created.created_id }}</span>, nome <span class="mono">certwatch-teste-….invalid</span>). Apague-o na UCMDB{{ ' ou peça a quem tenha permissão' }}.</div>
+  <div class="note warn mt">O certificado de teste <b>ficou na UCMDB</b> (CI <span class="mono">{{ created.created_id }}</span>, nome <span class="mono">{{ created.name }}</span>, não ativo). Pode procurá-lo na UCMDB pelo nome ou pelo ID e depois apagá-lo aqui.
+    <form method="post" action="/cmdb-final/permissoes/criacao/apagar" class="mt">
+      <input type="hidden" name="csrf" value="{{ csrf }}"><input type="hidden" name="ci_id" value="{{ created.created_id }}">
+      <button>Apagar agora o certificado de teste</button>
+    </form></div>
   {% endif %}
 </section>
 {% endif %}

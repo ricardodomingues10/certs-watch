@@ -1632,6 +1632,18 @@ def ucmdb_criacao(request: Request, csrf: str = Form(""), ci_type: str = Form(""
                   created=created)
 
 
+@app.post("/cmdb-final/permissoes/criacao/apagar")
+def ucmdb_criacao_apagar(request: Request, csrf: str = Form(""), ci_id: str = Form(""), user: str = Depends(current_user)):
+    """Apaga um certificado de teste deixado na UCMDB (só certwatch-teste-….invalid com a Description do teste)."""
+    check_csrf(request, csrf)
+    settings = get_settings()
+    step = ua.delete_test(settings, ci_id.strip(), UCMDB_CLIENT)
+    with session_scope() as s:
+        audit(s, user, "ucmdb.teste_apagar", ci_id.strip()[:64], ok=step.ok, detalhe=step.detail[:300])
+    return render(request, "ucmdb_permissoes.html", user, settings=settings, rep=None, write_ci="", erro="",
+                  created=ua.CreateResult(steps=[step]))
+
+
 UCMDB_CLIENT = None    # nos testes: cliente httpx para a UCMDB simulada
 
 

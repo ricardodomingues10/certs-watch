@@ -191,3 +191,24 @@ def test_create_web(env, monkeypatch):
     with session_scope() as s:
         log = s.scalar(select(AuditLog).where(AuditLog.action == "ucmdb.teste_criacao"))
         assert log.target == "new1" and log.details["ficou"] is False
+
+
+def test_keep_then_delete(env, monkeypatch):
+    from certwatch.web import app as webapp
+    settings = st(env)
+    monkeypatch.setattr(webapp, "get_settings", lambda: settings)
+    c, calls = fake_full(added=("abcdef0123",))
+    monkeypatch.setattr(webapp, "UCMDB_CLIENT", c)
+    auth = ("admin", "teste-admin-123")
+    with TestClient(webapp.app) as tc:
+        tc.get("/cmdb-final/permissoes", auth=auth)
+        token = tc.cookies["cw_csrf"]
+        r = tc.post("/cmdb-final/permissoes/criacao", data={"csrf": token, "ci_type": "digital_certificate",
+                                                            "escolha": "certificate_status::Inativo", "confirmo": "1"}, auth=auth)
+        assert "ficou na UCMDB" in r.text and "certwatch-teste-" in r.text and not any(m == "DELETE" for m, _, _ in calls)
+        r = tc.post("/cmdb-final/permissoes/criacao/apagar", data={"csrf": token, "ci_id": "abcdef0123"}, auth=auth)
+        assert "apagado" in r.text and any(m == "DELETE" and p.endswith("/abcdef0123") for m, p, _ in calls)
+    # um CI que não é de teste nunca é apagado
+    c, calls = fake_full()
+    step = ua.delete_test(settings, "4c24f01ad13cdebcbe9fbb238c840452", c)
+    assert step.ok is False and not any(m == "DELETE" for m, _, _ in calls)

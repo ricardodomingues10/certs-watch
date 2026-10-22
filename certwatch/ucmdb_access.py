@@ -136,6 +136,8 @@ def _write_test(s: UcmdbSession, ucmdb_id: str) -> Step:
 STATUS_RX = re.compile(r"status|estado|state|ativo|activ", re.I)
 ACTIVE_VALUES = {"ativo", "active", "activo", "true", "1", "sim", "yes"}
 MAX_VALUES = 30
+TEST_PREFIX = "certwatch-teste-"
+TEST_MARK = "Teste de criação do certwatch"
 
 
 @dataclass
@@ -182,6 +184,7 @@ def status_candidates(settings: Settings, client: httpx.Client | None = None) ->
 class CreateResult:
     steps: list[Step] = field(default_factory=list)
     created_id: str = ""
+    name: str = ""
     left_behind: bool = False          # criado e não apagado
 
 
@@ -193,8 +196,9 @@ def create_test(settings: Settings, ci_type: str, attr: str, value: str, actor: 
                 client: httpx.Client | None = None) -> CreateResult:
     res = CreateResult()
     code = uuid.uuid4().hex[:8]
-    cn = f"certwatch-teste-{code}.invalid"
-    marker = f"Teste de criação do certwatch ({code}), pedido por {actor} em " \
+    cn = f"{TEST_PREFIX}{code}.invalid"
+    res.name = cn
+    marker = f"{TEST_MARK} ({code}), pedido por {actor} em " \
              f"{datetime.now(timezone.utc):%Y-%m-%d %H:%M} UTC. Pode ser apagado."
     try:
         with UcmdbSession(settings, client) as s:
@@ -271,3 +275,31 @@ def create_test(settings: Settings, ci_type: str, attr: str, value: str, actor: 
     except UcmdbError as exc:
         res.steps.append(Step("Entrar na UCMDB com a conta configurada", "POST /authenticate", False, str(exc)))
     return res
+
+
+def delete_test(settings: Settings, ci_id: str, client: httpx.Client | None = None) -> Step:
+    """Apaga um certificado de teste criado pelo certwatch — e só esse: o nome tem de ser certwatch-teste-….invalid
+    e a Description a do teste."""
+    what, call = f"Apagar o certificado de teste {ci_id}", "DELETE /dataModel/ci/{id}"
+    if not re.fullmatch(r"[0-9a-fA-F]{8,64}", ci_id or ""):
+        return Step(what, call, None, "ID do CI inválido.")
+    try:
+        with UcmdbSession(settings, client) as s:
+            try:
+                props = s.ci(ci_id).get("properties") or {}
+            except UcmdbError as exc:
+                return Step(what, call, None, f"Não foi possível ler o CI (já foi apagado?): {exc}")
+            name = str(props.get("display_label") or props.get("name") or "")
+            if not (name.startswith(TEST_PREFIX) and name.endswith(".invalid")
+                    and str(props.get("description") or "").startswith(TEST_MARK)):
+                return Step(what, call, False, f"O CI {ci_id} ({name or 'sem nome'}) não é um certificado de teste do "
+                                               "certwatch: não foi apagado.")
+            try:
+                d = s.client.request("DELETE", f"/dataModel/ci/{ci_id}", headers=s.headers)
+            except httpx.HTTPError as exc:
+                return Step(what, call, None, f"Erro de comunicação: {exc}")
+            if d.status_code == 200:
+                return Step(what, call, True, f"{name} apagado.")
+            return Step(what, call, False, f"HTTP {d.status_code}: {_error_text(d) or 'sem mensagem'}")
+    except UcmdbError as exc:
+        return Step("Entrar na UCMDB com a conta configurada", "POST /authenticate", False, str(exc))
