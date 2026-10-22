@@ -59,6 +59,19 @@ def _kv_map(value: str | None) -> dict[str, str]:
     return out
 
 
+def _json_fields(value: str | None, name: str) -> dict:
+    """Campos de um pedido em JSON ({"PhaseId": "Close", ...}); só nomes simples e valores simples."""
+    import json
+    try:
+        data = json.loads(value or "{}")
+    except ValueError as exc:
+        raise RuntimeError(f"{name} não é JSON válido: {exc}") from exc
+    if not isinstance(data, dict) or not all(re.fullmatch(r"[A-Za-z][A-Za-z0-9_]{0,63}", str(k)) for k in data) \
+            or not all(isinstance(v, (str, int, float, bool)) for v in data.values()):
+        raise RuntimeError(f"{name}: use um objeto JSON simples, por exemplo {{\"PhaseId\": \"Close\"}}")
+    return data
+
+
 def _int_list(value: str) -> list[int]:
     return sorted({int(x) for x in value.split(",") if x.strip()})
 
@@ -175,6 +188,26 @@ class Settings:
     admin_password: str | None = None
     cookie_secure: bool = False
 
+    smax_files_max: int = 200                      # imagens/anexos novos descarregados por leitura do SMAX
+    # Fechar / reabrir pedidos no SMAX (bulk UPDATE). Os campos dependem do modelo de change.
+    smax_update_enabled: bool = False
+    smax_close_fields: dict = field(default_factory=lambda: {"PhaseId": "Close"})
+    smax_reopen_fields: dict = field(default_factory=lambda: {"PhaseId": "Execute"})
+    smax_comment_privacy: str = "INTERNAL"
+
+    # Relatório por email
+    smtp_host: str = ""
+    smtp_port: int = 25
+    smtp_security: str = "starttls"               # starttls | ssl | none
+    smtp_from: str = ""
+    smtp_user: str = ""
+    smtp_password: str | None = None
+    report_to: list[str] = field(default_factory=list)
+    report_allowed_domains: list[str] = field(default_factory=list)
+    report_signature: str = "certwatch"
+    report_window_days: int = 90
+    report_alert_days: int = 20
+
     # CMDB final (CMDB_Final.xlsx e certs_update*.csv) e publicação na pasta de rede
     final_sources: list[str] = field(default_factory=lambda: ["CA1", "CA2", "AVI"])
     final_ct: bool = True                          # incluir os certificados encontrados na internet
@@ -286,6 +319,23 @@ class Settings:
             admin_user=_env("CERTWATCH_ADMIN_USER", "admin"),
             admin_password=_secret("admin_password", "CERTWATCH_ADMIN_PASSWORD"),
             cookie_secure=_env("CERTWATCH_COOKIE_SECURE", "false").lower() == "true",
+            smax_files_max=int(_env("CERTWATCH_SMAX_FILES_MAX", "200")),
+            smax_update_enabled=_env("CERTWATCH_SMAX_UPDATE_ENABLED",
+                                     _env("CERTWATCH_SMAX_CREATE_ENABLED", "false")).lower() == "true",
+            smax_close_fields=_json_fields(_env("CERTWATCH_SMAX_CLOSE_FIELDS", '{"PhaseId": "Close"}'), "CERTWATCH_SMAX_CLOSE_FIELDS"),
+            smax_reopen_fields=_json_fields(_env("CERTWATCH_SMAX_REOPEN_FIELDS", '{"PhaseId": "Execute"}'), "CERTWATCH_SMAX_REOPEN_FIELDS"),
+            smax_comment_privacy=_env("CERTWATCH_SMAX_COMMENT_PRIVACY", "INTERNAL").upper(),
+            smtp_host=_env("CERTWATCH_SMTP_HOST", ""),
+            smtp_port=int(_env("CERTWATCH_SMTP_PORT", "25")),
+            smtp_security=_env("CERTWATCH_SMTP_SECURITY", "starttls").lower(),
+            smtp_from=_env("CERTWATCH_SMTP_FROM", ""),
+            smtp_user=_env("CERTWATCH_SMTP_USER", ""),
+            smtp_password=_secret("smtp_password", "CERTWATCH_SMTP_PASSWORD"),
+            report_to=_str_list(_env("CERTWATCH_REPORT_TO", "")),
+            report_allowed_domains=_str_list(_env("CERTWATCH_REPORT_ALLOWED_DOMAINS", "")),
+            report_signature=_env("CERTWATCH_REPORT_SIGNATURE", "certwatch"),
+            report_window_days=int(_env("CERTWATCH_REPORT_WINDOW_DAYS", "90")),
+            report_alert_days=int(_env("CERTWATCH_REPORT_ALERT_DAYS", "20")),
             final_sources=[x.upper() for x in _str_list(_env("CERTWATCH_FINAL_SOURCES", "CA1,CA2,AVI"))],
             final_ct=_env("CERTWATCH_FINAL_CT", "true").lower() != "false",
             final_enrich=_env("CERTWATCH_FINAL_ENRICH", "auto").lower(),

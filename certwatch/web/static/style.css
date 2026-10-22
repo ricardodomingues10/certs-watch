@@ -431,3 +431,34 @@ td.dif { background: var(--warn-soft); }
 .mt { margin-top: 10px; }
 .filters.flat { margin: 0; }
 .motivo { max-width: 34ch; }
+
+/* Tabelas no telemóvel: cada linha é um cartão, com o nome da coluna à esquerda (app.js preenche data-label) */
+@media (max-width: 760px) {
+  table.stack, table.stack tbody, table.stack tr { display: block; width: 100%; }
+  table.stack thead { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
+  table.stack tr { padding: 10px 14px; border-bottom: 1px solid var(--line); }
+  table.stack tbody tr:last-child { border-bottom: 0; }
+  table.stack td, table.stack td.opt, table.stack td.opt-s {
+    display: block; position: relative; min-height: 1.7em; padding: 4px 0 4px calc(32% + 10px); border: 0;
+    text-align: left; white-space: normal; overflow-wrap: anywhere; }
+  table.stack td::before { content: attr(data-label); position: absolute; left: 0; top: 5px; width: 32%;
+    color: var(--muted); font-size: 12px; font-weight: 600; line-height: 1.35; overflow-wrap: anywhere; }
+  table.stack td[data-label=""], table.stack td.full { padding-left: 0; }
+  table.stack td[data-label=""]::before, table.stack td.full::before { content: none; }
+  table.stack td > .state { font-size: 12.5px; gap: 6px; }
+  table.stack td:empty { display: none; }
+  table.compact.stack tr { padding: 8px 0; }
+  .card.flush table.stack tr { padding-left: 14px; padding-right: 14px; }
+}
+
+/* Pedido: percurso de 5 passos, comentários com imagens */
+.flow.f5 { grid-template-columns: repeat(5, minmax(0, 1fr)); }
+@media (max-width: 1100px) { .flow.f5 { grid-template-columns: minmax(0, 1fr); }
+  .flow.f5 li { border-right: 0; border-bottom: 1px solid var(--line); } .flow.f5 li:last-child { border-bottom: 0; } }
+.comment { padding: 12px 0; border-bottom: 1px solid var(--line); }
+.comment:last-child { border-bottom: 0; }
+.comment-body { white-space: pre-wrap; overflow-wrap: anywhere; margin-top: 4px; max-width: 90ch; }
+.thumbs { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 8px; }
+.thumbs img { display: block; max-width: min(320px, 100%); max-height: 220px; border: 1px solid var(--line); border-radius: 6px; background: #fff; }
+.thumbs-mini img { max-width: 72px; max-height: 54px; }
+textarea { width: 100%; font: inherit; padding: 8px 10px; border: 1px solid var(--line-2); border-radius: 8px; background: var(--panel); color: var(--ink); }

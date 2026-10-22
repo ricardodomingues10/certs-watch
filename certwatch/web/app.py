@@ -31,11 +31,13 @@ from ..jobs import apis_configured, JOBS, enqueue
 from ..collectors.ct import SOURCE_LABELS
 from ..discovery import CT_STATE_HELP, CT_STATES, CT_TABS, TRIAGE_LABELS, classify_ct
 from ..models import (ApiRecord, AuditLog, Certificate, CmdbRecord, CtCert, Endpoint, FinalInput, FinalPublish,
-                      FinalPublishFile, FinalRun, Finding, ImportFile, JobRun, ScanResult, SslLabsResult, TicketBatch, SmaxTicket)
+                      FinalPublishFile, FinalRun, Finding, ImportFile, JobRun, Renewal, ScanResult, SmaxComment, SmaxFile,
+                      SslLabsResult, TicketBatch, SmaxTicket)
 from .. import ticket_create as tc
 from .. import cmdb_final as cf
+from .. import renewal as rn
 from ..collectors.smax import ticket_url
-from ..tickets import TICKET_HELP, TICKET_STATES, TICKET_VIEWS, ticket_list, tickets_by_label, link as ticket_link, tickets_by_endpoint
+from ..tickets import TICKET_HELP, TICKET_ORDER, TICKET_STATES, TICKET_VIEWS, comment_files, filter_tickets, ticket_list, tickets_by_label, link as ticket_link, tickets_by_endpoint
 from ..reconcile import REC_HELP, REC_STATES, REC_TABS, scan_import_dir, reconcile
 from ..trust import local_trust_files
 from ..normalize import norm_label, split_api_name, is_ip, is_valid_hostname, norm_host, norm_issuer
@@ -568,16 +570,37 @@ async def pedidos_novo(request: Request, user: str = Depends(current_user)):
     return RedirectResponse(f"/pedidos/{bid}", status_code=303)
 
 
+def _date_param(v: str):
+    try:
+        return datetime.strptime(v, "%Y-%m-%d").date() if v else None
+    except ValueError:
+        raise HTTPException(400, "Data inválida (use AAAA-MM-DD)")
+
+
 @app.get("/pedidos")
-def pedidos_smax(request: Request, vista: str = "abertos", q: str = "", user: str = Depends(current_user)):
+def pedidos_smax(request: Request, vista: str = "abertos", q: str = "", fase: str = "", desde: str = "", ate: str = "",
+                 sem_comentario: int = 0, ordem: str = "", user: str = Depends(current_user)):
     settings = get_settings()
     vista = vista if vista in TICKET_VIEWS else "abertos"
+    ordem = ordem if ordem in TICKET_ORDER else ""
+    d1, d2 = _date_param(desde), _date_param(ate)
     with session_scope() as s:
         rows, counts = ticket_list(s, settings, vista, q)
+        fases = sorted({p for p in s.scalars(select(SmaxTicket.phase).distinct()) if p})
         n_lotes = s.query(TicketBatch).count()
         fetched = s.scalar(select(SmaxTicket.fetched_at).limit(1))
+    rows = filter_tickets(rows, fase, d1, d2, bool(sem_comentario), ordem, _tz())
+    with session_scope() as s:     # percurso de renovação dos pedidos abertos mostrados
+        ctx = rn.load_context(s)
+        for r in rows[:1000]:
+            if r["aberto"] and r["t"].endpoint:
+                p = rn.pipeline(r["t"], settings, ctx)
+                r["percurso"] = {"done": p["done"], "current": p["current"], "current_label": p["current_label"]}
+    filtros = {"q": q, "fase": fase, "desde": desde, "ate": ate, "sem_comentario": sem_comentario, "ordem": ordem}
     return render(request, "pedidos_smax.html", user, rows=rows[:1000], n_rows=len(rows), counts=counts, vista=vista,
-                  q=q, views=TICKET_VIEWS, n_lotes=n_lotes, fetched=fetched, smax_on=smax_configured(settings))
+                  q=q, views=TICKET_VIEWS, n_lotes=n_lotes, fetched=fetched, smax_on=smax_configured(settings),
+                  fases=fases, filtros=filtros, ordens=TICKET_ORDER,
+                  qs="&".join(f"{k}={quote(str(v))}" for k, v in filtros.items() if v))
 
 
 @app.get("/pedidos/lotes")
@@ -697,6 +720,184 @@ def pedido_repetir(request: Request, batch_id: int, csrf: str = Form(""), user: 
     except tc.TicketError as exc:
         return render(request, "pedido_erro.html", user, message=str(exc), back=f"/pedidos/{batch_id}")
     return RedirectResponse(f"/pedidos/{nid}", status_code=303)
+
+
+# ------------------------------------------------------------------ pedido SMAX: comentários, percurso de renovação, fechar/reabrir
+def _ticket_or_404(s, tid: str) -> SmaxTicket:
+    t = s.get(SmaxTicket, tid)
+    if t is None:
+        raise HTTPException(404, "Pedido não encontrado (leia o SMAX de novo)")
+    return t
+
+
+def _back(tid: str, msg: str = "", erro: str = "", anchor: str = "") -> RedirectResponse:
+    q = urlencode({k: v for k, v in (("msg", msg), ("erro", erro)) if v})
+    return RedirectResponse(f"/pedidos/smax/{quote(tid)}{'?' + q if q else ''}{'#' + anchor if anchor else ''}", status_code=303)
+
+
+@app.get("/pedidos/smax/{tid}")
+def pedido_smax(request: Request, tid: str, user: str = Depends(current_user)):
+    settings = get_settings()
+    with session_scope() as s:
+        t = _ticket_or_404(s, tid)
+        ctx = rn.load_context(s)
+        p = rn.pipeline(t, settings, ctx)
+        comments = list(s.scalars(select(SmaxComment).where(SmaxComment.ticket_id == tid).order_by(SmaxComment.created_at.desc())))
+        files = comment_files(s, [tid])
+        others = list(s.scalars(select(SmaxTicket).where(SmaxTicket.endpoint == t.endpoint, SmaxTicket.id != tid)
+                                .order_by(SmaxTicket.last_update.desc()).limit(10))) if t.endpoint else []
+        for x in {id(o): o for o in [t, *comments, *others, *p["renewals"], *p["cmdb"]]}.values():
+            if x in s:
+                s.expunge(x)
+    return render(request, "pedido_smax.html", user, t=t, perc=p, comments=comments, files=files, others=others,
+                  url=ticket_url(settings, t.id), discussao=cf_discussions(settings, t.id),
+                  can_update=smax_configured(settings) and settings.smax_update_enabled, settings=settings,
+                  msg=request.query_params.get("msg", ""), erro=request.query_params.get("erro", ""),
+                  ORIGIN_LABELS=rn.ORIGIN_LABELS, today=utcnow().astimezone(_tz()).date())
+
+
+def cf_discussions(settings, tid):
+    from ..collectors.smax import discussions_url
+    return discussions_url(settings, tid)
+
+
+@app.get("/pedidos/ficheiro/{fid}")
+def pedido_ficheiro(fid: int, download: int = 0, user: str = Depends(current_user)):
+    from ..collectors.smax import IMAGE_TYPES
+    with session_scope() as s:
+        f = s.get(SmaxFile, fid)
+        if f is None or not f.data:
+            raise HTTPException(404)
+        data, mime, name = f.data, f.mime, f.name or f"ficheiro-{fid}"
+    inline = mime in IMAGE_TYPES and not download
+    headers = {"Content-Security-Policy": "default-src 'none'; sandbox", "Cache-Control": "private, max-age=3600",
+               "Content-Disposition": f'{"inline" if inline else "attachment"}; filename="{quote(name)}"'}
+    return Response(data, media_type=mime if inline else "application/octet-stream", headers=headers)
+
+
+@app.post("/pedidos/smax/{tid}/verificar")
+def pedido_verificar(request: Request, tid: str, csrf: str = Form(""), user: str = Depends(current_user)):
+    check_csrf(request, csrf)
+    settings = get_settings()
+    with session_scope() as s:
+        t = _ticket_or_404(s, tid)
+        res = rn.scan_now(s, settings, norm_host(t.endpoint or ""))
+        audit(s, user, "pedido.verificar_servidor", tid, sites=[r["site"] for r in res])
+    if not res:
+        return _back(tid, erro="Não há servidor para verificar (nome sem servidor registado ou wildcard).", anchor="percurso")
+    parts = [f"{r['site']}: " + (f"válido até {fmt_dt(r['not_after'])}" if r["not_after"] else (r["erro"] or r["estado"]))
+             for r in res]
+    return _back(tid, msg="Verificação: " + "; ".join(parts), anchor="percurso")
+
+
+@app.post("/pedidos/smax/{tid}/renovacao")
+async def pedido_renovacao(request: Request, tid: str, user: str = Depends(current_user)):
+    form = await request.form()
+    check_csrf(request, form.get("csrf"))
+    settings = get_settings()
+    modo = str(form.get("modo") or "")
+    with session_scope() as s:
+        t = _ticket_or_404(s, tid)
+        cn = norm_host(t.endpoint or "")
+        if not cn:
+            return _back(tid, erro="O pedido não indica o certificado (campo do endpoint vazio no SMAX).")
+        try:
+            if modo == "servidor":
+                res = [r for r in rn.scan_now(s, settings, cn) if r["not_after"] and rn.name_matches(cn, [r["cn"], *r["nomes"]])]
+                if not res:
+                    return _back(tid, erro="Nenhum servidor apresentou um certificado para este nome.", anchor="renovar")
+                best = max(res, key=lambda r: r["not_after"])
+                r = rn.register(s, ticket_id=tid, cn=cn, valid_to=best["not_after"], serial=best["serial"],
+                                issuer=best["emissor"], san=", ".join(best["nomes"]), origin="servidor", actor=user,
+                                note=f"Certificado apresentado em {best['site']}")
+            elif modo == "ficheiro":
+                up = form.get("ficheiro")
+                data = await up.read(2 * 1024 * 1024 + 1) if up is not None and hasattr(up, "read") else b""
+                if not data or len(data) > 2 * 1024 * 1024:
+                    return _back(tid, erro="Escolha o ficheiro do certificado (.cer, .crt, .pem ou .der, até 2 MB).", anchor="renovar")
+                info = rn.parse_certificate(data)
+                if info["is_ca"]:
+                    return _back(tid, erro="Esse ficheiro é de uma autoridade de certificação, não do certificado do servidor.", anchor="renovar")
+                if not rn.name_matches(cn, [info["cn"], *info["nomes"]]) and form.get("aceitar_nome") != "1":
+                    return _back(tid, erro=f"O certificado é para {info['cn'] or ', '.join(info['nomes'][:3])}, não para {cn}. "
+                                           "Se for mesmo este, volte a carregar com \"aceitar nome diferente\".", anchor="renovar")
+                r = rn.register(s, ticket_id=tid, cn=cn, valid_to=info["not_after"], serial=info["serial"],
+                                issuer=info["emissor"], san=", ".join(info["nomes"]), origin="ficheiro", actor=user,
+                                sha256=info["sha256"], note=str(form.get("nota") or ""))
+            elif modo == "manual":
+                d = _date_param(str(form.get("validade") or ""))
+                if d is None:
+                    return _back(tid, erro="Indique a nova data de expiração.", anchor="renovar")
+                if d <= utcnow().date():
+                    return _back(tid, erro="A nova data de expiração tem de ser no futuro.", anchor="renovar")
+                r = rn.register(s, ticket_id=tid, cn=cn, valid_to=datetime(d.year, d.month, d.day, 12, tzinfo=_tz()),
+                                serial=str(form.get("serie") or ""), issuer=str(form.get("emissor") or ""),
+                                origin="manual", actor=user, note=str(form.get("nota") or ""))
+            else:
+                raise HTTPException(400, "Modo inválido")
+        except rn.RenewalError as exc:
+            return _back(tid, erro=str(exc), anchor="renovar")
+        audit(s, user, "pedido.registar_renovacao", tid, cn=cn, origem=r.origin, validade=r.valid_to.isoformat(),
+              serie=r.serial)
+        d = r.valid_to
+    return _back(tid, msg=f"Renovação registada: válido até {fmt_dt(d)}. Entra na próxima geração dos ficheiros da CMDB.",
+                 anchor="percurso")
+
+
+@app.post("/pedidos/smax/{tid}/renovacao/{rid}/anular")
+def pedido_renovacao_anular(request: Request, tid: str, rid: int, csrf: str = Form(""), user: str = Depends(current_user)):
+    check_csrf(request, csrf)
+    with session_scope() as s:
+        r = s.get(Renewal, rid)
+        if r is None or r.ticket_id != tid:
+            raise HTTPException(404)
+        r.active = False
+        audit(s, user, "pedido.anular_renovacao", tid, renovacao=rid)
+    return _back(tid, msg="Renovação anulada: deixa de entrar na atualização da CMDB.", anchor="percurso")
+
+
+@app.post("/pedidos/smax/{tid}/instalado")
+def pedido_instalado(request: Request, tid: str, csrf: str = Form(""), nota: str = Form(""), desfazer: str = Form(""),
+                     user: str = Depends(current_user)):
+    check_csrf(request, csrf)
+    with session_scope() as s:
+        _ticket_or_404(s, tid)
+        rn.confirm_step(s, tid, "instalado", user, nota, undo=desfazer == "1")
+        audit(s, user, "pedido.confirmar_instalacao", tid, desfazer=desfazer == "1", nota=nota[:200])
+    return _back(tid, anchor="percurso")
+
+
+@app.post("/pedidos/smax/{tid}/fase")
+def pedido_fase(request: Request, tid: str, csrf: str = Form(""), acao: str = Form(""), comentario: str = Form(""),
+                confirmo: str = Form(""), user: str = Depends(current_user)):
+    check_csrf(request, csrf)
+    settings = get_settings()
+    if not (smax_configured(settings) and settings.smax_update_enabled):
+        raise HTTPException(409, "Alterar pedidos no SMAX não está ativo (CERTWATCH_SMAX_UPDATE_ENABLED=true).")
+    if acao not in ("fechar", "reabrir") or confirmo != "1":
+        raise HTTPException(400, "Confirmação em falta.")
+    with session_scope() as s:
+        _ticket_or_404(s, tid)
+    from ..collectors.smax import SmaxError, change_phase
+    try:
+        res = change_phase(settings, tid, acao, comentario.strip()[:4000])
+    except SmaxError as exc:
+        with session_scope() as s:
+            audit(s, user, f"pedido.{acao}", tid, ok=False, erro=str(exc)[:300])
+        return _back(tid, erro=str(exc), anchor="fase")
+    with session_scope() as s:
+        t = _ticket_or_404(s, tid)
+        if res.get("pedido"):
+            for k in ("phase", "last_update", "owner_group", "owner_person"):
+                setattr(t, k, res["pedido"][k])
+        com = res.get("comentario")
+        audit(s, user, f"pedido.{acao}", tid, ok=res["ok"], estado=res["estado"], fase_antes=res["fase_antes"],
+              fase_depois=res["fase_depois"], motivo=res["motivo"], comentario=(com[0] if com else None))
+    com_txt = "" if com is None else (" Comentário registado." if com[0] else f" O comentário não foi registado: {com[1]}")
+    if res["ok"]:
+        return _back(tid, msg=f"Pedido {'fechado' if acao == 'fechar' else 'reaberto'} no SMAX: fase {res['fase_depois']}.{com_txt}", anchor="fase")
+    return _back(tid, erro=f"O SMAX não {'fechou' if acao == 'fechar' else 'reabriu'} o pedido ({res['estado']}): "
+                           f"{res['motivo']} Fase atual: {res['fase_depois'] or 'desconhecida'}.{com_txt}", anchor="fase")
 
 
 @app.get("/findings")

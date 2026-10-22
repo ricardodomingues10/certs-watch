@@ -11,11 +11,16 @@ Os nomes desses campos são configuráveis (CERTWATCH_SMAX_FIELD_*).
 """
 from __future__ import annotations
 
+import base64
+import binascii
+import hashlib
+import html as _html
 import json
 import logging
 import re
 import ssl
 from datetime import datetime, timezone
+from urllib.parse import unquote, urlsplit
 
 import httpx
 
@@ -69,13 +74,122 @@ def _text(html_body) -> str:
     return re.sub(r"\n{3,}", "\n\n", re.sub(r"[ \t\u00a0]+", " ", s)).strip()
 
 
-def fetch_comments(settings: Settings, ticket_ids: list[str], c: httpx.Client | None = None) -> tuple[list[dict], dict]:
+# ------------------------------------------------------------------ imagens e anexos dos comentários
+MAX_FILE = 10 * 1024 * 1024
+_IMG = re.compile(r"<img\b[^>]*?\bsrc\s*=\s*([\'\"])(.*?)\1", re.I | re.S)
+_DATA = re.compile(r"^data:([\w.+-]+/[\w.+-]+)?(;[\w=.+-]+)*;base64,(.*)$", re.I | re.S)
+_SAFE_ID = re.compile(r"^(?!\.+$)[A-Za-z0-9_.-]{1,128}$")
+# Só se pedem ao SMAX caminhos de ficheiros (repositório de imagens e anexos), nunca outras APIs
+_FILE_PATH = re.compile(r"^/rest/[^/]+/(frs|ces/attachment)/", re.I)
+IMAGE_TYPES = {"image/png", "image/jpeg", "image/gif", "image/webp", "image/bmp"}
+
+
+def sniff(data: bytes) -> str:
+    """Tipo pelo conteúdo (não pelo que o servidor diz): só estes tipos de imagem são mostrados na página."""
+    if data.startswith(b"\x89PNG\r\n\x1a\n"):
+        return "image/png"
+    if data.startswith(b"\xff\xd8\xff"):
+        return "image/jpeg"
+    if data[:6] in (b"GIF87a", b"GIF89a"):
+        return "image/gif"
+    if data[:4] == b"RIFF" and data[8:12] == b"WEBP":
+        return "image/webp"
+    if data[:2] == b"BM":
+        return "image/bmp"
+    if data.startswith(b"%PDF-"):
+        return "application/pdf"
+    return "application/octet-stream"
+
+
+def comment_files(body, attachment_ids) -> list[dict]:
+    """Imagens no corpo do comentário (<img src>) e anexos (AttachmentIds) de um comentário."""
+    out, seen = [], set()
+    for m in _IMG.finditer(str(body or "")):
+        src = _html.unescape(m.group(2)).strip()
+        key = src if not src.lower().startswith("data:") else "data:" + hashlib.sha256(src.encode()).hexdigest()
+        if src and key not in seen:
+            seen.add(key)
+            out.append({"kind": "imagem", "ref": key, "src": src})
+    for aid in attachment_ids or []:
+        aid = str(aid).strip()
+        if _SAFE_ID.match(aid) and f"anexo:{aid}" not in seen:
+            seen.add(f"anexo:{aid}")
+            out.append({"kind": "anexo", "ref": f"anexo:{aid}", "src": aid})
+    return out[:30]
+
+
+def _smax_path(settings: Settings, src: str) -> str | None:
+    """Caminho no próprio SMAX para um src de imagem; None se apontar para outro servidor (nunca é pedido)."""
+    if src.startswith("//"):
+        return None
+    u = urlsplit(src)
+    base = urlsplit(settings.smax_url)
+    if u.scheme or u.netloc:
+        if u.scheme not in ("https", "http") or (u.hostname or "").lower() != (base.hostname or "").lower():
+            return None
+        if (u.port or (443 if u.scheme == "https" else 80)) != (base.port or (443 if base.scheme == "https" else 80)):
+            return None
+    if not u.path.startswith("/") or ".." in u.path or not _FILE_PATH.match(u.path):
+        return None
+    return u.path + (f"?{u.query}" if u.query else "")
+
+
+def _filename(r: httpx.Response, fallback: str) -> str:
+    cd = r.headers.get("content-disposition", "")
+    m = re.search(r"filename\*=(?:UTF-8'')?([^;]+)", cd, re.I) or re.search(r'filename="?([^";]+)"?', cd, re.I)
+    name = unquote(m.group(1).strip()) if m else fallback
+    return re.sub(r"[^\w .()-]", "_", name)[:200] or fallback
+
+
+def download_file(c: httpx.Client, headers: dict, settings: Settings, f: dict) -> dict:
+    """Descarrega uma imagem ou anexo de um comentário. Devolve {name, mime, data} ou {error}."""
+    src = f["src"]
+    if f["kind"] == "imagem" and src.lower().startswith("data:"):
+        m = _DATA.match(src)
+        if not m:
+            return {"error": "imagem embebida num formato não suportado"}
+        try:
+            data = base64.b64decode(re.sub(r"\s+", "", m.group(3)), validate=True)
+        except (binascii.Error, ValueError):
+            return {"error": "imagem embebida inválida"}
+        if len(data) > MAX_FILE:
+            return {"error": "imagem demasiado grande"}
+        return {"name": "imagem", "mime": sniff(data), "data": data}
+    path = (f"/rest/{settings.smax_tenant}/ces/attachment/{src}" if f["kind"] == "anexo"
+            else _smax_path(settings, src))
+    if path is None:
+        return {"error": "imagem fora do repositório de ficheiros do SMAX (não é descarregada)"}
+    try:
+        with c.stream("GET", path, headers={**headers, "Accept": "*/*"}) as r:
+            if r.status_code != 200:
+                return {"error": f"HTTP {r.status_code}"}
+            if int(r.headers.get("content-length") or 0) > MAX_FILE:
+                return {"error": "ficheiro demasiado grande"}
+            buf = bytearray()
+            for chunk in r.iter_bytes():
+                buf += chunk
+                if len(buf) > MAX_FILE:
+                    return {"error": "ficheiro demasiado grande"}
+            data = bytes(buf)
+            name = _filename(r, "anexo" if f["kind"] == "anexo" else "imagem")
+    except httpx.HTTPError as exc:
+        return {"error": f"erro de comunicação: {exc}"[:200]}
+    mime = sniff(data)
+    if f["kind"] == "imagem" and mime not in IMAGE_TYPES:
+        return {"error": "a resposta não é uma imagem"}
+    return {"name": name, "mime": mime, "data": data}
+
+
+def fetch_comments(settings: Settings, ticket_ids: list[str], c: httpx.Client | None = None,
+                   known_files: set[tuple[str, str]] | None = None) -> tuple[list[dict], dict]:
     """Comentários dos pedidos indicados (GET /rest/{tenant}/collaboration/comments/{entidade}/{id}).
-    Ignora os comentários do sistema. Devolve (comentários, resumo)."""
+    Ignora os comentários do sistema. Traz também as imagens e anexos que ainda não estão guardados
+    (known_files = {(id do comentário, ref)}). Devolve (comentários, resumo)."""
     own = c is None
     c = c or client(settings)
     out: list[dict] = []
     errors = 0
+    known_files = known_files or set()
     try:
         token = login(c, settings)
         headers = {"Cookie": f"LWSSO_COOKIE_KEY={token}; TENANTID={settings.smax_tenant}", "Accept": "application/json"}
@@ -99,7 +213,22 @@ def fetch_comments(settings: Settings, ticket_ids: list[str], c: httpx.Client | 
                 out.append({"id": str(x["Id"])[:64], "ticket_id": str(tid), "created_at": _ms(x.get("CreateTime")),
                             "author_id": str(((x.get("Submitter") or {}).get("UserId")) or "")[:64],
                             "body": _text(x.get("Body"))[:4000], "privacy": str(x.get("PrivacyType") or "")[:32],
-                            "origin": str(x.get("CommentFrom") or "")[:32], "author": ""})
+                            "origin": str(x.get("CommentFrom") or "")[:32], "author": "",
+                            "files": comment_files(x.get("Body"), x.get("AttachmentIds"))})
+        # Imagens e anexos (só os novos; no máximo smax_files_max por leitura)
+        budget, got, failed = settings.smax_files_max, 0, 0
+        for x in out:
+            for f in x["files"]:
+                if (x["id"], f["ref"]) in known_files:
+                    f["existing"] = True
+                    continue
+                if budget <= 0:
+                    f["skipped"] = True
+                    continue
+                budget -= 1
+                f.update(download_file(c, headers, settings, f))
+                got += 0 if f.get("error") else 1
+                failed += 1 if f.get("error") else 0
         # Nomes de quem comentou
         names: dict[str, str] = {}
         for uid in list({x["author_id"] for x in out if x["author_id"]})[:150]:
@@ -114,7 +243,8 @@ def fetch_comments(settings: Settings, ticket_ids: list[str], c: httpx.Client | 
                 names[uid] = str(props["Name"])[:256]
         for x in out:
             x["author"] = names.get(x["author_id"], "")
-        return out, {"pedidos": min(len(ticket_ids), settings.smax_comments_max), "comentarios": len(out), "erros": errors}
+        return out, {"pedidos": min(len(ticket_ids), settings.smax_comments_max), "comentarios": len(out), "erros": errors,
+                     "ficheiros_novos": got, "ficheiros_com_erro": failed}
     finally:
         if own:
             c.close()
@@ -252,6 +382,107 @@ def fetch_tickets(settings: Settings, c: httpx.Client | None = None) -> list[dic
             skip += len(ents)
             if len(ents) < PAGE_SIZE or (isinstance(total, int) and skip >= total):
                 break
+        return out
+    finally:
+        if own:
+            c.close()
+
+
+# ------------------------------------------------------------------ escrita: fechar / reabrir / comentar
+def _auth_headers(token: str, settings: Settings) -> dict:
+    return {"Cookie": f"LWSSO_COOKIE_KEY={token}; TENANTID={settings.smax_tenant}", "Accept": "application/json"}
+
+
+def fetch_ticket(c: httpx.Client, headers: dict, settings: Settings, ticket_id: str) -> dict | None:
+    """Um pedido, lido de novo (para confirmar o que mudou)."""
+    for layout in (LAYOUT + LAYOUT_EXTRA, LAYOUT):
+        try:
+            r = c.get(f"/rest/{settings.smax_tenant}/ems/{settings.smax_entity}/{ticket_id}",
+                      params={"layout": layout}, headers=headers)
+        except httpx.HTTPError:
+            return None
+        if r.status_code == 400 and layout != LAYOUT:
+            continue
+        if r.status_code != 200:
+            return None
+        try:
+            data = r.json() or {}
+        except ValueError:
+            return None
+        ents = data.get("entities") if isinstance(data, dict) else None
+        return parse_entity(ents[0], settings) if ents else None
+    return None
+
+
+def update_ticket(c: httpx.Client, headers: dict, settings: Settings, ticket_id: str, fields: dict) -> tuple[str, str]:
+    """bulk UPDATE de um pedido. Devolve (estado, motivo): ok | falhou | indeterminado."""
+    body = {"entities": [{"entity_type": settings.smax_entity, "properties": {"Id": str(ticket_id), **fields}}],
+            "operation": "UPDATE"}
+    try:
+        r = c.post(f"/rest/{settings.smax_tenant}/ems/bulk", json=body, headers={**headers, "Content-Type": "application/json"})
+    except httpx.HTTPError as exc:
+        return "indeterminado", f"Erro de comunicação com o SMAX: {exc}"[:300]
+    try:
+        data = r.json()
+    except ValueError:
+        data = None
+    results = data.get("entity_result_list") if isinstance(data, dict) else None
+    first = results[0] if isinstance(results, list) and results else None
+    if 200 <= r.status_code < 300 and isinstance(first, dict) and first.get("completion_status") == "OK":
+        return "ok", ""
+    reason = ""
+    if isinstance(first, dict):
+        err = first.get("errorDetails") or first.get("error") or {}
+        reason = str((err.get("message") or err.get("errorMessage") or err) if isinstance(err, dict) else err)[:300]
+    if not reason:
+        reason = _reason(r)
+    status = "indeterminado" if r.status_code >= 500 or first is None else "falhou"
+    return status, f"HTTP {r.status_code}: {reason}"[:400]
+
+
+def add_comment(c: httpx.Client, headers: dict, settings: Settings, ticket_id: str, text: str) -> tuple[bool, str]:
+    """Comentário de texto num pedido (POST /collaboration/comments/{entidade}/{id})."""
+    body_html = "".join(f"<p>{_html.escape(line)}</p>" for line in text.strip().splitlines() if line.strip())
+    body = {"IsSystem": False, "Body": body_html, "PrivacyType": settings.smax_comment_privacy, "AttachmentIds": [],
+            "CommentFrom": "Agent", "CommentTo": "Agent", "FunctionalPurpose": "StatusUpdate", "Media": "UI",
+            "ActualInterface": "API"}
+    try:
+        r = c.post(f"/rest/{settings.smax_tenant}/collaboration/comments/{settings.smax_entity}/{ticket_id}",
+                   json=body, headers={**headers, "Content-Type": "application/json"})
+    except httpx.HTTPError as exc:
+        return False, f"Erro de comunicação: {exc}"[:300]
+    if 200 <= r.status_code < 300:
+        return True, ""
+    return False, f"HTTP {r.status_code}: {_reason(r)}"[:300]
+
+
+def change_phase(settings: Settings, ticket_id: str, action: str, comment: str = "",
+                 c: httpx.Client | None = None) -> dict:
+    """Fecha ou reabre um pedido. O comentário é escrito antes de fechar (um pedido fechado pode não aceitar
+    comentários) e depois de reabrir. No fim o pedido é lido de novo para confirmar a fase."""
+    if action not in ("fechar", "reabrir"):
+        raise SmaxError("Ação inválida")
+    fields = settings.smax_close_fields if action == "fechar" else settings.smax_reopen_fields
+    own = c is None
+    c = c or client(settings)
+    try:
+        headers = _auth_headers(login(c, settings), settings)
+        before = fetch_ticket(c, headers, settings, ticket_id)
+        if before is None:
+            raise SmaxError(f"O pedido {ticket_id} não foi encontrado no SMAX (ou a conta não o pode ler).")
+        out = {"fase_antes": before["phase"], "comentario": None}
+        if comment and action == "fechar":
+            out["comentario"] = add_comment(c, headers, settings, ticket_id, comment)
+        status, reason = update_ticket(c, headers, settings, ticket_id, fields)
+        if comment and action == "reabrir" and status == "ok":
+            out["comentario"] = add_comment(c, headers, settings, ticket_id, comment)
+        after = fetch_ticket(c, headers, settings, ticket_id)
+        out.update({"estado": status, "motivo": reason, "pedido": after, "fase_depois": after["phase"] if after else None})
+        want = str(fields.get("PhaseId") or "")
+        out["ok"] = bool(after) and (not want or (after["phase"] or "").lower() == want.lower())
+        if status == "ok" and not out["ok"]:
+            out["motivo"] = (f"O SMAX aceitou o pedido, mas a fase ficou "
+                             f"{(after or {}).get('phase') or 'desconhecida'} (esperada {want}).")
         return out
     finally:
         if own:

@@ -11,13 +11,18 @@
 {% if not smax_on %}<div class="note warn">A leitura do SMAX não está configurada (README, secção 7).</div>{% endif %}
 <nav class="tabs" aria-label="Vistas">
   {% for k, label in views.items() %}
-  <a href="/pedidos?vista={{ k }}" class="{{ 'on' if vista == k }}">{{ label }} <span class="n {{ 'hot' if k == 'atrasados' and counts[k] }}">{{ counts[k] }}</span></a>
+  <a href="/pedidos?vista={{ k }}{{ '&' ~ qs if qs }}" class="{{ 'on' if vista == k }}">{{ label }} <span class="n {{ 'hot' if k == 'atrasados' and counts[k] }}">{{ counts[k] }}</span></a>
   {% endfor %}
 </nav>
 <form class="filters" method="get">
   <input type="hidden" name="vista" value="{{ vista }}">
-  <input type="search" name="q" value="{{ q }}" placeholder="número, nome ou grupo" aria-label="Filtrar">
-  <button>Filtrar</button>{% if q %} <a href="/pedidos?vista={{ vista }}">limpar</a>{% endif %}
+  <input type="search" name="q" value="{{ q }}" placeholder="número do pedido, certificado ou grupo" aria-label="Pedido">
+  <select name="fase" aria-label="Fase"><option value="">Todas as fases</option>{% for f in fases %}<option value="{{ f }}" {{ 'selected' if filtros.fase == f }}>{{ f }}</option>{% endfor %}</select>
+  <label class="small">Último comentário de <input type="date" name="desde" value="{{ filtros.desde }}"></label>
+  <label class="small">até <input type="date" name="ate" value="{{ filtros.ate }}"></label>
+  <label class="small"><input type="checkbox" name="sem_comentario" value="1" {{ 'checked' if filtros.sem_comentario }}> Sem comentários</label>
+  <select name="ordem" aria-label="Ordenar por"><option value="">Ordenar: expiração do certificado</option>{% for k, lbl in ordens.items() if k != 'expiracao' %}<option value="{{ k }}" {{ 'selected' if filtros.ordem == k }}>Ordenar: {{ lbl|lower }}</option>{% endfor %}</select>
+  <button>Filtrar</button>{% if qs %} <a href="/pedidos?vista={{ vista }}">limpar</a>{% endif %}
 </form>
 <div class="card flush scroll">
 <table>
@@ -25,8 +30,10 @@
   <tbody>
   {% for r in rows %}{% set t = r.t %}
     <tr>
-      <td><a class="ticket {{ 'ticket-open' if r.aberto else 'ticket-closed' }}" href="{{ r.url }}" target="_blank" rel="noopener noreferrer">{{ t.id }}</a>
-        <div class="small muted ticket-title">{{ t.display_label }}</div></td>
+      <td><a class="ticket {{ 'ticket-open' if r.aberto else 'ticket-closed' }}" href="/pedidos/smax/{{ t.id|urlencode }}" title="Percurso, comentários e ações">{{ t.id }}</a>
+        {% if r.url %}<a class="small" href="{{ r.url }}" target="_blank" rel="noopener noreferrer" title="Abrir no SMAX">SMAX ↗</a>{% endif %}
+        <div class="small muted ticket-title">{{ t.display_label }}</div>
+        {% if r.percurso %}<div class="small"><span class="tag {{ 'tag-ok' if not r.percurso.current else 'tag-acc' }}">{{ r.percurso.done }}/5</span> {{ r.percurso.current_label }}</div>{% endif %}</td>
       <td>{% if r.alvo %}<a class="mono" href="{{ '/certificados/detalhe?cn=' if r.alvo.tipo == 'certificado' else '/apis?q=' }}{{ r.alvo.nome|urlencode }}">{{ r.alvo.nome }}</a>
           {% if r.alvo.tipo == 'API' %} <span class="tag tag-acc">API</span>{% endif %}
         {% else %}<span class="mono">{{ t.endpoint or '—' }}</span>{% if t.endpoint %}<div class="small muted">não está no inventário</div>{% endif %}{% endif %}
@@ -38,7 +45,9 @@
       <td class="small comment-cell">{% if r.ultimo_comentario %}{% set c = r.ultimo_comentario %}
         <div class="muted">{{ c.quando|dtt if c.quando else '' }}{% if c.autor %} · {{ c.autor }}{% endif %}</div>
         <div class="comment-text">{{ c.texto[:220] }}{% if c.texto|length > 220 %}…{% endif %}</div>
-        <a href="{{ r.discussao }}" target="_blank" rel="noopener noreferrer">{{ r.comentarios }} comentário(s) ↗</a>
+        {% set imgs = c.ficheiros|selectattr('imagem')|list %}
+        {% if imgs %}<div class="thumbs thumbs-mini">{% for f in imgs[:3] %}<a href="/pedidos/smax/{{ t.id|urlencode }}#comentarios"><img src="/pedidos/ficheiro/{{ f.id }}" alt="Imagem no comentário" loading="lazy"></a>{% endfor %}</div>{% endif %}
+        <a href="/pedidos/smax/{{ t.id|urlencode }}#comentarios">{{ r.comentarios }} comentário(s){{ ', ' ~ r.ficheiros ~ ' imagem(ns)/anexo(s)' if r.ficheiros }}</a>
         {% elif r.aberto %}<span class="muted">sem comentários</span>{% else %}<span class="muted">—</span>{% endif %}</td>
     </tr>
   {% else %}

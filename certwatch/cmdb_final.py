@@ -52,7 +52,8 @@ from .reconcile import ALLOWED_EXT, _fix_mojibake, map_columns, norm_header, rea
 log = logging.getLogger(__name__)
 
 INTERNET = "INTERNET"          # fonte: certificados encontrados na internet (Certificate Transparency)
-SOURCE_LABELS = {INTERNET: "Internet (CT)"}
+RENOVACAO = "RENOVACAO"        # fonte: renovações registadas nos pedidos (servidor, ficheiro ou à mão)
+SOURCE_LABELS = {INTERNET: "Internet (CT)", RENOVACAO: "Renovação registada"}
 
 FILES = {"xlsx": "CMDB_Final.xlsx", "csv": "certs_update.csv", "csv_sem": "certs_update_sem_cabecalho.csv"}
 FILE_LABELS = {"xlsx": "CMDB final (Excel, todas as linhas)", "csv": "Atualização UCMDB (com cabeçalho)",
@@ -75,6 +76,7 @@ SENSITIVE_ATTR = re.compile(r"password|passwd|secret|private_?key|token|credenti
 DATE_ATTR = re.compile(r"date|time|valid|expir|not_?after|not_?before|create_?on|_on$|createon|validto|validfrom", re.I)
 _STOP = {"de", "da", "do", "das", "dos", "para", "a", "o", "e", "the", "of"}
 
+FILE_MARKER = "Validado pelo ficheiro do certificado"
 GREEN, YELLOW, RED = "E2F0D9", "FFF2CC", "F4CCCC"
 COLOR_STATE = {GREEN: "novo", YELLOW: "alterado", RED: "expirado"}
 
@@ -484,6 +486,7 @@ class SourceItem:
     raw_date: str = ""
     note: str = ""
     triage: str = ""         # só na fonte INTERNET: triagem feita na página "Na internet"
+    auth: str = ""           # só na fonte RENOVACAO: "servidor" ou "ficheiro" = dados do próprio certificado
 
 
 def read_source(source: str, filename: str, data: bytes, today: date) -> tuple[list[SourceItem], dict]:
@@ -680,7 +683,8 @@ def reconcile_final(table: CmdbTable, sources: dict[str, list[SourceItem]], sett
                                  "cmdb": cmdb_date_text(it.cn), "erro": " - ".join(parts) or "OK"})
 
     # --- comparação (CA1, CA2... e depois AVI, pela ordem configurada)
-    order = list(settings.final_sources) + [k for k in sources if k not in settings.final_sources]
+    order = ([RENOVACAO] if RENOVACAO in sources else []) + list(settings.final_sources) + \
+        [k for k in sources if k not in settings.final_sources and k != RENOVACAO]
     ordered = [it for src in order for it in sources.get(src, []) if it.keep]
     enriched = []
     for it in ordered:
@@ -709,7 +713,7 @@ def reconcile_final(table: CmdbTable, sources: dict[str, list[SourceItem]], sett
     for e in falsos:
         it = e["it"]
         item = {"cn": it.cn, "day": it.day, "serial": it.serial, "issuer": it.issuer, "san": it.san,
-                "source": it.source, "live": False, "triage": it.triage}
+                "source": it.source, "live": it.auth == "servidor", "auth": it.auth, "triage": it.triage}
         regress = e["cmdb_day"] is not None and it.day is not None and it.day < e["cmdb_day"]
         if not regress:
             final_items.append(item)
@@ -748,6 +752,7 @@ def reconcile_final(table: CmdbTable, sources: dict[str, list[SourceItem]], sett
     modified: set[int] = set()
     new_by_cn: dict[str, int] = {}
     live_rows: set[int] = set()
+    file_rows: set[int] = set()         # dados confirmados pelo ficheiro do certificado (renovação registada)
     issuer_by_source = {k.upper(): v for k, v in settings.import_issuers.items()}
 
     def set_field(i: int, col: str, value: str) -> None:
@@ -799,11 +804,11 @@ def reconcile_final(table: CmdbTable, sources: dict[str, list[SourceItem]], sett
             set_serial(target, it["serial"])
             if target in mods:
                 note_src(target, it)
-            if it["live"]:
+            if it["live"] or it.get("auth") == "ficheiro":
                 if (it["issuer"] or "").strip():
                     set_field(target, H("Issuer"), it["issuer"].strip())
                     set_field(target, H("IssuerName"), it["issuer"].strip())
-                live_rows.add(target)
+                (live_rows if it["live"] else file_rows).add(target)
             modified.add(target)
         elif cn in new_by_cn:
             i = new_by_cn[cn]
@@ -864,10 +869,11 @@ def reconcile_final(table: CmdbTable, sources: dict[str, list[SourceItem]], sett
         audit(lst, "Issuer", orig.get(H("Issuer")), row.get(H("Issuer")), False)
         audit(lst, "IssuerName", orig.get(H("IssuerName")), row.get(H("IssuerName")), False)
         desc = settings.final_description
-        if i in live_rows:
-            desc += f" - {settings.final_live_marker}"
+        marker = settings.final_live_marker if i in live_rows else (FILE_MARKER if i in file_rows else "")
+        if marker:
+            desc += f" - {marker}"
         if lst:
-            desc += ("; " if i in live_rows else " - ") + "; ".join(lst)
+            desc += ("; " if marker else " - ") + "; ".join(lst)
         set_field(i, H("Description"), desc)
 
     inv = {v: k for k, v in t.display.items()}
@@ -1165,6 +1171,15 @@ def generate(run_id: int, settings: Settings, fetch: Callable | None = None,
                 sources[src] = items
                 src_info[src] = {**rinfo, "origem": info["origem"], "quando": info["quando"].isoformat(),
                                  "sha256": hashlib.sha256(data).hexdigest()}
+            from .renewal import source_items
+            ren = [SourceItem(source=RENOVACAO, row_no=n, cn=x["cn"], day=x["day"], serial=x["serial"], issuer=x["issuer"],
+                              san=x["san"], ref=x["ref"], auth=x["origin"] if x["origin"] in ("servidor", "ficheiro") else "",
+                              raw_date=x["day"].isoformat())
+                   for n, x in enumerate(source_items(s, today), start=1)]
+            if ren:
+                sources[RENOVACAO] = ren
+                src_info[RENOVACAO] = {"ficheiro": "renovações registadas nos pedidos", "linhas": len(ren),
+                                       "validas": len(ren), "origem": "certwatch"}
             if settings.final_ct:
                 ct_items, ct_info = ct_source(s, settings, today)
                 if ct_items:

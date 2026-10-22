@@ -327,6 +327,62 @@ class SmaxComment(Base):
     origin: Mapped[str] = mapped_column(String(32), default="")
 
 
+
+class SmaxFile(Base):
+    """Imagem ou anexo de um comentário do SMAX (ex.: print de uma renovação), guardado para ver na aplicação."""
+
+    __tablename__ = "smax_files"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    comment_id: Mapped[str] = mapped_column(String(64), index=True)
+    ticket_id: Mapped[str] = mapped_column(String(64), index=True)
+    ref: Mapped[str] = mapped_column(String(1024), default="")
+    kind: Mapped[str] = mapped_column(String(16), default="imagem")      # imagem | anexo
+    name: Mapped[str] = mapped_column(String(255), default="")
+    mime: Mapped[str] = mapped_column(String(64), default="")
+    size: Mapped[int] = mapped_column(Integer, default=0)
+    sha256: Mapped[str] = mapped_column(String(64), default="")
+    data: Mapped[bytes | None] = mapped_column(LargeBinary, nullable=True, deferred=True)
+    error: Mapped[str] = mapped_column(String(300), default="")
+    fetched_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+
+class Renewal(Base):
+    """Renovação de um certificado registada no certwatch (a partir do servidor, do ficheiro do certificado ou à
+    mão a partir de um print). Entra como fonte na atualização da CMDB."""
+
+    __tablename__ = "renewals"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    ticket_id: Mapped[str] = mapped_column(String(64), default="", index=True)
+    cn: Mapped[str] = mapped_column(String(253), index=True)
+    valid_to: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    serial: Mapped[str] = mapped_column(String(128), default="")
+    issuer: Mapped[str] = mapped_column(String(512), default="")
+    san: Mapped[str] = mapped_column(Text, default="")
+    origin: Mapped[str] = mapped_column(String(16), default="manual")    # servidor | ficheiro | manual
+    cert_sha256: Mapped[str] = mapped_column(String(64), default="")
+    note: Mapped[str] = mapped_column(Text, default="")
+    created_by: Mapped[str] = mapped_column(String(128), default="")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    active: Mapped[bool] = mapped_column(Boolean, default=True, index=True)
+
+
+class TicketStep(Base):
+    """Passo do percurso de renovação confirmado à mão (ex.: instalado num servidor que o certwatch não vê)."""
+
+    __tablename__ = "ticket_steps"
+    __table_args__ = (UniqueConstraint("ticket_id", "step", name="uq_ticket_step"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    ticket_id: Mapped[str] = mapped_column(String(64), index=True)
+    step: Mapped[str] = mapped_column(String(32))
+    by: Mapped[str] = mapped_column(String(128), default="")
+    at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    note: Mapped[str] = mapped_column(Text, default="")
+
+
 # ------------------------------------------------------------------ CMDB final (CMDB_Final.xlsx e certs_update)
 class FinalInput(Base):
     """Ficheiro de uma fonte (CA1, CA2, AVI...) carregado pela interface. Também guarda ficheiros CMDB_Final

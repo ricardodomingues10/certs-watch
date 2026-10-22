@@ -1,0 +1,161 @@
+{% extends "base.html" %}
+{% block title %}Pedido {{ t.id }}{% endblock %}
+{% block crumb %}<a href="/pedidos">Pedidos SMAX</a>{% endblock %}
+{% block page_title %}Pedido {{ t.id }} <small><span class="tag {{ 'tag-off' if perc.closed else 'tag-acc' }}">{{ t.phase or 'fase desconhecida' }}</span></small>{% endblock %}
+{% block lede %}{{ t.display_label }}{% endblock %}
+{% block actions %}
+{% if url %}<a class="button" href="{{ url }}" target="_blank" rel="noopener noreferrer">Abrir no SMAX ↗</a>{% endif %}
+{% if discussao %}<a class="button" href="{{ discussao }}" target="_blank" rel="noopener noreferrer">Discussão no SMAX ↗</a>{% endif %}
+{% endblock %}
+{% block content %}
+{% if msg %}<div class="note">{{ msg }}</div>{% endif %}
+{% if erro %}<div class="note bad">{{ erro }}</div>{% endif %}
+{% for w in perc.warnings %}<div class="note warn">{{ w }}</div>{% endfor %}
+
+<section class="card">
+  <dl class="kv">
+    <dt>Certificado</dt><dd>{% if perc.cn %}<a class="mono" href="/certificados/detalhe?cn={{ perc.cn|urlencode }}">{{ perc.cn }}</a>{% else %}<span class="muted">o pedido não indica o certificado</span>{% endif %}{% if t.environment %} <span class="small muted">{{ t.environment }}</span>{% endif %}</dd>
+    <dt>Expiração no pedido</dt><dd>{{ t.cert_expiry|dt if t.cert_expiry else '—' }}</dd>
+    <dt>Grupo / responsável</dt><dd>{{ t.owner_group or '—' }}{% if t.owner_person %} · {{ t.owner_person }}{% endif %}</dd>
+    <dt>Última atualização</dt><dd>{{ t.last_update|dtt if t.last_update else '—' }}{% if t.scheduled_end %} · fim planeado {{ t.scheduled_end|dt }}{% endif %}</dd>
+  </dl>
+</section>
+
+<h2 id="percurso">Percurso da renovação</h2>
+<ol class="flow f5" aria-label="Passos">
+  {% for st in perc.steps %}
+  <li class="{{ 'is-ok' if st.done else ('is-run' if perc.current == st.key else '') }}">
+    <h3>{{ st.label }}</h3>
+    <span class="st">{{ 'Feito' if st.done else ('Próximo passo' if perc.current == st.key else 'Por fazer') }}</span>
+    <span class="sub">{{ st.detail }}</span>
+  </li>
+  {% endfor %}
+</ol>
+
+<div class="grid2">
+<section class="card" id="renovar">
+  <h2>Renovação</h2>
+  {% if perc.evidence %}
+  <table class="compact">
+    <thead><tr><th>Prova</th><th>Nova validade</th><th>Série / emissor</th></tr></thead>
+    {% for e in perc.evidence %}<tr><td class="small">{{ e.fonte }}{% if e.por %} <span class="muted">por {{ e.por }}</span>{% endif %}</td>
+      <td class="nowrap">{{ e.data.strftime('%d-%m-%Y') }}</td><td class="small"><span class="mono">{{ e.serie or '—' }}</span><div class="muted">{{ e.emissor or '' }}</div></td></tr>{% endfor %}
+  </table>
+  {% else %}<p class="small">Ainda não há prova de um certificado novo. Se a renovação foi comunicada num comentário (por exemplo, um print), registe-a abaixo.</p>{% endif %}
+  {% set active = perc.renewals|selectattr('ticket_id', 'equalto', t.id)|list %}
+  {% for r in active %}
+  <form method="post" action="/pedidos/smax/{{ t.id }}/renovacao/{{ r.id }}/anular" class="small mt">
+    <input type="hidden" name="csrf" value="{{ csrf }}">
+    Registada por {{ r.created_by }} em {{ r.created_at|dtt }} ({{ ORIGIN_LABELS[r.origin] }}){% if r.note %}: {{ r.note }}{% endif %}.
+    <button class="link">Anular</button>
+  </form>
+  {% endfor %}
+  <details class="mt" {{ 'open' if not perc.evidence }}>
+    <summary>Registar a renovação</summary>
+    <p class="small muted">A renovação registada entra na próxima geração dos ficheiros da CMDB.</p>
+    <form method="post" action="/pedidos/smax/{{ t.id }}/renovacao" class="mt">
+      <input type="hidden" name="csrf" value="{{ csrf }}"><input type="hidden" name="modo" value="servidor">
+      <button>Usar o certificado que o servidor apresenta</button>
+      <span class="small muted">liga-se agora aos servidores deste nome</span>
+    </form>
+    <form method="post" action="/pedidos/smax/{{ t.id }}/renovacao" enctype="multipart/form-data" class="stack mt">
+      <input type="hidden" name="csrf" value="{{ csrf }}"><input type="hidden" name="modo" value="ficheiro">
+      <label class="small">Ficheiro do certificado novo (.cer, .crt, .pem, .der)
+        <input type="file" name="ficheiro" accept=".cer,.crt,.pem,.der" required></label>
+      <label class="small"><input type="checkbox" name="aceitar_nome" value="1"> Aceitar mesmo que o nome seja diferente</label>
+      <input type="text" name="nota" placeholder="Nota (opcional)" aria-label="Nota">
+      <button>Carregar o certificado</button>
+    </form>
+    <form method="post" action="/pedidos/smax/{{ t.id }}/renovacao" class="stack mt">
+      <input type="hidden" name="csrf" value="{{ csrf }}"><input type="hidden" name="modo" value="manual">
+      <label class="small">Nova data de expiração (por exemplo, do print no comentário)
+        <input type="date" name="validade" required min="{{ today.isoformat() }}"></label>
+      <input type="text" name="serie" placeholder="Número de série (se souber)" aria-label="Número de série">
+      <input type="text" name="emissor" placeholder="Emissor (se souber)" aria-label="Emissor">
+      <input type="text" name="nota" placeholder="Nota, por exemplo: print no comentário de 22-10" aria-label="Nota">
+      <button>Registar à mão</button>
+    </form>
+  </details>
+</section>
+
+<section class="card">
+  <h2>Servidores</h2>
+  {% if perc.live %}
+  <table class="compact">
+    <thead><tr><th>Servidor</th><th>Válido até</th><th>Verificado</th></tr></thead>
+    {% for x in perc.live %}<tr><td class="mono small">{{ x.site }}</td>
+      <td class="nowrap">{% if x.data %}{{ x.data.strftime('%d-%m-%Y') }}{% if perc.target and x.data < perc.target %} <span class="tag tag-run">antigo</span>{% elif perc.target %} <span class="tag tag-ok">novo</span>{% endif %}{% else %}<span class="muted">{{ x.estado or 'por verificar' }}</span>{% endif %}</td>
+      <td class="small muted">{{ x.quando|dtt if x.quando else '—' }}</td></tr>{% endfor %}
+  </table>
+  {% else %}<p class="small">Nenhum servidor registado para este nome.</p>{% endif %}
+  <form method="post" action="/pedidos/smax/{{ t.id }}/verificar" class="mt"><input type="hidden" name="csrf" value="{{ csrf }}"><button>Verificar agora</button></form>
+  {% set inst = perc.steps[2] %}
+  {% if inst.manual %}
+  <form method="post" action="/pedidos/smax/{{ t.id }}/instalado" class="small mt"><input type="hidden" name="csrf" value="{{ csrf }}"><input type="hidden" name="desfazer" value="1">
+    Instalação confirmada à mão por {{ inst.manual.by }}{% if inst.manual.note %}: {{ inst.manual.note }}{% endif %}. <button class="link">Desfazer</button></form>
+  {% elif not inst.done %}
+  <details class="mt"><summary>Confirmar a instalação à mão</summary>
+    <form method="post" action="/pedidos/smax/{{ t.id }}/instalado" class="stack mt"><input type="hidden" name="csrf" value="{{ csrf }}">
+      <input type="text" name="nota" placeholder="Onde foi instalado / como foi confirmado" required aria-label="Nota">
+      <button>Confirmar que está instalado</button></form>
+    <p class="small muted">Para servidores que o certwatch não consegue verificar (rede, porta, aplicação sem TLS direto).</p>
+  </details>
+  {% endif %}
+</section>
+
+<section class="card">
+  <h2>CMDB</h2>
+  <p class="small">{{ perc.steps[3].detail }}</p>
+  {% if perc.cmdb %}<p class="small muted">Na CMDB: {% for r in perc.cmdb %}{{ r.valid_to|dt }}{{ ' (' ~ (r.issuer_name or r.issuer) ~ ')' if (r.issuer_name or r.issuer) }}{{ ', ' if not loop.last }}{% endfor %}</p>{% endif %}
+  {% if not perc.steps[3].done %}
+  <p>{% if perc.steps[3].run %}<a class="button" href="/cmdb-final/{{ perc.steps[3].run.id }}?vista=alteracoes&amp;q={{ perc.cn|urlencode }}">Ver na geração #{{ perc.steps[3].run.id }}</a>{% endif %}
+     <a class="button" href="/cmdb-final">Atualizar a CMDB</a></p>
+  {% endif %}
+</section>
+
+<section class="card" id="fase">
+  <h2>{{ 'Reabrir o pedido' if perc.closed else 'Fechar o pedido' }}</h2>
+  {% if not can_update %}
+  <p class="small">Alterar pedidos no SMAX não está ativo. Defina <span class="mono">CERTWATCH_SMAX_UPDATE_ENABLED=true</span> e os campos de fecho (<span class="mono">CERTWATCH_SMAX_CLOSE_FIELDS</span>) no .env.</p>
+  {% else %}
+  {% if not perc.closed and perc.current and perc.current != 'fechado' %}<div class="note warn small">Ainda falta: {{ perc.current_label|lower }}. Pode fechar na mesma, se tiver a certeza.</div>{% endif %}
+  <form method="post" action="/pedidos/smax/{{ t.id }}/fase" class="stack">
+    <input type="hidden" name="csrf" value="{{ csrf }}"><input type="hidden" name="acao" value="{{ 'reabrir' if perc.closed else 'fechar' }}">
+    <label class="small">Comentário a registar no pedido (opcional)
+      <textarea name="comentario" rows="3">{% if not perc.closed %}Certificado renovado{{ ' (válido até ' ~ perc.target.strftime('%d-%m-%Y') ~ ')' if perc.target }}{{ ' e CMDB atualizada' if perc.steps[3].done }}. Pedido fechado no certwatch.{% endif %}</textarea></label>
+    <p class="small muted">Campos enviados: <span class="mono">{{ (settings.smax_reopen_fields if perc.closed else settings.smax_close_fields)|tojson }}</span>. A fase é confirmada no SMAX depois do pedido.</p>
+    <label><input type="checkbox" name="confirmo" value="1" required> Confirmo que quero {{ 'reabrir' if perc.closed else 'fechar' }} o pedido {{ t.id }} no SMAX.</label>
+    <button class="primary">{{ 'Reabrir no SMAX' if perc.closed else 'Fechar no SMAX' }}</button>
+  </form>
+  {% endif %}
+</section>
+</div>
+
+<section class="card" id="comentarios">
+  <h2>Comentários <small class="muted">{{ comments|length }}</small></h2>
+  {% for c in comments %}
+  <article class="comment">
+    <div class="small muted">{{ c.created_at|dtt if c.created_at else '' }} · {{ c.author or ('utilizador ' ~ c.author_id if c.author_id else 'desconhecido') }}{% if c.privacy %} · {{ c.privacy|lower }}{% endif %}</div>
+    {% if c.body %}<div class="comment-body">{{ c.body }}</div>{% endif %}
+    {% set fs = files.get(c.id, []) %}
+    {% if fs %}<div class="thumbs">
+      {% for f in fs %}
+        {% if f.imagem %}<a href="/pedidos/ficheiro/{{ f.id }}" target="_blank" rel="noopener"><img src="/pedidos/ficheiro/{{ f.id }}" alt="Imagem do comentário{{ ' ' ~ f.name if f.name and f.name != 'imagem' }}" loading="lazy"></a>
+        {% elif f.error %}<span class="tag tag-off" title="{{ f.error }}">{{ f.kind }} não disponível</span>
+        {% else %}<a class="button" href="/pedidos/ficheiro/{{ f.id }}?download=1">{{ f.name or 'anexo' }} ({{ '%.0f KB'|format(f.size / 1024) }})</a>{% endif %}
+      {% endfor %}</div>{% endif %}
+  </article>
+  {% else %}
+  <p class="small muted">Sem comentários lidos. Os comentários são lidos para os pedidos abertos em cada leitura do SMAX.</p>
+  {% endfor %}
+</section>
+
+{% if others %}
+<section class="card">
+  <h2>Outros pedidos do mesmo certificado</h2>
+  <table class="compact"><thead><tr><th>Pedido</th><th>Fase</th><th>Expiração</th><th>Atualizado</th></tr></thead>
+  {% for o in others %}<tr><td><a href="/pedidos/smax/{{ o.id }}">{{ o.id }}</a></td><td>{{ o.phase }}</td><td>{{ o.cert_expiry|dt }}</td><td class="small">{{ o.last_update|dtt if o.last_update else '—' }}</td></tr>{% endfor %}
+  </table>
+</section>
+{% endif %}
+{% endblock %}

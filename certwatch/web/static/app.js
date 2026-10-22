@@ -16,4 +16,25 @@ document.addEventListener("DOMContentLoaded", () => {
     boxes().forEach((b) => b.addEventListener("change", sync));
     sync();
   });
+
+  // Tabelas no telemóvel: cada linha passa a cartão. O nome de cada coluna vem do cabeçalho (data-label).
+  document.querySelectorAll("table").forEach((table) => {
+    if (table.classList.contains("no-stack") || table.classList.contains("matrix")) return;
+    const head = table.tHead && table.tHead.rows[0];
+    if (!head) return;
+    const labels = [];
+    Array.from(head.cells).forEach((th) => {
+      const text = (th.getAttribute("aria-label") || th.textContent || "").trim().replace(/\s+/g, " ");
+      for (let i = 0; i < (th.colSpan || 1); i++) labels.push(text);
+    });
+    Array.from(table.tBodies).forEach((tb) => Array.from(tb.rows).forEach((tr) => {
+      let col = 0;
+      Array.from(tr.cells).forEach((td) => {
+        if (td.colSpan > 1 && td.colSpan >= labels.length) td.classList.add("full");
+        else if (!td.hasAttribute("data-label")) td.setAttribute("data-label", labels[col] || "");
+        col += td.colSpan || 1;
+      });
+    }));
+    table.classList.add("stack");
+  });
 });

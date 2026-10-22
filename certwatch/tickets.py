@@ -13,7 +13,7 @@ from sqlalchemy.orm import Session
 from .collectors.smax import discussions_url, fetch_comments, fetch_tickets, ticket_url
 from .config import Settings
 from .db import as_utc, utcnow
-from .models import SmaxComment, SmaxTicket
+from .models import SmaxComment, SmaxFile, SmaxTicket
 
 _EPOCH = datetime(1970, 1, 1, tzinfo=timezone.utc)
 
@@ -53,31 +53,70 @@ def ingest_smax(session: Session, settings: Settings, tickets: list[dict] | None
         # Comentários dos pedidos abertos (os mais recentes primeiro)
         opened = [t["id"] for t in sorted(tickets, key=lambda x: x["last_update"] or _EPOCH, reverse=True)
                   if t["phase"].lower() not in closed]
+        known = {(f.comment_id, f.ref) for f in session.execute(select(SmaxFile.comment_id, SmaxFile.ref)
+                                                                 .where(SmaxFile.error == ""))}
         try:
-            found, info = fetch_comments(settings, opened)
+            found, info = fetch_comments(settings, opened, known_files=known)
         except Exception as exc:   # comentários são extra: nunca falham a leitura dos pedidos
             out["comentarios"] = {"erro": str(exc)[:300]}
             return out
-        fetched = opened[: settings.smax_comments_max]
-        if fetched:
-            session.execute(delete(SmaxComment).where(SmaxComment.ticket_id.in_(fetched)))
-        seen_c = set()
-        for c in found:
-            if c["id"] not in seen_c:
-                seen_c.add(c["id"])
-                session.add(SmaxComment(**c))
+        store_comments(session, found, opened[: settings.smax_comments_max])
         out["comentarios"] = info
+    return out
+
+
+def store_comments(session: Session, found: list[dict], fetched: list[str]) -> None:
+    """Substitui os comentários dos pedidos lidos e guarda as imagens/anexos novos."""
+    import hashlib
+    if fetched:
+        session.execute(delete(SmaxComment).where(SmaxComment.ticket_id.in_(fetched)))
+    seen_c = set()
+    for c in found:
+        if c["id"] in seen_c:
+            continue
+        seen_c.add(c["id"])
+        files = c.pop("files", [])
+        session.add(SmaxComment(**c))
+        for f in files:
+            if f.get("existing") or f.get("skipped"):
+                continue
+            old = session.scalar(select(SmaxFile).where(SmaxFile.comment_id == c["id"], SmaxFile.ref == f["ref"][:1024]))
+            if old is not None:
+                session.delete(old)       # tentativa anterior falhou: substitui
+            data = f.get("data")
+            session.add(SmaxFile(comment_id=c["id"], ticket_id=c["ticket_id"], ref=f["ref"][:1024], kind=f["kind"],
+                                 name=(f.get("name") or "")[:255], mime=f.get("mime") or "", size=len(data or b""),
+                                 sha256=hashlib.sha256(data).hexdigest() if data else "", data=data,
+                                 error=(f.get("error") or "")[:300]))
+    session.flush()
+    # Ficheiros de comentários que já não existem
+    alive = select(SmaxComment.id)
+    session.execute(delete(SmaxFile).where(SmaxFile.comment_id.not_in(alive)))
+
+
+def comment_files(session: Session, ticket_ids: list[str] | None = None) -> dict[str, list[dict]]:
+    """Por comentário: imagens e anexos guardados (sem o conteúdo)."""
+    stmt = select(SmaxFile.id, SmaxFile.comment_id, SmaxFile.kind, SmaxFile.name, SmaxFile.mime, SmaxFile.size,
+                  SmaxFile.error).order_by(SmaxFile.id)
+    if ticket_ids is not None:
+        stmt = stmt.where(SmaxFile.ticket_id.in_(ticket_ids))
+    out: dict[str, list[dict]] = defaultdict(list)
+    for f in session.execute(stmt):
+        out[f.comment_id].append({"id": f.id, "kind": f.kind, "name": f.name, "mime": f.mime, "size": f.size,
+                                  "error": f.error, "imagem": f.mime.startswith("image/") and not f.error})
     return out
 
 
 def last_comments(session: Session) -> dict[str, dict]:
     """Por pedido: número de comentários e o mais recente."""
     out: dict[str, dict] = {}
+    files = comment_files(session)
     for c in session.scalars(select(SmaxComment).order_by(SmaxComment.created_at)):
-        e = out.setdefault(c.ticket_id, {"n": 0, "ultimo": None})
+        e = out.setdefault(c.ticket_id, {"n": 0, "ultimo": None, "ficheiros": 0})
         e["n"] += 1
+        e["ficheiros"] += len(files.get(c.id, []))
         e["ultimo"] = {"quando": c.created_at, "autor": c.author or (f"utilizador {c.author_id}" if c.author_id else ""),
-                       "texto": c.body}
+                       "texto": c.body, "ficheiros": files.get(c.id, [])}
     return out
 
 
@@ -177,6 +216,7 @@ def ticket_list(session: Session, settings: Settings, view: str = "abertos", q: 
             "dias_expirado": (now - exp).days if exp and exp < now else None,
             "fim_ultrapassado": aberto and end is not None and end < now,
             "alvo": alvo, "comentarios": c.get("n", 0), "ultimo_comentario": c.get("ultimo"),
+            "ficheiros": c.get("ficheiros", 0),
         })
     counts = {
         "abertos": sum(1 for r in rows if r["aberto"]),
@@ -203,3 +243,33 @@ def ticket_list(session: Session, settings: Settings, view: str = "abertos", q: 
         return (exp is None, exp.timestamp() if exp else 0, r["t"].id)
     rows.sort(key=sort_key)
     return rows, counts
+
+
+TICKET_ORDER = {"expiracao": "Expiração do certificado", "comentario": "Último comentário (mais recente primeiro)",
+                "atualizacao": "Última atualização no SMAX", "pedido": "Número do pedido (mais recente primeiro)"}
+
+
+def filter_tickets(rows: list[dict], fase: str = "", desde=None, ate=None, sem_comentario: bool = False,
+                   ordem: str = "", tz=None) -> list[dict]:
+    """Filtros da página de pedidos: fase, data do último comentário (de/até, inclusive) e ordenação."""
+    out = rows
+    if fase:
+        out = [r for r in out if (r["t"].phase or "").lower() == fase.lower()]
+
+    def last_day(r):
+        lc = (r.get("ultimo_comentario") or {}).get("quando")
+        if not lc:
+            return None
+        d = as_utc(lc)
+        return (d.astimezone(tz) if tz else d).date()
+    if desde or ate:
+        out = [r for r in out if last_day(r) is not None and (not desde or last_day(r) >= desde) and (not ate or last_day(r) <= ate)]
+    if sem_comentario:
+        out = [r for r in out if not r.get("comentarios")]
+    if ordem == "comentario":
+        out = sorted(out, key=lambda r: as_utc((r.get("ultimo_comentario") or {}).get("quando") or _EPOCH), reverse=True)
+    elif ordem == "atualizacao":
+        out = sorted(out, key=lambda r: as_utc(r["t"].last_update or _EPOCH), reverse=True)
+    elif ordem == "pedido":
+        out = sorted(out, key=lambda r: (len(r["t"].id), r["t"].id), reverse=True)
+    return out
