@@ -820,14 +820,14 @@ def reconcile_final(table: CmdbTable, sources: dict[str, list[SourceItem]], sett
 
     pending: dict[int, list[str]] = {}
 
-    serial_unknown: set[int] = set()     # linha alterada (outra data) sem série nas fontes: ficou a anterior
+    placeholder_rows: set[int] = set()   # SerialNumber "x" posto aqui (numerado mais abaixo)
 
     def mark_pending(i: int) -> None:
         p = []
         if (rows[i].get(H("IssuerName")) or "").strip() == MISSING_ISSUER:
             p.append("IssuerName")
         ser_ = (rows[i].get(H("SerialNumber")) or "").strip()
-        if not ser_ or is_placeholder_serial(ser_) or i in serial_unknown:
+        if not ser_ or (i in placeholder_rows and is_placeholder_serial(ser_)):
             p.append("SerialNumber")
         if p:
             pending[i] = p
@@ -859,11 +859,13 @@ def reconcile_final(table: CmdbTable, sources: dict[str, list[SourceItem]], sett
                 set_field(target, H("CommonName"), it["cn"])
             serial = (it["serial"] or "").strip() or complete(it)[1]
             if not serial and parse_day(rows[target].get(H("ValidTo"))).day != it["day"]:
-                serial_unknown.add(target)     # outro certificado, série desconhecida: não se apaga a que lá está
+                # outro certificado (outra data) sem série em nenhuma fonte: a série antiga já não é a dele e, mantida,
+                # repetia a chave IssuerName + SerialNumber noutras linhas; o workflow deixava-a vazia, aqui fica x<n>
+                serial = MISSING_SERIAL
+                placeholder_rows.add(target)
             set_valid_to(target, it["day"])
             if serial:
                 set_serial(target, serial)
-            if serial or target in serial_unknown:
                 mark_pending(target)
             if target in mods:
                 note_src(target, it)
@@ -882,6 +884,7 @@ def reconcile_final(table: CmdbTable, sources: dict[str, list[SourceItem]], sett
                 set_serial(i, serial)
             elif it["source"] == INTERNET and not (rows[i].get(H("SerialNumber")) or "").strip():
                 set_field(i, H("SerialNumber"), MISSING_SERIAL)
+                placeholder_rows.add(i)
             if iss and (rows[i].get(H("IssuerName")) or "").strip() in ("", MISSING_ISSUER):
                 set_field(i, H("Issuer"), iss)
                 set_field(i, H("IssuerName"), iss)
@@ -895,6 +898,9 @@ def reconcile_final(table: CmdbTable, sources: dict[str, list[SourceItem]], sett
             iss = iss or MISSING_ISSUER          # Issuer e IssuerName sempre preenchidos nas linhas novas
             if not serial and it["source"] == INTERNET:
                 serial = MISSING_SERIAL
+                placeholder_new = True
+            else:
+                placeholder_new = False
             row = {h: "" for h in t.headers}
             row.update({
                 H("Display Label"): it["cn"], H("Name"): it["cn"], H("CommonName"): it["cn"],
@@ -909,10 +915,23 @@ def reconcile_final(table: CmdbTable, sources: dict[str, list[SourceItem]], sett
             i = len(rows) - 1
             new_rows.add(i)
             new_by_cn[cn] = i
+            if placeholder_new:
+                placeholder_rows.add(i)
             note_src(i, it)
             mark_pending(i)
             if it["live"]:
                 live_rows.add(i)
+
+    # SerialNumber "x" numerado (x1, x2...) a seguir ao maior que já exista na CMDB: cada certificado sem série
+    # tem uma chave IssuerName + SerialNumber só sua e nunca a de um CI que já lá está
+    used = [int(m.group(1)) for r in originals.values()
+            if (m := _PLACEHOLDER_SERIAL.match((r.get(H("SerialNumber")) or "").strip())) and m.group(1)]
+    n = max(used, default=0)
+    for i in sorted((i for i in placeholder_rows if (rows[i].get(H("SerialNumber")) or "").strip().lower() == MISSING_SERIAL),
+                    key=lambda i: (i in new_rows, (rows[i].get(H("CommonName")) or "").lower(), i)):
+        n += 1
+        rows[i][H("SerialNumber")] = f"{MISSING_SERIAL}{n}"
+        mark_pending(i)
 
     # --- Description das linhas existentes alteradas (estado final vs. original)
     def audit(lst, label, before, after, is_date):
@@ -927,17 +946,6 @@ def reconcile_final(table: CmdbTable, sources: dict[str, list[SourceItem]], sett
             lst.append(f"{label} removido (valor anterior: {af})")
         else:
             lst.append(f"{label} alterado de {af} para {df}")
-
-    # SerialNumber "x" numerado (x1, x2...) a seguir ao maior que já exista na CMDB: cada certificado novo sem série
-    # tem uma chave IssuerName + SerialNumber só sua e nunca a de um CI que já lá está
-    used = [int(m.group(1)) for r in originals.values()
-            if (m := _PLACEHOLDER_SERIAL.match((r.get(H("SerialNumber")) or "").strip())) and m.group(1)]
-    n = max(used, default=0)
-    for i in sorted((i for i in new_rows if (rows[i].get(H("SerialNumber")) or "").strip().lower() == MISSING_SERIAL),
-                    key=lambda i: ((rows[i].get(H("CommonName")) or "").lower(), i)):
-        n += 1
-        rows[i][H("SerialNumber")] = f"{MISSING_SERIAL}{n}"
-        mark_pending(i)
 
     changes: list[dict] = []
     for i in sorted(mods):
@@ -1041,17 +1049,41 @@ def validate_delta(rows: list[dict[str, str]]) -> list[str]:
         problems.append(f"{len(bad)} certificado(s) novo(s) (Global Id = x) sem Issuer, IssuerName ou SerialNumber. Como "
                         f"IssuerName + SerialNumber formam a chave primária na CMDB, os CSV não são gerados: exclua-os ou "
                         f"complete a fonte. Exemplos: {ex}")
-    seen, dup = set(), []
+    groups: dict[tuple[str, str], list[dict]] = {}
     for r in rows:
         iss, ser = r["IssuerName"].strip().lower(), r["SerialNumber"].strip().lower()
         if not iss or not ser or iss == MISSING_ISSUER.lower():
             continue                     # "Por verificar" não identifica o emissor: avisado à parte
-        if (iss, ser) in seen:
-            dup.append(f"{r['IssuerName']} + {r['SerialNumber']}")
-        seen.add((iss, ser))
+        groups.setdefault((iss, ser), []).append(r)
+    dup = [g for g in groups.values() if len(g) > 1]
     if dup:
-        problems.append("Chave primária repetida (IssuerName + SerialNumber): " + " | ".join(sorted(set(dup))[:10]))
+        ex = " | ".join(f"{g[0]['IssuerName']} + {g[0]['SerialNumber']}: " +
+                        ", ".join(f"{r['CommonName'] or '(sem CommonName)'} (Global Id {r['Global Id'] or '—'})" for r in g)
+                        for g in dup[:10])
+        problems.append(f"Chave primária repetida (IssuerName + SerialNumber) em {len(dup)} caso(s): a mesma chave em "
+                        f"mais de uma linha do certs_update faria a UCMDB juntar certificados diferentes. Deixe só uma "
+                        f"linha de cada chave incluída. {ex}")
     return problems
+
+
+def flag_duplicate_keys(changes: list[dict], decisions: dict) -> None:
+    """Alterações com a mesma chave IssuerName + SerialNumber: ficam de fora por omissão (a não ser que alguém já
+    tenha escolhido), com a indicação de com quem colidem, para se escolher qual entra."""
+    groups: dict[tuple[str, str], list[dict]] = {}
+    for c in changes:
+        iss, ser = (c.get("issuer_name") or "").strip().lower(), (c.get("serial") or "").strip().lower()
+        if iss and ser and iss != MISSING_ISSUER.lower():
+            groups.setdefault((iss, ser), []).append(c)
+    for g in groups.values():
+        if len(g) < 2:
+            continue
+        for c in g:
+            others = ", ".join(f"{o['cn'] or '(sem CommonName)'} (Global Id {o['global_id'] or '—'})" for o in g if o is not c)
+            c["chave_repetida"] = others
+            if decisions.get(decision_key(c)) is not None:
+                continue
+            c["incluir"] = False
+            c["porque"] = f"mesma chave IssuerName + SerialNumber que {others}: escolha qual entra"
 
 
 def _placeholder_clashes(rows: list[dict[str, str]]) -> int:
@@ -1324,6 +1356,7 @@ def generate(run_id: int, settings: Settings, fetch: Callable | None = None,
             decisions = {d.key: d for d in s.scalars(select(FinalDecision))}
             for c in res.changes:
                 c["incluir"], c["porque"] = default_include(c, decisions)
+            flag_duplicate_keys(res.changes, decisions)
         state = pack_state(res)
         xlsx, csv, csv_sem, problems, counts = build_outputs(unpack_state(state), res.changes)
         with session_scope() as s:

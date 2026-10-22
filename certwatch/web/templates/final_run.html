@@ -22,8 +22,8 @@
 {% if pv and run.status in ('pronto', 'bloqueado') %}
 <div class="note warn"><b>{{ pv }} certificado{{ 's' if pv != 1 }} com dados por confirmar.</b>
   Não foram encontrados em nenhuma fonte (ficheiros, renovações, servidores verificados e internet): o emissor ficou
-  <span class="mono">Por verificar</span> (Issuer e IssuerName), o SerialNumber de um certificado da internet ficou <span class="mono">x1</span>, <span class="mono">x2</span>… (numerado a seguir ao maior que já existe na CMDB, para a chave não se repetir),
-  ou a fonte não trouxe a série e ficou a que estava na CMDB. Confirme-os na CMDB depois do carregamento.
+  <span class="mono">Por verificar</span> (Issuer e IssuerName), ou o SerialNumber ficou <span class="mono">x1</span>, <span class="mono">x2</span>… (certificado da internet sem série, ou certificado renovado sem a série nova;
+  numerado a seguir ao maior que já existe na CMDB, para a chave não se repetir). Confirme-os na CMDB depois do carregamento.
   <a href="?vista=alteracoes&amp;pendente=1">Ver quais</a>.
   {% set rep = (run.summary or {}).get('por_verificar_repetidos', 0) %}
   {% if rep %}<div class="small mt">{{ rep }} linhas novas ficam com o mesmo par IssuerName + SerialNumber por causa de <span class="mono">Por verificar</span> (o mesmo número de série com emissor desconhecido). Se a UCMDB usar este par como chave, podem ficar num só CI: confirme o resultado depois do carregamento ou exclua-as até ter os dados.</div>{% endif %}
@@ -108,7 +108,7 @@
   <select name="fonte" aria-label="Fonte"><option value="">Todas as fontes</option>{% for f in fontes %}<option value="{{ f }}" {{ 'selected' if fonte == f }}>{{ FINAL_SOURCE_LABELS.get(f, f) }}</option>{% endfor %}</select>
   <label class="small"><input type="checkbox" name="pendente" value="1" {{ 'checked' if pendente }}> Só com dados por confirmar</label>
   <select name="incluida" aria-label="Incluída"><option value="">Incluídas e excluídas</option><option value="sim" {{ 'selected' if incluida == 'sim' }}>Só incluídas</option><option value="nao" {{ 'selected' if incluida == 'nao' }}>Só excluídas</option></select>
-  <input type="search" name="q" value="{{ q }}" placeholder="CommonName ou Global Id" aria-label="Filtrar">
+  <input type="search" name="q" value="{{ q }}" placeholder="CommonName, Global Id ou SerialNumber" aria-label="Filtrar">
   <button>Filtrar</button>
   <a class="button" href="/cmdb-final/{{ run.id }}/exportar/alteracoes">Exportar (CSV)</a>
 </form>
@@ -128,7 +128,8 @@
   <tr class="{{ 'faded' if not inc }}">
     <td><input type="hidden" name="k" value="{{ c.chave }}">
       <input type="checkbox" name="incluir" value="{{ c.chave }}" {{ 'checked' if inc }} {{ 'disabled' if not can_edit }} aria-label="Incluir {{ c.cn }}">
-      {% if c.porque %}<div class="small muted motivo">{{ c.porque }}</div>{% endif %}</td>
+      {% if c.porque %}<div class="small muted motivo">{{ c.porque }}</div>{% endif %}
+      {% if c.chave_repetida %}<div class="small motivo"><span class="tag tag-err">chave repetida</span> com {{ c.chave_repetida }}</div>{% endif %}</td>
     <td><span class="mono">{{ c.cn or '(sem CommonName)' }}</span><div class="small muted">Global Id {{ c.global_id or '—' }}{{ ' · linha ' ~ c.linha if c.linha }}</div></td>
     <td>{% if c.tipo == 'novo' %}<span class="tag tag-ok">novo</span>{% else %}<span class="tag tag-run">alterado</span>{% endif %}
         {% if c.fonte %}<div class="small">{% if c.fonte == 'INTERNET' %}<a href="/descoberta?q={{ c.cn|urlencode }}" title="Ver em Na internet">{{ FINAL_SOURCE_LABELS[c.fonte] }}</a>{% if c.triagem %}<div class="muted">{{ TRIAGE_LABELS.get(c.triagem, c.triagem) }}</div>{% endif %}{% else %}{{ c.fonte }}{% endif %}</div>{% endif %}

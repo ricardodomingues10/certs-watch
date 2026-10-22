@@ -1709,7 +1709,8 @@ def final_run(request: Request, run_id: int, vista: str = "alteracoes", tipo: st
     if pendente:
         changes = [c for c in changes if c.get("pendente")]
     if q:
-        changes = [c for c in changes if q.lower() in (c["cn"] or "").lower() or q.lower() in (c["global_id"] or "").lower()]
+        ql = q.lower()
+        changes = [c for c in changes if any(ql in (c.get(k) or "").lower() for k in ("cn", "global_id", "serial", "issuer_name"))]
     folder = cf.folder_status(settings) if run.status == "pronto" else None
     return render(request, "final_run.html", user, run=run, vista=vista, views=FINAL_VIEWS, changes=changes[:3000],
                   n_changes=len(changes), tipo=tipo, q=q, newest=newest, pubs=pubs, pub_files=pub_files, sizes=sizes,

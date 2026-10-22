@@ -591,7 +591,7 @@ def test_missing_serial_and_issuer(settings):
     st = replace(settings, import_issuers={})
     S = cf.SourceItem
     sources = {
-        "CA1": [S("CA1", 2, "renovado.exemplo.pt", date(2027, 11, 10)),          # renovado, sem série -> fica a anterior
+        "CA1": [S("CA1", 2, "renovado.exemplo.pt", date(2027, 11, 10)),          # renovado, sem série -> x<n>
                 S("CA1", 3, "igual.exemplo.pt", date(2027, 3, 1)),               # mesmo certificado -> nada muda
                 S("CA1", 4, "novo1.exemplo.pt", date(2028, 1, 1), serial="N1"),  # sem emissor em lado nenhum
                 S("CA1", 5, "novo2.exemplo.pt", date(2028, 2, 1)),               # outra fonte tem os dados
@@ -605,7 +605,9 @@ def test_missing_serial_and_issuer(settings):
     res = cf.reconcile_final(t, sources, st, live, TODAY, known)
     by = {c["cn"]: c for c in res.changes}
     ren = by["renovado.exemplo.pt"]
-    assert ren["serial"] == "0A01" and ren["pendente"] == ["SerialNumber"] and ren["global_id"] != "x"
+    # outro certificado (outra data) sem série: a antiga já não serve -> x8 (a seguir ao x7 da CMDB)
+    assert ren["serial"] == "x8" and ren["pendente"] == ["SerialNumber"] and ren["global_id"] != "x"
+    assert "SerialNumber alterado de 0A01 para x8" in ren["descricao"]
     assert "igual.exemplo.pt" not in by
     assert (by["novo1.exemplo.pt"]["issuer"], by["novo1.exemplo.pt"]["issuer_name"], by["novo1.exemplo.pt"]["serial"]) == \
         ("Por verificar", "Por verificar", "N1")
@@ -614,9 +616,9 @@ def test_missing_serial_and_issuer(settings):
         ("DigiCert G2", "N2", [])
     assert (by["novo3.exemplo.pt"]["issuer_name"], by["novo3.exemplo.pt"]["serial"]) == ("Corp CA03", "C3")
     assert by["novo4.exemplo.pt"]["serial"] == "" and by["novo4.exemplo.pt"]["pendente"] == ["IssuerName", "SerialNumber"]
-    assert not any(cf.is_placeholder_serial(c["serial"]) for c in res.changes if c["fonte"] != "INTERNET")
-    # sem série na internet: x8, x9 (a seguir ao x7 que já está na CMDB), cada um com a sua chave
-    for n, x in (("net1.exemplo.pt", "x8"), ("net2.exemplo.pt", "x9")):
+    assert not any(cf.is_placeholder_serial(c["serial"]) for c in res.changes if c["fonte"] != "INTERNET" and c["tipo"] == "novo")
+    # sem série na internet: x9, x10, cada um com a sua chave
+    for n, x in (("net1.exemplo.pt", "x9"), ("net2.exemplo.pt", "x10")):
         assert (by[n]["issuer_name"], by[n]["serial"], by[n]["global_id"]) == ("Por verificar", x, "x")
         assert by[n]["pendente"] == ["IssuerName", "SerialNumber"]
     # sem série: fica fora dos CSV por omissão; o resto é gerado
@@ -626,9 +628,9 @@ def test_missing_serial_and_issuer(settings):
     assert by["net1.exemplo.pt"]["incluir"]
     xlsx, csv, csv_sem, problems, counts = cf.build_outputs(cf.unpack_state(cf.pack_state(res)), res.changes)
     assert not problems and csv and counts["por_verificar"] == 4
-    assert counts["por_verificar_repetidos"] == 0        # x8 e x9: chaves diferentes
+    assert counts["por_verificar_repetidos"] == 0        # x9 e x10: chaves diferentes
     net = next(ln for ln in csv.decode().splitlines() if "net1.exemplo.pt" in ln)
-    assert '"Por verificar"|"Por verificar"|"x8"' in net
+    assert '"Por verificar"|"Por verificar"|"x9"' in net
     text = csv.decode()
     assert "novo4.exemplo.pt" not in text
     line = next(ln for ln in text.splitlines() if "novo1.exemplo.pt" in ln).split("|")
@@ -689,3 +691,33 @@ def test_run_page_shows_pending(settings, monkeypatch):
         assert "com dados por confirmar" in page and "Os CSV não foram gerados" not in page
         only = c.get(f"/cmdb-final/{run_id}?vista=alteracoes&pendente=1", auth=("admin", "teste-admin-123")).text
         assert "novo-ca2.exemplo.pt" in only and "novo-avi.exemplo.pt" not in only
+
+
+def test_duplicate_key_cases(settings):
+    """O caso "Chave primária repetida": dois CIs com a mesma série renovados sem série -> x<n> (sem repetição);
+    duas alterações com a mesma série real -> ficam de fora por omissão, com a indicação de com quem colidem."""
+    cis = [ci(1, "a.exemplo.pt", date(2026, 11, 10), serial="586D2F04", issuer="YR1"),
+           ci(2, "b.exemplo.pt", date(2026, 11, 10), serial="586D2F04", issuer="YR1"),
+           ci(3, "c.exemplo.pt", date(2026, 12, 1), serial="AB", issuer="Corp CA01"),
+           ci(4, "d.exemplo.pt", date(2026, 12, 1), serial="CD", issuer="Corp CA01")]
+    t = cf.build_cmdb_table(cis, settings)
+    S = cf.SourceItem
+    sources = {"INTERNET": [S("INTERNET", 1, "a.exemplo.pt", date(2027, 11, 10), issuer="YR1", triage="adicionar"),
+                            S("INTERNET", 2, "b.exemplo.pt", date(2027, 11, 10), issuer="YR1", triage="adicionar")],
+               "AVI": [S("AVI", 2, "c.exemplo.pt", date(2027, 12, 1), serial="EF", issuer="Corp CA01"),
+                       S("AVI", 3, "d.exemplo.pt", date(2027, 12, 1), serial="EF", issuer="Corp CA01")]}
+    res = cf.reconcile_final(t, sources, settings, live, TODAY)
+    by = {c["cn"]: c for c in res.changes}
+    assert {by["a.exemplo.pt"]["serial"], by["b.exemplo.pt"]["serial"]} == {"x1", "x2"}
+    for c in res.changes:
+        c["incluir"], c["porque"] = cf.default_include(c, {})
+    cf.flag_duplicate_keys(res.changes, {})
+    assert not by["c.exemplo.pt"]["incluir"] and "d.exemplo.pt" in by["c.exemplo.pt"]["chave_repetida"]
+    assert not by["d.exemplo.pt"]["incluir"] and "escolha qual entra" in by["d.exemplo.pt"]["porque"]
+    assert by["a.exemplo.pt"]["incluir"] and "chave_repetida" not in by["a.exemplo.pt"]
+    xlsx, csv, csv_sem, problems, counts = cf.build_outputs(cf.unpack_state(cf.pack_state(res)), res.changes)
+    assert not problems and csv
+    # as duas incluídas à mão -> bloqueia, com os nomes e Global Ids na mensagem
+    by["c.exemplo.pt"]["incluir"] = by["d.exemplo.pt"]["incluir"] = True
+    problems = cf.build_outputs(cf.unpack_state(cf.pack_state(res)), res.changes)[3]
+    assert problems and "c.exemplo.pt" in problems[0] and "d.exemplo.pt" in problems[0] and "Corp CA01 + EF" in problems[0]
