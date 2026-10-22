@@ -274,7 +274,11 @@ Em **Atualizar a CMDB → Permissões na UCMDB** verifica-se o que a conta confi
 - **Leitura** (não muda nada): `POST /rest-api/authenticate`, execução de cada TQL configurado (`POST /rest-api/topology`) e leitura de um CI completo (`GET /rest-api/dataModel/ci/{id}`).
 - **Escrita** (só com confirmação, num certificado escolhido): `PUT /rest-api/dataModel/ci/{id}` com a Description (ou o Display Label) igual ao valor que já tem. A UCMDB verifica a permissão de atualização, mas nenhum valor muda. Criar (`POST /rest-api/dataModel`) e apagar (`DELETE /rest-api/dataModel/ci/{id}`) não são testados, porque o único teste seria criar ou apagar um CI de verdade.
 
-Cada verificação fica na auditoria (`ucmdb.permissoes`), sem credenciais.
+- **Criação** (dois passos, com confirmação):
+  1. **Descobrir o atributo de estado** (só leitura): os atributos do certificado com "status/estado/ativo" no nome, ou com o valor "Ativo", com o valor que têm na lista dos ativos e quantos certificados há com cada valor.
+  2. **Criar o certificado de teste**: `POST /rest-api/dataModel` com um certificado **não ativo** (o valor escolhido), nome `certwatch-teste-<código>.invalid`, emissor e série de teste únicos e a Description a dizer que é um teste. Depois lê-o, confirma que não aparece no TQL dos ativos e apaga-o (`DELETE`), o que também testa a permissão de apagar. Só apaga se foi mesmo criado agora (está em `addedCis` e a Description é a do teste). Se não o puder apagar, a página diz o ID para o apagar na UCMDB.
+
+Cada verificação fica na auditoria (`ucmdb.permissoes`, `ucmdb.teste_criacao`), sem credenciais.
 
 ## 6. Renovação automática e avaliação externa
 

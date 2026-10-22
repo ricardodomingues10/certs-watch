@@ -1595,6 +1595,43 @@ def ucmdb_permissoes_testar(request: Request, csrf: str = Form(""), escrita: str
     return render(request, "ucmdb_permissoes.html", user, settings=settings, rep=rep, write_ci=write_ci or ci, erro=erro)
 
 
+@app.post("/cmdb-final/permissoes/criacao/preparar")
+def ucmdb_criacao_preparar(request: Request, csrf: str = Form(""), user: str = Depends(current_user)):
+    """Passo 1 do teste de criação: descobre o atributo de estado (só leitura)."""
+    check_csrf(request, csrf)
+    settings = get_settings()
+    status = ua.status_candidates(settings, UCMDB_CLIENT)
+    return render(request, "ucmdb_permissoes.html", user, settings=settings, rep=None, write_ci="", erro=status.error,
+                  status=status)
+
+
+@app.post("/cmdb-final/permissoes/criacao")
+def ucmdb_criacao(request: Request, csrf: str = Form(""), ci_type: str = Form(""), escolha: str = Form(""),
+                  valor_outro: str = Form(""), atributo_outro: str = Form(""), apagar: str = Form(""),
+                  confirmo: str = Form(""), user: str = Depends(current_user)):
+    """Passo 2: cria um certificado de teste não ativo, confirma-o e apaga-o."""
+    check_csrf(request, csrf)
+    settings = get_settings()
+    attr, _, value = escolha.partition("::")
+    if escolha == "outro":
+        attr, value = atributo_outro.strip(), valor_outro.strip()
+    erro = ""
+    if confirmo != "1":
+        erro = "Confirme a criação do certificado de teste."
+    elif not re.fullmatch(r"[A-Za-z][A-Za-z0-9_]{0,99}", attr or "") or not re.fullmatch(r"[A-Za-z][A-Za-z0-9_]{0,99}", ci_type):
+        erro = "Escolha o atributo de estado."
+    elif not value or len(value) > 120:
+        erro = "Indique o valor de estado não ativo (até 120 caracteres)."
+    created = None
+    if not erro:
+        created = ua.create_test(settings, ci_type, attr, value, user, delete=apagar == "1", client=UCMDB_CLIENT)
+        with session_scope() as s:
+            audit(s, user, "ucmdb.teste_criacao", created.created_id or "nada criado", tipo=ci_type, atributo=attr,
+                  valor=value, ficou=created.left_behind, resultado={st.call or st.what: st.ok for st in created.steps})
+    return render(request, "ucmdb_permissoes.html", user, settings=settings, rep=None, write_ci="", erro=erro,
+                  created=created)
+
+
 UCMDB_CLIENT = None    # nos testes: cliente httpx para a UCMDB simulada
 
 

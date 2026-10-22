@@ -92,3 +92,102 @@ def test_web_page(env, monkeypatch):
     with session_scope() as s:
         logs = list(s.scalars(select(AuditLog).where(AuditLog.action == "ucmdb.permissoes")))
         assert len(logs) == 3 and "pw" not in json.dumps([l.details for l in logs])
+
+
+def fake_full(create_status=200, added=("new1",), delete_status=200, in_list=False):
+    calls = []
+    store = {}
+    certs = [dict(CI, properties={**CI["properties"], "certificate_status": "Ativo", "common_name": "intranet.exemplo.local",
+                                  "issuer_name": "Corp CA01", "serial_number": "AA01"})]
+
+    def handler(request):
+        calls.append((request.method, request.url.path, request.content))
+        p = request.url.path
+        if p.endswith("/authenticate"):
+            return httpx.Response(200, json={"token": "t"})
+        if p.endswith("/topologyQuery"):
+            return httpx.Response(200, json={"cis": [{"ucmdbId": f"a{i}", "properties": {"certificate_status": v}}
+                                                     for i, v in enumerate(["Ativo"] * 5 + ["Inativo"] * 2 + [None])]})
+        if p.endswith("/topology"):
+            extra = [{"ucmdbId": "new1"}] if in_list and "new1" in store else []
+            return httpx.Response(200, json={"cis": certs + extra, "relations": []})
+        if request.method == "POST" and p.endswith("/dataModel"):
+            body = json.loads(request.content)
+            if create_status != 200:
+                return httpx.Response(create_status, json={"error": "User has no permission to modify data"})
+            if added:
+                store[added[0]] = body["cis"][0]
+            return httpx.Response(200, json={"addedCis": list(added), "updatedCis": [] if added else ["c1"],
+                                             "ignoredCis": [], "removedCis": []})
+        if request.method == "GET" and "/dataModel/ci/" in p:
+            cid = p.rsplit("/", 1)[1]
+            if cid in store:
+                return httpx.Response(200, json={"ucmdbId": cid, **store[cid]})
+            return httpx.Response(200, json=certs[0])
+        if request.method == "DELETE":
+            return httpx.Response(delete_status, json={} if delete_status == 200 else {"error": "Forbidden"})
+        return httpx.Response(404)
+    return httpx.Client(base_url="https://cmdb.test/rest-api", transport=httpx.MockTransport(handler)), calls
+
+
+def test_status_candidates(env):
+    c, calls = fake_full()
+    info = ua.status_candidates(st(env), c)
+    cand = {x["attr"]: x for x in info.candidates}
+    assert info.ci_type == "digital_certificate" and cand["certificate_status"]["na_lista"] == "Ativo"
+    assert dict(cand["certificate_status"]["valores"]) == {"Ativo": 5, "Inativo": 2, "": 1}
+    assert not any(m in ("PUT", "DELETE") or (m == "POST" and p.endswith("/dataModel")) for m, p, _ in calls)
+
+
+def test_create_and_delete(env):
+    c, calls = fake_full()
+    res = ua.create_test(st(env), "digital_certificate", "certificate_status", "Inativo", "ana", True, c)
+    assert [s.ok for s in res.steps] == [True, True, True, True] and res.created_id == "new1" and not res.left_behind
+    body = json.loads([x for x in calls if x[0] == "POST" and x[1].endswith("/dataModel")][0][2])
+    props = body["cis"][0]["properties"]
+    assert props["certificate_status"] == "Inativo" and props["common_name"].startswith("certwatch-teste-")
+    assert props["serial_number"].startswith("CERTWATCH-TESTE-") and props["issuer_name"] == "certwatch teste"
+    assert "Pode ser apagado" in props["description"]
+    assert [x for x in calls if x[0] == "DELETE"][0][1].endswith("/dataModel/ci/new1")
+
+
+def test_create_guards(env):
+    # valor dos ativos -> não cria
+    c, calls = fake_full()
+    res = ua.create_test(st(env), "digital_certificate", "certificate_status", "Ativo", "ana", True, c)
+    assert res.steps[0].ok is None and not any(m == "POST" and p.endswith("/dataModel") for m, p, _ in calls)
+    # sem permissão
+    c, _ = fake_full(create_status=403)
+    assert ua.create_test(st(env), "digital_certificate", "certificate_status", "Inativo", "ana", True, c).steps[0].ok is False
+    # a UCMDB juntou-o a um CI existente (updatedCis) -> nada é apagado
+    c, calls = fake_full(added=())
+    res = ua.create_test(st(env), "digital_certificate", "certificate_status", "Inativo", "ana", True, c)
+    assert res.steps[0].ok is None and not any(m == "DELETE" for m, _, _ in calls)
+    # aparece na lista e não se pode apagar -> fica, avisado
+    c, _ = fake_full(delete_status=403, in_list=True)
+    res = ua.create_test(st(env), "digital_certificate", "certificate_status", "Inativo", "ana", True, c)
+    assert res.steps[2].ok is False and res.steps[3].ok is False and res.left_behind
+
+
+def test_create_web(env, monkeypatch):
+    from certwatch.web import app as webapp
+    settings = st(env)
+    monkeypatch.setattr(webapp, "get_settings", lambda: settings)
+    c, calls = fake_full()
+    monkeypatch.setattr(webapp, "UCMDB_CLIENT", c)
+    auth = ("admin", "teste-admin-123")
+    with TestClient(webapp.app) as tc:
+        tc.get("/cmdb-final/permissoes", auth=auth)
+        token = tc.cookies["cw_csrf"]
+        r = tc.post("/cmdb-final/permissoes/criacao/preparar", data={"csrf": token}, auth=auth)
+        assert 'value="certificate_status::Inativo"' in r.text and "— ativo" in r.text
+        r = tc.post("/cmdb-final/permissoes/criacao", data={"csrf": token, "ci_type": "digital_certificate",
+                                                            "escolha": "certificate_status::Inativo", "apagar": "1"}, auth=auth)
+        assert "Confirme a criação" in r.text and not any(m == "POST" and p.endswith("/dataModel") for m, p, _ in calls)
+        r = tc.post("/cmdb-final/permissoes/criacao", data={"csrf": token, "ci_type": "digital_certificate",
+                                                            "escolha": "certificate_status::Inativo", "apagar": "1",
+                                                            "confirmo": "1"}, auth=auth)
+        assert "pode criar e apagar certificados" in r.text
+    with session_scope() as s:
+        log = s.scalar(select(AuditLog).where(AuditLog.action == "ucmdb.teste_criacao"))
+        assert log.target == "new1" and log.details["ficou"] is False

@@ -2,7 +2,7 @@
 {% block title %}Permissões na UCMDB{% endblock %}
 {% block crumb %}<a href="/cmdb-final">Atualizar a CMDB</a>{% endblock %}
 {% block page_title %}Permissões da conta na UCMDB{% endblock %}
-{% block lede %}Verifica o que a conta configurada no certwatch (segredo <span class="mono">ucmdb_user</span>) consegue fazer pela REST API da UCMDB: entrar, ler as listas (TQL) e, se pedir, atualizar um CI. A password nunca aparece aqui nem nos registos.{% endblock %}
+{% block lede %}Verifica o que a conta configurada no certwatch (segredo <span class="mono">ucmdb_user</span>) consegue fazer pela REST API da UCMDB: entrar, ler as listas (TQL) e, se pedir, atualizar um CI ou criar um certificado de teste. A password nunca aparece aqui nem nos registos.{% endblock %}
 {% block content %}
 {% if erro %}<div class="note bad">{{ erro }}</div>{% endif %}
 
@@ -27,7 +27,71 @@
     <div><button>Verificar leitura e escrita</button></div>
   </form>
 </section>
+
+<section class="card">
+  <h2>Criação</h2>
+  <p class="small muted">Cria um certificado de teste <b>não ativo</b> (para não entrar na lista {{ settings.ucmdb_tql }}), confirma que foi criado e apaga-o logo a seguir.
+    Primeiro descobre-se o atributo que diz se o certificado está ativo e que valores tem; só depois se cria.</p>
+  <form method="post" action="/cmdb-final/permissoes/criacao/preparar">
+    <input type="hidden" name="csrf" value="{{ csrf }}">
+    <button>1. Descobrir o atributo de estado</button>
+  </form>
+</section>
 </div>
+
+
+{% if status and status.candidates %}
+<section class="card mt" id="criar" aria-label="Teste de criação">
+  <h2>2. Criar o certificado de teste</h2>
+  <p class="small muted">Atributos do tipo <span class="mono">{{ status.ci_type }}</span> que podem dizer se o certificado está ativo. "Na lista" é o valor de um certificado do TQL {{ settings.ucmdb_tql }} (ativo); as contagens são de todos os certificados da UCMDB. Escolha o valor de um certificado <b>não</b> ativo.</p>
+  <form method="post" action="/cmdb-final/permissoes/criacao" class="stack">
+    <input type="hidden" name="csrf" value="{{ csrf }}"><input type="hidden" name="ci_type" value="{{ status.ci_type }}">
+    <table class="compact">
+      <thead><tr><th>Atributo</th><th>Na lista (ativo)</th><th>Valores em todos os certificados</th></tr></thead>
+      <tbody>
+      {% for c in status.candidates %}
+      <tr><td class="mono small">{{ c.attr }}</td><td class="small">{{ c.na_lista or '(vazio)' }}</td>
+        <td><fieldset class="plain"><legend class="small">Valor para o teste</legend>
+          {% for v, n in c.valores %}{% if v %}
+          <label class="small"><input type="radio" name="escolha" value="{{ c.attr }}::{{ v }}" {{ 'disabled' if v == c.na_lista }} required>
+            {{ v }} <span class="muted">({{ n }})</span>{% if v == c.na_lista %} <span class="muted">— ativo</span>{% endif %}</label>
+          {% endif %}{% endfor %}
+        </fieldset></td></tr>
+      {% endfor %}
+      </tbody>
+    </table>
+    <details class="small"><summary>Outro atributo ou valor</summary>
+      <label class="small"><input type="radio" name="escolha" value="outro"> Usar:</label>
+      <select name="atributo_outro" aria-label="Atributo">{% for a in status.attrs %}<option>{{ a }}</option>{% endfor %}</select>
+      <input type="text" name="valor_outro" maxlength="120" placeholder="valor não ativo" aria-label="Valor">
+    </details>
+    <label class="small"><input type="checkbox" name="apagar" value="1" checked> Apagar o certificado de teste no fim (também testa a permissão de apagar)</label>
+    <label class="small"><input type="checkbox" name="confirmo" value="1" required> Percebo que é criado na UCMDB um certificado de teste (<span class="mono">certwatch-teste-….invalid</span>).</label>
+    <div><button class="primary">Criar o certificado de teste</button></div>
+  </form>
+</section>
+{% endif %}
+
+{% if created %}
+<section class="card mt" aria-label="Resultado do teste de criação">
+  <h2>Resultado do teste de criação</h2>
+  <table class="compact">
+    <thead><tr><th>Passo</th><th>Chamada</th><th>Resultado</th><th>Detalhe</th></tr></thead>
+    <tbody>
+    {% for st in created.steps %}
+    <tr><td>{{ st.what }}</td><td class="mono small">{{ st.call }}</td>
+      <td>{% if st.ok %}<span class="tag tag-ok">ok</span>{% elif st.ok is sameas false %}<span class="tag tag-err">não</span>{% else %}<span class="tag tag-run">inconclusivo</span>{% endif %}</td>
+      <td class="small">{{ st.detail }}</td></tr>
+    {% endfor %}
+    </tbody>
+  </table>
+  {% if created.created_id and not created.left_behind %}
+  <div class="note mt">A conta <b>pode criar e apagar certificados</b> pela REST API. O certificado de teste já foi apagado.</div>
+  {% elif created.left_behind %}
+  <div class="note warn mt">O certificado de teste <b>ficou na UCMDB</b> (CI <span class="mono">{{ created.created_id }}</span>, nome <span class="mono">certwatch-teste-….invalid</span>). Apague-o na UCMDB{{ ' ou peça a quem tenha permissão' }}.</div>
+  {% endif %}
+</section>
+{% endif %}
 
 {% if rep %}
 <section class="card mt" aria-label="Resultado">
