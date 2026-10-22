@@ -8,3 +8,4 @@ cryptography>=42
 python-multipart>=0.0.9
 openpyxl>=3.1,<4
 tzdata
+paramiko>=3.4,<5

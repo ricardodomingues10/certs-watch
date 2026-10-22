@@ -32,7 +32,7 @@
   </li>
   <li class="{{ 'is-ok' if pub_ok else 'is-bad' }}">
     <h3>Pasta de rede</h3>
-    <span class="st">{{ 'Montada, com escrita' if pub_ok else ('Sem permissão de escrita' if folder.existe else 'Não montada') }}</span>
+    <span class="st">{% if folder.modo == 'sftp' %}{{ 'SFTP configurado' if pub_ok else 'SFTP incompleto' }}{% else %}{{ 'Montada, com escrita' if pub_ok else ('Sem permissão de escrita' if folder.existe else 'Não montada') }}{% endif %}</span>
     <span class="sub">{% if last_pub %}Última publicação {{ last_pub.at|dtt }} por {{ last_pub.by }}{{ '' if last_pub.ok else ' (com erros)' }}{% else %}Ainda sem publicações{% endif %}</span>
   </li>
 </ol>
@@ -71,9 +71,25 @@
 
 <section class="card" id="pasta">
   <h2>Pasta de rede</h2>
-  {% if request.query_params.get('teste') %}
-  <div class="note {{ '' if request.query_params.get('teste') == 'ok' else 'bad' }}">{{ 'Teste de escrita: ' }}{{ request.query_params.get('msg', '') }}</div>
-  {% endif %}
+  {% set tq = request.query_params.get('teste') %}
+  {% if tq %}<div class="note {{ 'bad' if tq == 'falhou' else '' }}">{{ 'Teste: ' if tq != 'info' }}{{ request.query_params.get('msg', '') }}</div>{% endif %}
+  {% if folder.modo == 'sftp' %}
+  <dl class="kv">
+    <dt>Destino (SFTP)</dt><dd class="mono small">{{ folder.pasta }}</dd>
+    <dt>Autenticação</dt><dd class="small">{{ {'chave': 'chave SSH no segredo publish_ssh', 'password': 'password no segredo publish_ssh'}.get(folder.autenticacao, 'password pedida em cada publicação (não é guardada)') }}</dd>
+    <dt>Servidor SSH</dt><dd class="small">{% if folder.hostkeys %}<span class="mono">{{ folder.hostkeys|join(', ') }}</span>{% else %}<span class="tag tag-err">impressão digital por definir</span>{% endif %}</dd>
+  </dl>
+  {% if folder.detalhe %}<p class="small">{{ folder.detalhe }}</p>{% endif %}
+  <form method="post" action="/cmdb-final/testar-pasta" class="stack mt">
+    <input type="hidden" name="csrf" value="{{ csrf }}">
+    {% if folder.pede_password %}<label class="small">Password da conta SSH (só para este teste; não é guardada)
+      <input type="password" name="ssh_password" autocomplete="off" required></label>{% endif %}
+    <div><button>Testar ligação e escrita</button></div>
+  </form>
+  <form method="post" action="/cmdb-final/impressao-digital" class="mt"><input type="hidden" name="csrf" value="{{ csrf }}">
+    <button class="link">Ver a impressão digital do servidor SSH</button></form>
+  <p class="small muted">Os ficheiros são enviados por SFTP para a pasta de rede montada no outro servidor. O certwatch confirma a impressão digital do servidor antes de enviar credenciais. Ver README, "Pasta de rede".</p>
+  {% else %}
   <dl class="kv">
     <dt>Pasta no certwatch</dt><dd class="mono small">{{ folder.pasta }}</dd>
     <dt>Estado</dt><dd>{% if pub_ok %}<span class="tag tag-ok">montada, com escrita</span>{% elif folder.existe %}<span class="tag tag-err">sem escrita</span>{% else %}<span class="tag tag-err">não montada</span>{% endif %}</dd>
@@ -88,6 +104,7 @@
   {% endif %}
   <form method="post" action="/cmdb-final/testar-pasta" class="mt"><input type="hidden" name="csrf" value="{{ csrf }}"><button>Testar escrita</button></form>
   <p class="small muted">O teste cria e apaga um ficheiro temporário na pasta. A montagem é configurada no servidor (ver README, "Pasta de rede").</p>
+  {% endif %}
 </section>
 </div>
 

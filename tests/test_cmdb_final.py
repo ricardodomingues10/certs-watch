@@ -550,3 +550,29 @@ def test_exclusion_unblocks(settings):
         bad = [c["chave"] for c in run.changes if c["fonte"] == "CA2"]
         cf.apply_selection(s, run, bad, set(), "ana")
         assert run.status == "pronto" and run.csv and not run.validation
+
+
+def test_exclude_from_compare_page(settings, monkeypatch):
+    from fastapi.testclient import TestClient
+    from certwatch.web import app as webapp
+    monkeypatch.setattr(webapp, "get_settings", lambda: settings)
+    (settings.import_dir / "ca1.csv").write_bytes(CA1)
+    (settings.import_dir / "ca2.xlsx").write_bytes(ca2_xlsx())
+    (settings.import_dir / "avi.csv").write_bytes(AVI)
+    with session_scope() as s:
+        run_id = cf.start_run(s, "admin").id
+    cf.generate(run_id, settings, fetch=_fetch, live_factory=lambda s, st: live, today=TODAY)
+    AUTH = ("admin", "teste-admin-123")
+    with TestClient(webapp.app) as c:
+        url = f"/cmdb-final/comparar?origem=geracao:{run_id}&vista=todos"
+        page = c.get(url, auth=AUTH).text
+        assert 'name="incluir"' in page and "Guardar seleção e refazer os ficheiros" in page
+        token = c.cookies["cw_csrf"]
+        with session_scope() as s:
+            keys = {ch["cn"]: ch["chave"] for ch in s.get(FinalRun, run_id).changes}
+        r = c.post(f"/cmdb-final/{run_id}/selecao", data={"csrf": token, "next": url,
+                                                         "k": [keys["novo-avi.exemplo.pt"], keys["renovado.exemplo.pt"]],
+                                                         "incluir": [keys["renovado.exemplo.pt"]]}, auth=AUTH)
+        assert r.status_code == 200 and "1 já excluída" in r.text and "novo-avi.exemplo.pt" not in r.text
+    with session_scope() as s:
+        assert "novo-avi.exemplo.pt" not in s.get(FinalRun, run_id).csv.decode()

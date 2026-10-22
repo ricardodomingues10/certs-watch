@@ -482,5 +482,6 @@ class EmailReport(Base):
     desde: Mapped[int] = mapped_column(Integer, default=0)
     ate: Mapped[int] = mapped_column(Integer, default=90)
     alerta: Mapped[int] = mapped_column(Integer, default=20)
+    ct_dias: Mapped[int] = mapped_column(Integer, default=30)     # internet: encontrados nos últimos N dias (0 = todos)
     excluded: Mapped[list] = mapped_column(JSON, default=list)
     sends: Mapped[list] = mapped_column(JSON, default=list)

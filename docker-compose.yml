@@ -8,11 +8,11 @@ name: certwatch
 
 x-app: &app
   build: .
-  image: certwatch:0.10.0
+  image: certwatch:0.11.0
   network_mode: host
   restart: unless-stopped
   env_file: .env
-  secrets: [db_password, ucmdb_user, ucmdb_password, admin_password, smax_user, smax_password, smtp_password]
+  secrets: [db_password, ucmdb_user, ucmdb_password, admin_password, smax_user, smax_password, smtp_password, publish_ssh]
   volumes:
     - ./trust:/app/trust:ro
     - ./import:/app/import:ro
@@ -79,6 +79,10 @@ secrets:
   # (touch secrets/smtp_password)
   smtp_password:
     file: ./secrets/smtp_password
+  # Publicação por SFTP noutro servidor (opcional): chave privada SSH dedicada (recomendado) ou password.
+  # Vazio = a password é pedida na página em cada publicação e nunca guardada. (touch secrets/publish_ssh)
+  publish_ssh:
+    file: ./secrets/publish_ssh
 
 volumes:
   pgdata:

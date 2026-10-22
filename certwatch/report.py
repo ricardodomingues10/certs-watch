@@ -15,7 +15,7 @@ import io
 import re
 import smtplib
 import ssl
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from email.message import EmailMessage
 from email.utils import formatdate, make_msgid
 from zoneinfo import ZoneInfo
@@ -25,7 +25,8 @@ from sqlalchemy.orm import Session
 from .config import Settings
 from .db import as_utc, utcnow
 
-PARTS = {"alertas": "Alertas", "reconciliacao": "Reconciliação com o Excel em anexo"}
+PARTS = {"alertas": "Alertas", "reconciliacao": "Reconciliação com o Excel em anexo",
+         "internet": "Certificados novos na internet, para aprovação"}
 _EMAIL = re.compile(r"^[A-Za-z0-9.!#$%&'*+/=?^_`{|}~-]+@[A-Za-z0-9-]+(\.[A-Za-z0-9-]+)+$")
 MAX_TO = 20
 
@@ -105,13 +106,47 @@ def analyse(row: dict, alert_days: int) -> tuple[str, str]:
     return "SEM_TICKET_ATIVO", " ".join(obs + [f"Só pedidos fechados (último: {t['ultimo_fechado']})."])
 
 
-def select_rows(rows: list[dict], desde: int, ate: int, excluded: set[str] | None = None) -> dict:
+def internet_rows(session: Session, settings: Settings, dias: int = 0, now: datetime | None = None) -> list[dict]:
+    """Certificados encontrados na internet (CT) que não estão na CMDB, ainda válidos e não ignorados na triagem.
+    dias > 0: só os encontrados pela primeira vez nos últimos N dias."""
+    from .discovery import classify_ct
+    now = now or utcnow()
+    tz = ZoneInfo(settings.timezone)
+    since = now - timedelta(days=dias) if dias > 0 else None
+    out = []
+    for r in classify_ct(session, settings, now):
+        ct = r["ct"]
+        if r["state"] == "na_cmdb" or r["expired"] or ct.triage == "ignorar":
+            continue
+        if since and as_utc(ct.first_seen) < since:
+            continue
+        names = list(ct.names or [])
+        nome = ct.primary_name or (names[0] if names else "")
+        crt = (ct.source_ids or {}).get("crtsh")
+        out.append({
+            "key": f"ct:{ct.id}", "id": ct.id, "nome": nome, "outros": [n for n in names if n != nome],
+            "estado": r["state"], "emissor": ct.issuer_cn or "", "serie": (ct.serial_hex or "").upper(),
+            "desde": as_utc(ct.not_before).astimezone(tz).date() if ct.not_before else None,
+            "ate": as_utc(ct.not_after).astimezone(tz).date() if ct.not_after else None,
+            "dias": r["days"], "no_servidor": "Sim" if r["live"] else "Não", "triagem": ct.triage,
+            "visto": as_utc(ct.first_seen).astimezone(tz).date() if ct.first_seen else None,
+            "cmdb": "; ".join(f"{c[0]} até {c[1]:%d/%m/%Y}" if c[1] else c[0] for c in r["cmdb"]),
+            "link": f"https://crt.sh/?id={crt}" if crt and str(crt).isdigit() else f"https://crt.sh/?q={nome}",
+        })
+    out.sort(key=lambda x: (x["estado"] != "desconhecido", x["nome"]))
+    return out
+
+
+def select_rows(rows: list[dict], desde: int, ate: int, excluded: set[str] | None = None,
+                internet: list[dict] | None = None) -> dict:
     excluded = excluded or set()
     window = [r for r in rows if desde <= r["dias"] <= ate]
     renewed = [r for r in rows if r["cmdb_atualizada"] == "Não"]
     pick = lambda xs: [r for r in xs if r["cn"] not in excluded]
+    internet = internet or []
     return {"janela": pick(window), "renovados": pick(renewed),
-            "todos_janela": window, "todos_renovados": renewed}
+            "todos_janela": window, "todos_renovados": renewed,
+            "internet": [r for r in internet if r["key"] not in excluded], "todos_internet": internet}
 
 
 # ------------------------------------------------------------------ HTML (estilos inline, como no workflow)
@@ -180,8 +215,42 @@ def reconciliation_html(sel: dict) -> str:
     return note + "<p>Segue em anexo o ficheiro Excel com o detalhe da análise, incluindo a verificação dos servidores.</p>"
 
 
+def internet_html(sel: dict, ct_dias: int) -> str:
+    rows = sel["internet"]
+    quando = f"nos últimos {ct_dias} dias" if ct_dias > 0 else "até à data"
+    if not rows:
+        return (f"<p><strong>Certificados novos na internet:</strong> {quando} não foram encontrados certificados "
+                "emitidos para os domínios da organização que não constem da CMDB.</p>")
+    desconhecidos = [r for r in rows if r["estado"] == "desconhecido"]
+    diferentes = [r for r in rows if r["estado"] != "desconhecido"]
+
+    def table(data: list[dict], with_cmdb: bool) -> str:
+        if not data:
+            return "<p><em>Não foram identificados certificados nesta categoria.</em></p>"
+        head = (f"<th {_TH}>Nome</th><th {_TH}>Outros nomes</th><th {_TH}>Emissor</th><th {_TH}>Válido até</th>"
+                f"<th {_TH}>No servidor?</th>" + (f"<th {_TH}>Na CMDB</th>" if with_cmdb else ""))
+        body = "".join(
+            f"<tr><td {_TD}>{_e(r['nome'])}</td><td {_TD}>{_e(', '.join(r['outros'][:6]) + (' …' if len(r['outros']) > 6 else '') or '—')}</td>"
+            f"<td {_TD}>{_e(r['emissor'])}</td><td {_TD}>{_d(r['ate'])}</td><td {_TD}>{_e(r['no_servidor'])}</td>"
+            + (f"<td {_TD}>{_e(r['cmdb'])}</td>" if with_cmdb else "") + "</tr>" for r in data)
+        return ('<table style="border-collapse:collapse;font-family:Arial,sans-serif;font-size:14px;">'
+                f"<thead><tr>{head}</tr></thead><tbody>{body}</tbody></table>")
+
+    return (f"<p>Foram encontrados na internet (registos públicos de Certificate Transparency), {quando}, "
+            f"<strong>{len(rows)} certificado(s)</strong> emitido(s) para os domínios da organização que não constam da CMDB. "
+            "Pedimos à equipa de Sistemas que confirme, para cada um, se é conhecido e deve ser registado na CMDB, "
+            "indicando Aprovado ou Não aprovado na resposta a este email ou na coluna \"Aprovado\" do Excel em anexo.</p>"
+            f"<p>Nomes que não existem na CMDB:</p>{table(desconhecidos, False)}"
+            f"<p>Nomes que já existem na CMDB, mas com outro certificado (outra data de fim):</p>{table(diferentes, True)}"
+            "<p>Segue em anexo o ficheiro Excel com o detalhe de cada certificado.</p>")
+
+
 def subject_for(part: str, sel: dict, desde: int, ate: int, alert_days: int) -> str:
     alerta = [r for r in sel["janela"] if 0 <= r["dias"] <= alert_days]
+    if part == "internet":
+        n = len(sel.get("internet") or [])
+        return (f"Aprovação | {n} certificado(s) novo(s) encontrado(s) na internet" if n
+                else "Certificados encontrados na internet | nada novo")
     if part in ("alertas", "ambos"):
         if alerta:
             return f"ALERTA | {len(alerta)} certificado(s) a {alert_days} dias ou menos da expiração"
@@ -191,12 +260,16 @@ def subject_for(part: str, sel: dict, desde: int, ate: int, alert_days: int) -> 
             else "Reconciliação de certificados | CMDB coincide com os servidores")
 
 
-def email_html(part: str, sel: dict, desde: int, ate: int, alert_days: int, signature: str, now: datetime) -> str:
+def email_html(part: str | list[str], sel: dict, desde: int, ate: int, alert_days: int, signature: str, now: datetime,
+               ct_dias: int = 0) -> str:
+    parts = {"ambos": ["alertas", "reconciliacao"]}.get(part, [part]) if isinstance(part, str) else list(part)
     body = ""
-    if part in ("alertas", "ambos"):
+    if "alertas" in parts:
         body += alerts_html(sel, desde, ate, alert_days)
-    if part in ("reconciliacao", "ambos"):
+    if "reconciliacao" in parts:
         body += reconciliation_html(sel)
+    if "internet" in parts:
+        body += internet_html(sel, ct_dias)
     sig = "<br>".join(_e(x) for x in signature.splitlines()) or "certwatch"
     return (f'<div style="font-family:Arial,sans-serif;font-size:14px;color:#222;"><p>{_greeting(now)}</p>{body}'
             f"<p>Cumprimentos,<br>{sig}</p></div>")
@@ -258,6 +331,44 @@ def excel_name(ate: int) -> str:
     return f"Certificados_{ate}_Dias.xlsx"
 
 
+INTERNET_COLUMNS = ["Nome", "Outros_Nomes", "Situacao", "Emissor", "Numero_Serie", "Valido_De", "Valido_Ate",
+                    "Dias_Para_Expirar", "Visto_No_Servidor", "Na_CMDB", "Triagem", "Encontrado_Em", "Link_crt_sh",
+                    "Aprovado (Sim/Não)", "Observações"]
+INTERNET_EXCEL = "Certificados_Internet.xlsx"
+
+
+def internet_excel(sel: dict) -> bytes:
+    from openpyxl import Workbook
+    from openpyxl.cell import WriteOnlyCell
+    from openpyxl.styles import Font, PatternFill
+    from .discovery import CT_STATES, TRIAGE_LABELS
+    wb = Workbook(write_only=True)
+    ws = wb.create_sheet("Internet")
+    head = []
+    for c in INTERNET_COLUMNS:
+        cell = WriteOnlyCell(ws, value=c)
+        cell.font = Font(bold=True)
+        cell.fill = PatternFill("solid", fgColor="FFFFF2CC" if c.startswith(("Aprovado", "Observ")) else "FFF2F2F2")
+        head.append(cell)
+    ws.append(head)
+    for r in sel["internet"]:
+        values = [r["nome"], ", ".join(r["outros"]), CT_STATES.get(r["estado"], r["estado"]), r["emissor"], r["serie"],
+                  r["desde"], r["ate"], r["dias"], r["no_servidor"], r["cmdb"], TRIAGE_LABELS.get(r["triagem"], r["triagem"]),
+                  r["visto"], r["link"], "", ""]
+        cells = []
+        for v in values:
+            cell = WriteOnlyCell(ws, value=v)
+            if isinstance(v, date):
+                cell.number_format = "DD/MM/YYYY"
+            elif isinstance(v, str):
+                cell.data_type = "s"
+            cells.append(cell)
+        ws.append(cells)
+    buf = io.BytesIO()
+    wb.save(buf)
+    return buf.getvalue()
+
+
 # ------------------------------------------------------------------ envio
 def parse_recipients(value: str, settings: Settings) -> list[str]:
     out = []
@@ -293,7 +404,7 @@ def smtp_problems(settings: Settings) -> list[str]:
 
 
 def build_message(settings: Settings, to: list[str], subject: str, html_body: str,
-                  attachment: tuple[str, bytes] | None) -> EmailMessage:
+                  attachment: tuple[str, bytes] | list[tuple[str, bytes]] | None) -> EmailMessage:
     msg = EmailMessage()
     msg["From"] = settings.smtp_from
     msg["To"] = ", ".join(to)
@@ -304,9 +415,9 @@ def build_message(settings: Settings, to: list[str], subject: str, html_body: st
     text = html.unescape(re.sub(r"<[^>]+>", " ", text))
     msg.set_content(re.sub(r"[ \t]+", " ", re.sub(r"\n\s*\n+", "\n\n", text)).strip())
     msg.add_alternative(html_body, subtype="html")
-    if attachment:
-        msg.add_attachment(attachment[1], maintype="application",
-                           subtype="vnd.openxmlformats-officedocument.spreadsheetml.sheet", filename=attachment[0])
+    for name, data in ([attachment] if isinstance(attachment, tuple) else (attachment or [])):
+        msg.add_attachment(data, maintype="application",
+                           subtype="vnd.openxmlformats-officedocument.spreadsheetml.sheet", filename=name)
     return msg
 
 

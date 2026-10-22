@@ -2,7 +2,7 @@
 {% block title %}Relatório por email{% endblock %}
 {% block crumb %}Operação{% endblock %}
 {% block page_title %}Relatório por email{% endblock %}
-{% block lede %}Envia os certificados que expiram num intervalo à sua escolha, em duas partes: os alertas (a N dias ou menos da expiração, internos e externos) e a reconciliação (renovados no servidor e ainda não refletidos na CMDB) com o Excel de análise. Pode enviar uma parte, a outra, ou as duas juntas ou separadas.{% endblock %}
+{% block lede %}Até três partes, que se enviam sozinhas, juntas num email ou em emails separados: os alertas (certificados a N dias ou menos da expiração, internos e externos, no intervalo à sua escolha), a reconciliação (renovados no servidor e ainda não refletidos na CMDB, com o Excel de análise) e os certificados novos encontrados na internet, para a equipa de Sistemas aprovar (com Excel).{% endblock %}
 {% block content %}
 {% if problems %}<div class="note warn">O envio ainda não está configurado: {{ problems|join('; ') }}. Pode preparar e pré-visualizar; para enviar, ver README ("Relatório por email").</div>{% endif %}
 <section class="card">
@@ -12,6 +12,7 @@
     <label class="small">Expiram de <input type="number" name="desde" value="0" min="-365" max="3650" required> dias</label>
     <label class="small">até <input type="number" name="ate" value="{{ settings.report_window_days }}" min="-365" max="3650" required> dias</label>
     <label class="small">Alerta a <input type="number" name="alerta" value="{{ settings.report_alert_days }}" min="0" max="3650" required> dias ou menos</label>
+    <label class="small">Internet: encontrados nos últimos <input type="number" name="ct_dias" value="30" min="0" max="3650" required> dias (0 = todos)</label>
     <button class="primary">Preparar e pré-visualizar</button>
   </form>
   <p class="small muted">Os dias contam-se até à validade efetiva: a que o servidor apresenta, quando foi verificado, ou a da CMDB. Use um início negativo para incluir certificados já expirados.</p>

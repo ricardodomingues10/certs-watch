@@ -58,12 +58,20 @@
   <button>Filtrar</button>
 </form>
 
+{% if edit %}
+<form method="post" action="/cmdb-final/{{ edit.run }}/selecao">
+<input type="hidden" name="csrf" value="{{ csrf }}"><input type="hidden" name="next" value="{{ here }}">
+<div class="selbar"><span class="small">Desmarque as linhas novas ou alteradas que não devem entrar nos ficheiros da geração #{{ edit.run }}.
+  {% if edit.excluidas %}<a href="/cmdb-final/{{ edit.run }}?vista=alteracoes&amp;incluida=nao">{{ edit.excluidas }} já excluída{{ 's' if edit.excluidas != 1 }}</a> (para voltar a incluir).{% endif %}</span>
+  <button class="primary">Guardar seleção e refazer os ficheiros</button></div>
+{% endif %}
 <div class="card flush scroll">
 <table>
-  <thead><tr><th>Certificado</th><th>Situação</th><th>Validade</th><th>Issuer</th><th>IssuerName</th></tr></thead>
+  <thead><tr>{% if edit %}<th>Incluir</th>{% endif %}<th>Certificado</th><th>Situação</th><th>Validade</th><th>Issuer</th><th>IssuerName</th></tr></thead>
   <tbody>
-  {% for r in rows %}
+  {% for r in rows %}{% set ch = edit.by_line.get(r.linha) if edit and r.linha else none %}
   <tr>
+    {% if edit %}<td>{% if ch %}<input type="hidden" name="k" value="{{ ch.chave }}"><input type="checkbox" name="incluir" value="{{ ch.chave }}" checked aria-label="Incluir {{ r.cn }}">{% else %}<span class="muted small" title="Linha sem alteração: não há nada a excluir">—</span>{% endif %}</td>{% endif %}
     <td><span class="mono">{{ r.cn or r.c_cn or '(sem nome)' }}</span>
       <div class="small muted">Global Id {{ r.global_id or '—' }}{{ ' · linha ' ~ r.linha if r.linha }}</div>
       {% if r.cor %}<span class="tag {{ {'novo': 'tag-ok', 'alterado': 'tag-run', 'expirado': 'tag-err'}[r.cor] }}" title="Cor da linha no ficheiro">{{ r.cor }} no ficheiro</span>{% endif %}</td>
@@ -77,11 +85,12 @@
     <td class="{{ 'dif' if 'issuer_name' in r.dif }}"><div class="pair"><span>ficheiro</span><span>{{ r.f_issuer_name or '—' }}</span><span>CMDB</span><span>{{ r.c_issuer_name or '—' }}</span></div></td>
   </tr>
   {% else %}
-  <tr><td colspan="5"><div class="empty"><b>Nada nesta vista</b>{{ 'Experimente outra vista ou limpe o filtro.' if q or marcadas else '' }}</div></td></tr>
+  <tr><td colspan="{{ 6 if edit else 5 }}"><div class="empty"><b>Nada nesta vista</b>{{ 'Experimente outra vista ou limpe o filtro.' if q or marcadas else '' }}</div></td></tr>
   {% endfor %}
   </tbody>
 </table>
 </div>
+{% if edit %}</form>{% endif %}
 {% if n_rows > rows|length %}<p class="small muted">A mostrar {{ rows|length }} de {{ n_rows }}. Exporte para ver todas.</p>{% endif %}
 {% endif %}
 {% endblock %}

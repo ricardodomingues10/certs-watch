@@ -32,7 +32,6 @@ import os
 import re
 import threading
 import unicodedata
-import uuid
 from dataclasses import dataclass, field
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
@@ -1251,13 +1250,24 @@ def latest_publishable(session: Session) -> FinalRun | None:
                           .order_by(FinalRun.id.desc()).limit(1))
 
 
-# ------------------------------------------------------------------ pasta de rede
+# ------------------------------------------------------------------ pasta de rede (local ou SFTP noutro servidor)
 def folder_status(settings: Settings) -> dict:
+    """Estado do destino para a página. Em SFTP não se liga (use "Testar ligação")."""
+    from . import publish_target as pt
+    desc = pt.describe(settings)
+    if desc["modo"] == "sftp":
+        ok = not desc["problemas"]
+        return {"modo": "sftp", "pasta": desc["destino"], "existe": ok, "gravavel": ok, "pede_password": desc["pede_password"],
+                "autenticacao": desc["autenticacao"], "hostkeys": settings.publish_ssh_hostkeys,
+                "ficheiros": [{"chave": k, "nome": n, "tamanho": None, "alterado": None, "desconhecido": True} for k, n in FILES.items()],
+                "detalhe": ("Destino SFTP incompleto: " + "; ".join(desc["problemas"]) + ".") if desc["problemas"] else ""}
     d = settings.publish_dir
-    out = {"pasta": str(d), "existe": d.is_dir(), "gravavel": False, "ficheiros": [], "detalhe": ""}
+    out = {"modo": "local", "pasta": str(d), "existe": d.is_dir(), "gravavel": False, "ficheiros": [], "detalhe": "",
+           "pede_password": False}
     if not out["existe"]:
         out["detalhe"] = (f"A pasta {d} não existe no container: a montagem não está configurada "
-                          "(CERTWATCH_PUBLISH_HOST_DIR no .env) ou não está montada no servidor.")
+                          "(CERTWATCH_PUBLISH_HOST_DIR no .env) ou não está montada no servidor. Se a pasta de rede só "
+                          "estiver montada noutro servidor, use a publicação por SFTP (README 5.1).")
         return out
     out["gravavel"] = os.access(d, os.W_OK)
     try:
@@ -1277,52 +1287,31 @@ def folder_status(settings: Settings) -> dict:
             out["ficheiros"].append({"chave": key, "nome": name, "tamanho": None, "alterado": None, "erro": str(exc)})
     if not out["gravavel"]:
         out["detalhe"] = (f"O certwatch (uid {os.getuid()}) não tem permissão de escrita na pasta "
-                          f"({out.get('dono', '')}).")
+                          f"({out.get('dono', '')}). Se a pasta de rede só estiver montada noutro servidor, "
+                          "use a publicação por SFTP (README 5.1).")
     return out
 
 
-def test_write(settings: Settings) -> tuple[bool, str]:
-    d = settings.publish_dir
-    if not d.is_dir():
-        return False, f"A pasta {d} não existe no container."
-    p = d / f".certwatch-teste-{uuid.uuid4().hex[:8]}.tmp"
+def test_write(settings: Settings, password: str | None = None, transport_factory=None) -> tuple[bool, str]:
+    from . import publish_target as pt
+    return pt.test(settings, password, transport_factory)
+
+
+def read_published(settings: Settings, name: str) -> bytes:
+    """Ficheiro que está agora no destino (sem password escrita: só local ou SFTP com segredo)."""
+    from . import publish_target as pt
     try:
-        p.write_bytes(b"certwatch")
-        ok = p.read_bytes() == b"certwatch"
-        p.unlink()
-        return ok, "Escrita, leitura e remoção funcionam." if ok else "O ficheiro escrito não foi lido corretamente."
+        with pt.open_target(settings) as t:
+            return t.read(name)
+    except pt.TargetError as exc:
+        raise FinalError(str(exc)) from None
     except OSError as exc:
-        try:
-            p.unlink()
-        except OSError:
-            pass
-        return False, f"Não foi possível escrever na pasta: {exc}"
+        raise FinalError(f"Não foi possível ler o ficheiro: {exc}") from None
 
 
-def _write_atomic(dest: Path, data: bytes) -> None:
-    tmp = dest.with_name(f".{dest.name}.certwatch-{uuid.uuid4().hex[:8]}.tmp")
-    try:
-        with open(tmp, "wb") as fh:
-            fh.write(data)
-            fh.flush()
-            os.fsync(fh.fileno())
-        try:
-            os.replace(tmp, dest)
-        except OSError:
-            # Algumas partilhas SMB não substituem por rename: escreve diretamente
-            with open(dest, "wb") as fh:
-                fh.write(data)
-                fh.flush()
-                os.fsync(fh.fileno())
-    finally:
-        if tmp.exists():
-            try:
-                tmp.unlink()
-            except OSError:
-                pass
-
-
-def publish(session: Session, settings: Settings, run: FinalRun, keys: list[str], actor: str) -> FinalPublish:
+def publish(session: Session, settings: Settings, run: FinalRun, keys: list[str], actor: str,
+            password: str | None = None, transport_factory=None) -> FinalPublish:
+    from . import publish_target as pt
     if run.status != "pronto":
         raise FinalError("Só se publica uma geração pronta (sem erros nem bloqueios).")
     newest = session.scalar(select(FinalRun.id).where(FinalRun.status.in_(("pronto", "bloqueado")))
@@ -1332,38 +1321,41 @@ def publish(session: Session, settings: Settings, run: FinalRun, keys: list[str]
     keys = [k for k in FILES if k in keys]
     if not keys:
         raise FinalError("Escolha pelo menos um ficheiro.")
-    d = settings.publish_dir
-    if not d.is_dir():
-        raise FinalError(f"A pasta de rede não está disponível ({d}).")
-    pub = FinalPublish(run_id=run.id, by=actor, folder=str(d))
-    session.add(pub)
-    session.flush()
-    all_ok = True
-    for k in keys:
-        data = run_file(run, k)
-        name = FILES[k]
-        f = FinalPublishFile(publish_id=pub.id, name=name)
-        if data is None:
-            f.error, all_ok = "Ficheiro não disponível nesta geração.", False
+    try:
+        target = pt.open_target(settings, password, transport_factory).__enter__()
+    except pt.TargetError as exc:
+        raise FinalError(str(exc)) from None
+    try:
+        pub = FinalPublish(run_id=run.id, by=actor, folder=target.label[:512])
+        session.add(pub)
+        session.flush()
+        all_ok = True
+        for k in keys:
+            data = run_file(run, k)
+            name = FILES[k]
+            f = FinalPublishFile(publish_id=pub.id, name=name)
+            if data is None:
+                f.error, all_ok = "Ficheiro não disponível nesta geração.", False
+                session.add(f)
+                continue
+            f.sha256, f.size = hashlib.sha256(data).hexdigest(), len(data)
+            try:
+                info = target.info(name)
+                if info is not None:
+                    f.previous_mtime = info.mtime
+                    if info.size <= MAX_BACKUP:
+                        prev = target.read(name)
+                        f.previous, f.previous_sha256 = prev, hashlib.sha256(prev).hexdigest()
+                target.write(name, data)
+                f.ok = hashlib.sha256(target.read(name)).hexdigest() == f.sha256
+                if not f.ok:
+                    f.error = "O ficheiro na pasta não corresponde ao que foi escrito."
+            except Exception as exc:     # erro de escrita/ligação num ficheiro: regista e continua
+                f.error = f"{type(exc).__name__}: {exc}"[:500]
+            all_ok = all_ok and f.ok
             session.add(f)
-            continue
-        f.sha256, f.size = hashlib.sha256(data).hexdigest(), len(data)
-        dest = d / name
-        try:
-            if dest.exists():
-                st = dest.stat()
-                f.previous_mtime = datetime.fromtimestamp(st.st_mtime, tz=timezone.utc)
-                if st.st_size <= MAX_BACKUP:
-                    prev = dest.read_bytes()
-                    f.previous, f.previous_sha256 = prev, hashlib.sha256(prev).hexdigest()
-            _write_atomic(dest, data)
-            f.ok = hashlib.sha256(dest.read_bytes()).hexdigest() == f.sha256
-            if not f.ok:
-                f.error = "O ficheiro na pasta não corresponde ao que foi escrito."
-        except OSError as exc:
-            f.error = f"{type(exc).__name__}: {exc}"
-        all_ok = all_ok and f.ok
-        session.add(f)
+    finally:
+        target.__exit__(None, None, None)
     session.flush()
     pub.ok = all_ok
     pub.result = [{"nome": f.name, "ok": f.ok, "erro": f.error, "tamanho": f.size}

@@ -1,4 +1,4 @@
-# certwatch 0.10
+# certwatch 0.11
 
 Aplicação autónoma de gestão de certificados X.509 de uma organização. Não depende do n8n.
 
@@ -183,6 +183,7 @@ Página **Atualizar a CMDB**. Faz o mesmo que o workflow n8n "Reconciliação de
    - "Guardar seleção" refaz os três ficheiros e volta a validá-los. Excluir um certificado novo sem emissor desbloqueia os CSV.
    - A escolha fica guardada para as gerações seguintes (mesmo CommonName e mesma nova data).
    - Por omissão, as alterações vindas da internet só vêm incluídas se o certificado estiver marcado "Adicionar à CMDB" na página **Na internet**.
+3a. **Na comparação com a CMDB** de uma geração, as linhas novas ou alteradas também têm a caixa **Incluir**. Desmarcar e guardar refaz os ficheiros dessa geração.
 4. **Publicar na pasta de rede**: escreve os três ficheiros na pasta, depois de confirmação. O que lá estava fica guardado no certwatch e pode ser descarregado. Só a geração mais recente pode ser publicada, e só se não estiver bloqueada.
 5. **Comparar com a CMDB**: compara um CMDB_Final (de uma geração, o que está na pasta de rede ou um carregado, incluindo o do n8n) com a CMDB atual, linha a linha, pelo Global Id ou, nas linhas novas, pelo CommonName. Mostra as diferenças de data de validade (ao dia), Issuer e IssuerName. Antes de publicar, mostra o que vai mudar. Depois de a UCMDB importar o `certs_update`, mostra o que ficou por aplicar.
 
@@ -215,6 +216,41 @@ Com os mesmos dados, os ficheiros gerados são iguais byte a byte aos do workflo
 **Colunas**: os atributos da UCMDB passam a colunas com os cabeçalhos do export (`[Digital Certificate] : CommonName`). Se o layout do TQL só tiver alguns atributos, os restantes são pedidos à REST API (`CERTWATCH_FINAL_ENRICH=auto`). A correspondência atributo → coluna é automática (`issuer_name` → IssuerName, `responsabilidade_instalacao` → Responsabilidade de instalação). Para corrigir: na geração, separador **Colunas**, descarregue o modelo `cmdb-colunas.csv`, ajuste-o e coloque-o em `import/`. Em cada linha fica `atributo;coluna`; a coluna vazia exclui o atributo e a ordem das linhas é a ordem das colunas.
 
 ### Pasta de rede
+
+Há duas formas de publicar:
+- **`local`**: a pasta está montada neste servidor.
+- **`sftp`**: a pasta de rede só está montada noutro servidor, a que se chega por SSH.
+
+#### Pasta noutro servidor (SFTP)
+
+O certwatch envia os ficheiros por SFTP para a pasta montada nesse servidor. As credenciais nunca vão para a base de dados, para os logs nem para a página.
+
+1. **Chave dedicada** (recomendado). No servidor do certwatch:
+   ```
+   ssh-keygen -t ed25519 -N "" -C certwatch-publicacao -f secrets/publish_ssh
+   sudo chown 10001 secrets/publish_ssh && chmod 400 secrets/publish_ssh
+   ```
+2. **No outro servidor**, ponha o conteúdo de `secrets/publish_ssh.pub` no `~/.ssh/authorized_keys` da conta que escreve na pasta, limitado ao IP do servidor do certwatch:
+   ```
+   restrict,from="<IP do servidor do certwatch>" ssh-ed25519 AAAA… certwatch-publicacao
+   ```
+   Se a conta for só para isto, limite-a a SFTP no `sshd_config`: `Match User <conta>` e `ForceCommand internal-sftp`.
+3. **Impressão digital do servidor SSH**: no outro servidor, `ssh-keygen -lf /etc/ssh/ssh_host_ed25519_key.pub`. O botão "Ver a impressão digital do servidor SSH" da página mostra a que o certwatch recebe, e as duas têm de coincidir. Se não coincidir, a ligação é cortada antes de enviar credenciais.
+4. **`.env`**:
+   ```
+   CERTWATCH_PUBLISH_MODE=sftp
+   CERTWATCH_PUBLISH_SSH_HOST=<servidor>
+   CERTWATCH_PUBLISH_SSH_USER=<conta>
+   CERTWATCH_PUBLISH_SSH_PATH=<caminho da pasta montada nesse servidor>
+   CERTWATCH_PUBLISH_SSH_HOSTKEY=SHA256:…
+   ```
+5. `docker compose build && docker compose up -d`, e na página: **Testar ligação e escrita**.
+
+**Sem chave: password pedida em cada publicação.** Deixe `secrets/publish_ssh` vazio (`touch secrets/publish_ssh`). A página pede a password da conta SSH ao testar e ao publicar. A password é usada só nessa ligação: não é guardada, não vai para a auditoria e não aparece nos logs. O segredo também aceita uma password em vez de uma chave, mas a chave é preferível, porque pode ficar limitada ao IP e a SFTP.
+
+Nos dois casos, os ficheiros são escritos com um nome temporário e renomeados. Numa pasta CIFS sem rename com substituição, são escritos diretamente. No fim, são lidos de volta para confirmar o conteúdo. O que lá estava antes fica guardado no certwatch.
+
+#### Pasta montada neste servidor (local)
 
 A pasta é montada no servidor e passada ao container em `/app/publicar`. No `.env`:
 
@@ -338,9 +374,10 @@ Página **Relatório por email**. Escolhe-se:
 Depois pré-visualiza-se e envia-se:
 - **Alertas**: caixa de alerta com os certificados a N dias ou menos (com os dias restantes) e as tabelas dos internos e externos do intervalo. As tabelas têm as colunas CommonName, ValidTo, Alteração (pedido aberto, vários pedidos ou sem pedido ativo) e Renovação automática.
 - **Reconciliação**: os certificados cujo servidor já apresenta uma validade posterior à da CMDB, com o Excel `Certificados_<Y>_Dias.xlsx` em anexo. O Excel tem a análise de cada certificado: validades, pedidos e Estado_Analise.
-- **As duas partes**, num só email ou em dois.
+- **Certificados novos na internet, para aprovação**: os certificados encontrados na internet (Certificate Transparency) nos últimos N dias que não estão na CMDB e não foram ignorados na triagem. Ficam separados em "nome desconhecido" e "nome já na CMDB, com outro certificado". O email pede à equipa de Sistemas que aprove ou não o registo de cada um e leva em anexo `Certificados_Internet.xlsx`, com uma coluna "Aprovado (Sim/Não)" para preencher.
+- **Várias partes**: num só email ou um email por parte.
 
-Configuração no `.env`: `CERTWATCH_SMTP_HOST`, `_PORT`, `_SECURITY` (starttls/ssl/none), `_FROM` e `_USER`. A password vai no segredo `secrets/smtp_password`. Este ficheiro tem de existir, nem que seja vazio (`touch secrets/smtp_password`). `CERTWATCH_REPORT_ALLOWED_DOMAINS` limita os destinatários aos domínios da organização. Os envios ficam registados no relatório e na auditoria.
+Configuração no `.env`: `CERTWATCH_SMTP_HOST`, `_PORT`, `_SECURITY` (starttls/ssl/none), `_FROM` e `_USER`. A password vai no segredo `secrets/smtp_password`. Este ficheiro tem de existir, nem que seja vazio (`touch secrets/smtp_password`), tal como `secrets/publish_ssh`. `CERTWATCH_REPORT_ALLOWED_DOMAINS` limita os destinatários aos domínios da organização. Os envios ficam registados no relatório e na auditoria.
 
 ## 8. Classificação
 

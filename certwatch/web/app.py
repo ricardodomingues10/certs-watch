@@ -912,7 +912,22 @@ def _report_or_404(s, rid: int) -> EmailReport:
 def _report_data(rep: EmailReport, settings):
     with session_scope() as s:
         rows = rp.build_rows(s, settings)
-    return rows, rp.select_rows(rows, rep.desde, rep.ate, set(rep.excluded or []))
+        internet = rp.internet_rows(s, settings, rep.ct_dias if rep.ct_dias is not None else 30)
+    return rows, rp.select_rows(rows, rep.desde, rep.ate, set(rep.excluded or []), internet)
+
+
+def _group_subject(group: list[str], sel: dict, rep: EmailReport) -> str:
+    key = "alertas" if "alertas" in group else ("reconciliacao" if "reconciliacao" in group else "internet")
+    return rp.subject_for(key, sel, rep.desde, rep.ate, rep.alerta)
+
+
+def _group_attachments(group: list[str], sel: dict, rep: EmailReport) -> list[tuple[str, bytes]]:
+    att = []
+    if "reconciliacao" in group:
+        att.append((rp.excel_name(rep.ate), rp.excel(sel, rep.alerta)))
+    if "internet" in group:
+        att.append((rp.INTERNET_EXCEL, rp.internet_excel(sel)))
+    return att
 
 
 @app.get("/relatorio")
@@ -927,12 +942,12 @@ def relatorio(request: Request, user: str = Depends(current_user)):
 
 @app.post("/relatorio")
 def relatorio_criar(request: Request, csrf: str = Form(""), desde: int = Form(0), ate: int = Form(90),
-                    alerta: int = Form(20), user: str = Depends(current_user)):
+                    alerta: int = Form(20), ct_dias: int = Form(30), user: str = Depends(current_user)):
     check_csrf(request, csrf)
-    if not (-365 <= desde <= ate <= 3650) or not (0 <= alerta <= 3650):
+    if not (-365 <= desde <= ate <= 3650) or not (0 <= alerta <= 3650) or not (0 <= ct_dias <= 3650):
         raise HTTPException(400, "Intervalo inválido: o início tem de ser menor ou igual ao fim.")
     with session_scope() as s:
-        rep = EmailReport(created_by=user, desde=desde, ate=ate, alerta=alerta, excluded=[], sends=[])
+        rep = EmailReport(created_by=user, desde=desde, ate=ate, alerta=alerta, ct_dias=ct_dias, excluded=[], sends=[])
         s.add(rep)
         s.flush()
         rid = rep.id
@@ -958,7 +973,8 @@ def relatorio_ver(request: Request, rid: int, user: str = Depends(current_user))
     return render(request, "relatorio_ver.html", user, rep=rep, janela=janela, extra=extra, excl=excl, sel=sel,
                   n_alerta=len(alerta), problems=rp.smtp_problems(settings), settings=settings,
                   para=prev_to or ", ".join(settings.report_to),
-                  assuntos={k: rp.subject_for(k, sel, rep.desde, rep.ate, rep.alerta) for k in ("alertas", "reconciliacao")},
+                  assuntos={k: rp.subject_for(k, sel, rep.desde, rep.ate, rep.alerta) for k in ("alertas", "reconciliacao", "internet")},
+                  internet=sel["todos_internet"], INTERNET_EXCEL=rp.INTERNET_EXCEL,
                   msg=request.query_params.get("msg", ""), erro=request.query_params.get("erro", ""))
 
 
@@ -977,14 +993,15 @@ async def relatorio_selecao(request: Request, rid: int, user: str = Depends(curr
 
 @app.get("/relatorio/{rid}/previsao/{parte}")
 def relatorio_previsao(rid: int, parte: str, user: str = Depends(current_user)):
-    if parte not in ("alertas", "reconciliacao", "ambos"):
+    if parte not in ("alertas", "reconciliacao", "internet", "ambos"):
         raise HTTPException(404)
     settings = get_settings()
     with session_scope() as s:
         rep = _report_or_404(s, rid)
         s.expunge(rep)
     _, sel = _report_data(rep, settings)
-    body = rp.email_html(parte, sel, rep.desde, rep.ate, rep.alerta, settings.report_signature, utcnow().astimezone(_tz()))
+    body = rp.email_html(parte, sel, rep.desde, rep.ate, rep.alerta, settings.report_signature, utcnow().astimezone(_tz()),
+                         rep.ct_dias or 0)
     page = f'<!doctype html><html lang="pt-PT"><head><meta charset="utf-8"></head><body style="margin:12px;background:#fff">{body}</body></html>'
     return Response(page, media_type="text/html; charset=utf-8", headers={
         "Content-Security-Policy": "default-src 'none'; style-src 'unsafe-inline'; frame-ancestors 'self'; sandbox",
@@ -992,15 +1009,16 @@ def relatorio_previsao(rid: int, parte: str, user: str = Depends(current_user)):
 
 
 @app.get("/relatorio/{rid}/excel")
-def relatorio_excel(rid: int, user: str = Depends(current_user)):
+def relatorio_excel(rid: int, parte: str = "reconciliacao", user: str = Depends(current_user)):
     settings = get_settings()
     with session_scope() as s:
         rep = _report_or_404(s, rid)
         s.expunge(rep)
     _, sel = _report_data(rep, settings)
-    return Response(rp.excel(sel, rep.alerta),
-                    media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                    headers={"Content-Disposition": f'attachment; filename="{rp.excel_name(rep.ate)}"'})
+    data, name = ((rp.internet_excel(sel), rp.INTERNET_EXCEL) if parte == "internet"
+                  else (rp.excel(sel, rep.alerta), rp.excel_name(rep.ate)))
+    return Response(data, media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                    headers={"Content-Disposition": f'attachment; filename="{name}"'})
 
 
 @app.post("/relatorio/{rid}/enviar")
@@ -1008,28 +1026,27 @@ async def relatorio_enviar(request: Request, rid: int, user: str = Depends(curre
     form = await request.form()
     check_csrf(request, form.get("csrf"))
     settings = get_settings()
-    partes = [p for p in ("alertas", "reconciliacao") if p in form.getlist("parte")]
+    partes = [p for p in ("alertas", "reconciliacao", "internet") if p in form.getlist("parte")]
     modo = str(form.get("modo") or "junto")
     back = f"/relatorio/{rid}"
     if form.get("confirmo") != "1":
         raise HTTPException(400, "Confirmação em falta.")
     try:
         if not partes:
-            raise rp.ReportError("Escolha o que enviar: alertas, reconciliação ou os dois.")
+            raise rp.ReportError("Escolha o que enviar: alertas, reconciliação e/ou certificados novos na internet.")
         to = rp.parse_recipients(str(form.get("para") or ""), settings)
         with session_scope() as s:
             rep = _report_or_404(s, rid)
             s.expunge(rep)
         _, sel = _report_data(rep, settings)
         now = utcnow().astimezone(_tz())
-        groups = [["alertas", "reconciliacao"]] if len(partes) == 2 and modo == "junto" else [[p] for p in partes]
+        groups = [partes] if modo == "junto" else [[p] for p in partes]
         msgs, subjects = [], []
         for g in groups:
-            key = "ambos" if len(g) == 2 else g[0]
-            subj = rp.subject_for(key, sel, rep.desde, rep.ate, rep.alerta)
-            att = (rp.excel_name(rep.ate), rp.excel(sel, rep.alerta)) if "reconciliacao" in g else None
+            subj = _group_subject(g, sel, rep)
             msgs.append(rp.build_message(settings, to, subj,
-                                         rp.email_html(key, sel, rep.desde, rep.ate, rep.alerta, settings.report_signature, now), att))
+                                         rp.email_html(g, sel, rep.desde, rep.ate, rep.alerta, settings.report_signature, now,
+                                                       rep.ct_dias or 0), _group_attachments(g, sel, rep)))
             subjects.append(subj)
         rp.send(settings, msgs, SMTP_FACTORY)
         ok, erro = True, ""
@@ -1375,12 +1392,35 @@ async def final_upload(request: Request, source: str, csrf: str = Form(""), fich
 
 
 @app.post("/cmdb-final/testar-pasta")
-def final_test_folder(request: Request, csrf: str = Form(""), user: str = Depends(current_user)):
-    check_csrf(request, csrf)
-    ok, msg = cf.test_write(get_settings())
+async def final_test_folder(request: Request, user: str = Depends(current_user)):
+    form = await request.form()
+    check_csrf(request, form.get("csrf"))
+    settings = get_settings()
+    # A password (se escrita) só é usada nesta ligação: não é guardada nem registada
+    ok, msg = cf.test_write(settings, str(form.get("ssh_password") or "") or None, SFTP_FACTORY)
     with session_scope() as s:
-        audit(s, user, "cmdb_final.testar_pasta", str(get_settings().publish_dir), ok=ok, detalhe=msg)
+        audit(s, user, "cmdb_final.testar_pasta", cf.folder_status(settings)["pasta"], ok=ok, detalhe=msg)
     return RedirectResponse(f"/cmdb-final?teste={'ok' if ok else 'falhou'}&msg={quote(msg)}#pasta", status_code=303)
+
+
+@app.post("/cmdb-final/impressao-digital")
+def final_fingerprint(request: Request, csrf: str = Form(""), user: str = Depends(current_user)):
+    """Mostra a impressão digital da chave do servidor SSH (sem autenticar), para a confirmar e pôr no .env."""
+    check_csrf(request, csrf)
+    from .. import publish_target as pt
+    settings = get_settings()
+    try:
+        info = pt.server_fingerprint(settings)
+        msg = (f"O servidor {settings.publish_ssh_host} apresenta uma chave {info['tipo']} com a impressão digital "
+               f"{info['impressao']}. Confirme-a no próprio servidor (ssh-keygen -lf /etc/ssh/ssh_host_*_key.pub) "
+               "antes de a pôr em CERTWATCH_PUBLISH_SSH_HOSTKEY.")
+        ok = True
+    except Exception as exc:
+        msg, ok = f"Não foi possível ler a chave do servidor: {type(exc).__name__}: {exc}"[:400], False
+    return RedirectResponse(f"/cmdb-final?teste={'info' if ok else 'falhou'}&msg={quote(msg)}#pasta", status_code=303)
+
+
+SFTP_FACTORY = None    # nos testes: substitui a ligação SSH
 
 
 @app.get("/cmdb-final/comparar")
@@ -1407,8 +1447,19 @@ def final_compare(request: Request, origem: str = "", vista: str = "diferencas",
             err = str(exc)
         except Exception as exc:   # ficheiro que não é um Excel válido
             err = f"Não foi possível ler o ficheiro: {exc}"
+    # Geração mais recente: escolher aqui o que entra nos ficheiros (linha do Excel -> alteração da geração)
+    edit = None
+    kind, _, ident = origem.partition(":")
+    if kind == "geracao" and ident.isdigit():
+        with session_scope() as s:
+            run = s.get(FinalRun, int(ident))
+            if run is not None and cf.editable(s, run):
+                changes = run.changes or []
+                edit = {"run": run.id, "by_line": {c["linha"]: c for c in changes if c.get("linha") and c.get("incluir", True)},
+                        "excluidas": sum(1 for c in changes if not c.get("incluir", True))}
     return render(request, "final_comparar.html", user, rows=rows[:3000], n_rows=len(rows), counts=counts, vista=vista,
-                  q=q, marcadas=marcadas, origem=origem, label=label, choices=choices, cmdb_at=cmdb_at, err=err)
+                  q=q, marcadas=marcadas, origem=origem, label=label, choices=choices, cmdb_at=cmdb_at, err=err,
+                  edit=edit, here=str(request.url.path) + ("?" + request.url.query if request.url.query else ""))
 
 
 def _compare_source(origem: str, settings) -> tuple[str, str, bytes | None, list[tuple[str, str]]]:
@@ -1419,8 +1470,9 @@ def _compare_source(origem: str, settings) -> tuple[str, str, bytes | None, list
         ups = list(s.execute(select(FinalInput.id, FinalInput.name, FinalInput.uploaded_at)
                              .where(FinalInput.source == "CMDB_FINAL").order_by(FinalInput.id.desc()).limit(5)))
         choices = [(f"geracao:{r.id}", f"Geração #{r.id} de {fmt_dt(r.created_at, True)}") for r in runs]
-        folder_file = settings.publish_dir / cf.FILES["xlsx"]
-        if folder_file.is_file():
+        folder = cf.folder_status(settings)
+        if (folder["modo"] == "sftp" and folder["existe"] and not folder["pede_password"]) or \
+                (folder["modo"] == "local" and (settings.publish_dir / cf.FILES["xlsx"]).is_file()):
             choices.append(("pasta", f"{cf.FILES['xlsx']} na pasta de rede"))
         choices += [(f"carregado:{u.id}", f"Carregado: {u.name} ({fmt_dt(u.uploaded_at, True)})") for u in ups]
         if not origem:
@@ -1434,10 +1486,7 @@ def _compare_source(origem: str, settings) -> tuple[str, str, bytes | None, list
                 raise cf.FinalError("Essa geração já não tem o ficheiro (só se guardam as mais recentes).")
             return f"CMDB_Final.xlsx da geração #{run.id}", origem, run.xlsx, choices
         if kind == "pasta":
-            try:
-                return f"{cf.FILES['xlsx']} na pasta de rede", origem, folder_file.read_bytes(), choices
-            except OSError as exc:
-                raise cf.FinalError(f"Não foi possível ler o ficheiro da pasta de rede: {exc}")
+            return f"{cf.FILES['xlsx']} na pasta de rede", origem, cf.read_published(settings, cf.FILES["xlsx"]), choices
         if kind == "carregado" and ident.isdigit():
             up = s.get(FinalInput, int(ident))
             if up is None or up.source != "CMDB_FINAL" or up.data is None:
@@ -1613,8 +1662,9 @@ async def final_publish(request: Request, run_id: int, user: str = Depends(curre
     try:
         with session_scope() as s:
             run = _run_or_404(s, run_id)
-            pub = cf.publish(s, settings, run, keys, user)
-            audit(s, user, "cmdb_final.publicar", f"geração {run_id}", pasta=str(settings.publish_dir),
+            # A password (se escrita) só é usada nesta ligação: não é guardada nem registada
+            pub = cf.publish(s, settings, run, keys, user, str(form.get("ssh_password") or "") or None, SFTP_FACTORY)
+            audit(s, user, "cmdb_final.publicar", f"geração {run_id}", pasta=pub.folder,
                   ficheiros=[r["nome"] for r in pub.result], ok=pub.ok)
     except cf.FinalError as exc:
         return _final_error(request, user, str(exc), f"/cmdb-final/{run_id}")

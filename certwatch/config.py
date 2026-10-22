@@ -219,6 +219,15 @@ class Settings:
     final_columns_file: str = "cmdb-colunas"
     final_keep_runs: int = 20
     publish_dir: Path = Path("/app/publicar")
+    # Publicação por SFTP noutro servidor (onde a pasta de rede está montada)
+    publish_mode: str = "local"                    # local | sftp
+    publish_ssh_host: str = ""
+    publish_ssh_port: int = 22
+    publish_ssh_user: str = ""
+    publish_ssh_path: str = ""
+    publish_ssh_hostkeys: list[str] = field(default_factory=list)
+    publish_ssh_secret: str | None = None          # chave privada ou password (segredo publish_ssh)
+    publish_ssh_passphrase: str | None = None
 
     @staticmethod
     def from_env() -> "Settings":
@@ -346,6 +355,14 @@ class Settings:
             final_columns_file=_env("CERTWATCH_FINAL_COLUMNS_FILE", "cmdb-colunas").lower(),
             final_keep_runs=int(_env("CERTWATCH_FINAL_KEEP_RUNS", "20")),
             publish_dir=Path(_env("CERTWATCH_PUBLISH_DIR", "/app/publicar")),
+            publish_mode=_env("CERTWATCH_PUBLISH_MODE", "local").lower(),
+            publish_ssh_host=_env("CERTWATCH_PUBLISH_SSH_HOST", ""),
+            publish_ssh_port=int(_env("CERTWATCH_PUBLISH_SSH_PORT", "22")),
+            publish_ssh_user=_env("CERTWATCH_PUBLISH_SSH_USER", ""),
+            publish_ssh_path=_env("CERTWATCH_PUBLISH_SSH_PATH", "").rstrip("/") or "",
+            publish_ssh_hostkeys=[x.strip() for x in re.split(r"[,;\s]+", _env("CERTWATCH_PUBLISH_SSH_HOSTKEY", "")) if x.strip()],
+            publish_ssh_secret=_secret("publish_ssh", "CERTWATCH_PUBLISH_SSH_SECRET"),
+            publish_ssh_passphrase=_secret("publish_ssh_passphrase", "CERTWATCH_PUBLISH_SSH_PASSPHRASE"),
         )
 
 

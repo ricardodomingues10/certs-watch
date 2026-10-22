@@ -66,9 +66,11 @@
     <div class="filechecks">
       {% for f in folder.ficheiros %}
       <label><input type="checkbox" name="ficheiro" value="{{ f.chave }}" checked> <span><span class="mono">{{ f.nome }}</span>
-        <span class="small muted">{{ '— substitui o de ' ~ (f.alterado|dtt) if f.alterado else '— novo na pasta' }}</span></span></label>
+        <span class="small muted">{{ '— substitui o de ' ~ (f.alterado|dtt) if f.alterado else ('— substitui o que lá estiver' if f.desconhecido else '— novo na pasta') }}</span></span></label>
       {% endfor %}
     </div>
+    {% if folder.pede_password %}<label class="small">Password da conta SSH em {{ folder.pasta.split(':')[0] }} (usada só nesta publicação; não é guardada)
+      <input type="password" name="ssh_password" autocomplete="off" required></label>{% endif %}
     <label><input type="checkbox" name="confirmo" value="1" required> Revi as alterações e confirmo a publicação.</label>
     <div class="confirm-actions"><button class="primary">Publicar na pasta de rede</button></div>
   </form>

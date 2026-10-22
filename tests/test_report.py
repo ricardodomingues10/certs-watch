@@ -152,3 +152,64 @@ def test_not_configured(env):
     assert "CERTWATCH_SMTP_HOST não definido" in rp.smtp_problems(env)
     with pytest.raises(rp.ReportError):
         rp.send(env, [])
+
+
+def test_internet_approval_email(data, monkeypatch):
+    from certwatch.models import CtCert
+    utc_now = utcnow()
+    with session_scope() as s:
+        def ct(name, days, triage="por_triar", seen_days_ago=2, names=None, serial="AB"):
+            s.add(CtCert(primary_name=name, names=names or [name], issuer_cn="R11", serial_hex=serial,
+                         not_before=utc_now - timedelta(days=10), not_after=utc_now + timedelta(days=days), triage=triage,
+                         first_seen=utc_now - timedelta(days=seen_days_ago), source_ids={"crtsh": "123"}, domain="exemplo.pt"))
+        ct("loja.exemplo.pt", 80, names=["loja.exemplo.pt", "www.loja.exemplo.pt"])          # nome desconhecido
+        ct("www.exemplo.pt", 300, serial="CD")                                                 # nome na CMDB, outra data
+        ct("www.exemplo.pt", 50, serial="EF")                                                  # igual à CMDB -> fora
+        ct("ruido.exemplo.pt", 80, "ignorar")                                                   # ignorado -> fora
+        ct("velho.exemplo.pt", -5)                                                               # expirado -> fora
+        ct("antigo.exemplo.pt", 80, seen_days_ago=90)                                           # fora do período
+    with session_scope() as s:
+        rows = rp.internet_rows(s, data, 30)
+        assert [(r["nome"], r["estado"]) for r in rows] == [("loja.exemplo.pt", "desconhecido"), ("www.exemplo.pt", "nome_conhecido")]
+        assert len(rp.internet_rows(s, data, 0)) == 3
+    assert rows[0]["link"] == "https://crt.sh/?id=123" and rows[0]["outros"] == ["www.loja.exemplo.pt"]
+    sel = rp.select_rows([], 0, 90, {"ct:x"}, rows)
+    html = rp.email_html(["internet"], sel, 0, 90, 20, "Equipa", NOW, 30)
+    assert "2 certificado(s)" in html and "nos últimos 30 dias" in html and "Aprovado" in html
+    assert html.index("loja.exemplo.pt") < html.index("Nomes que já existem na CMDB")
+    assert rp.subject_for("internet", sel, 0, 90, 20) == "Aprovação | 2 certificado(s) novo(s) encontrado(s) na internet"
+    ws = load_workbook(BytesIO(rp.internet_excel(sel))).worksheets[0]
+    head = [c.value for c in ws[1]]
+    assert "Aprovado (Sim/Não)" in head and ws.max_row == 3
+
+    from certwatch.web import app as webapp
+    monkeypatch.setattr(webapp, "get_settings", lambda: data)
+    monkeypatch.setattr(webapp, "SMTP_FACTORY", FakeSMTP)
+    FakeSMTP.sent = []
+    with TestClient(webapp.app) as c:
+        c.get("/relatorio", auth=AUTH)
+        token = c.cookies["cw_csrf"]
+        url = c.post("/relatorio", data={"csrf": token, "desde": "0", "ate": "90", "alerta": "20", "ct_dias": "30"},
+                     auth=AUTH, follow_redirects=False).headers["location"]
+        page = c.get(url, auth=AUTH).text
+        assert "loja.exemplo.pt" in page and "previsao/internet" in page and "2</b> novos na internet" in page
+        assert "Pedimos à equipa de Sistemas" in c.get(url + "/previsao/internet", auth=AUTH).text
+        # retirar um e enviar só esta parte
+        with session_scope() as s:
+            ids = {r["nome"]: r["key"] for r in rp.internet_rows(s, data, 30)}
+        c.post(url + "/selecao", data={"csrf": token, "k": list(ids.values()), "inc": [ids["loja.exemplo.pt"]]}, auth=AUTH)
+        r = c.post(url + "/enviar", data={"csrf": token, "para": "sistemas@exemplo.pt", "parte": ["internet"], "confirmo": "1"}, auth=AUTH)
+        assert "Enviado para sistemas@exemplo.pt" in r.text
+        msgs = [m for m in FakeSMTP.sent if not isinstance(m, tuple)]
+        assert len(msgs) == 1 and msgs[0]["Subject"] == "Aprovação | 1 certificado(s) novo(s) encontrado(s) na internet"
+        assert [a.get_filename() for a in msgs[0].iter_attachments()] == ["Certificados_Internet.xlsx"]
+        # as três partes num só email: dois anexos
+        FakeSMTP.sent = []
+        c.post(url + "/enviar", data={"csrf": token, "para": "sistemas@exemplo.pt", "parte": ["alertas", "reconciliacao", "internet"],
+                                      "modo": "junto", "confirmo": "1"}, auth=AUTH)
+        msgs = [m for m in FakeSMTP.sent if not isinstance(m, tuple)]
+        assert len(msgs) == 1 and len(list(msgs[0].iter_attachments())) == 2
+        FakeSMTP.sent = []
+        c.post(url + "/enviar", data={"csrf": token, "para": "sistemas@exemplo.pt", "parte": ["alertas", "reconciliacao", "internet"],
+                                      "modo": "separado", "confirmo": "1"}, auth=AUTH)
+        assert len([m for m in FakeSMTP.sent if not isinstance(m, tuple)]) == 3

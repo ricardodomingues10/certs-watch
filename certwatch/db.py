@@ -98,6 +98,7 @@ _ADDED_COLUMNS = [
     ("ticket_drafts", "via", "JSON"),
     ("ticket_drafts", "sites", "JSON"),
     ("final_runs", "state", "BYTEA"),
+    ("email_reports", "ct_dias", "INTEGER NOT NULL DEFAULT 30"),
 ]
 
 
