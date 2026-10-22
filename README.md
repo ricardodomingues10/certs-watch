@@ -1,4 +1,4 @@
-# certwatch 0.9
+# certwatch 0.10
 
 Aplicação autónoma de gestão de certificados X.509 de uma organização. Não depende do n8n.
 
@@ -17,6 +17,8 @@ Aplicação autónoma de gestão de certificados X.509 de uma organização. Nã
 12. Cria (opcional) pedidos de renovação no SMAX para um certificado, para os selecionados ou para todos os de uma vista filtrada, com revisão e confirmação.
 13. Distingue o **site** (onde está instalado) do **certificado** (o que se renova): um wildcard ou um certificado com vários nomes pode servir muitos sites, e os pedidos são sempre feitos para o certificado.
 14. **Atualiza a CMDB** com a lógica do workflow n8n de reconciliação: lê a CMDB pela API e as exportações CA1, CA2 e AVI, gera o `CMDB_Final.xlsx`, o `certs_update.csv` e o `certs_update_sem_cabecalho.csv`, publica-os na pasta de rede lida pela UCMDB e compara um CMDB_Final com a CMDB atual (data, Issuer e IssuerName).
+15. **Acompanha cada pedido SMAX até ao fim**: comentários com imagens e anexos, percurso da renovação (pedido → renovado → instalado → CMDB atualizada → fechado), registo da renovação, fechar e reabrir o pedido no SMAX.
+16. **Envia o relatório por email**: alertas e reconciliação com o Excel, com intervalo, prazo de alerta e destinatários à escolha.
 
 Fora desta versão: escrita direta na UCMDB pela API (a atualização é feita pela integração que lê os ficheiros), email.
 
@@ -294,6 +296,51 @@ Um site (`adfs.exemplo.pt:443`) serve um certificado de cada vez; um certificado
 - **Pedidos**: escolher um site gera o pedido para o certificado que ele serve; vários sites do mesmo certificado dão um só pedido; a descrição lista os sites.
 - Um site sem registo próprio na CMDB é comparado com os registos do certificado que serve; os alertas de expiração da CMDB de um certificado que já é visto nos sites são substituídos pelos alertas da verificação.
 - Para descobrir onde estão os wildcards, a aplicação verifica os nomes encontrados na internet (`CERTWATCH_CT_SCAN`): só nomes concretos dos domínios configurados, de certificados ainda válidos; os que não respondem são desligados sem alerta e não aparecem no inventário.
+
+## 7.3 Página do pedido: comentários, percurso da renovação, fechar e reabrir
+
+Em **Pedidos SMAX**, o número do pedido abre a página do pedido. O link "SMAX ↗" continua a abrir o SMAX. A lista pode ser filtrada por pedido, por fase e pela data do último comentário (de/até, ou "sem comentários"), e ordenada pelo comentário mais recente.
+
+**Comentários com imagens.** Em cada leitura do SMAX são guardadas as imagens coladas nos comentários (prints) e os anexos dos comentários, para se verem na aplicação.
+- Só são pedidos ao próprio SMAX os caminhos do repositório de ficheiros (`/rest/<tenant>/frs/…` e `/ces/attachment/<id>`). Imagens noutros servidores nunca são descarregadas.
+- Só PNG, JPEG, GIF, WebP e BMP são mostrados como imagem, e o tipo é verificado pelo conteúdo. O resto (PDF…) é descarregado como anexo.
+- Limites: até 10 MB por ficheiro e `CERTWATCH_SMAX_FILES_MAX` ficheiros novos por leitura.
+
+**Percurso da renovação.** Cinco passos, cada um feito quando há prova:
+1. **Pedido aberto.**
+2. **Certificado renovado.** Fica feito quando há uma validade mais recente do que a do pedido, numa destas fontes:
+   - uma renovação registada aqui;
+   - o certificado que o servidor apresenta;
+   - a CMDB;
+   - a internet (CT).
+
+   Para registar a renovação, há três formas:
+   - usar o certificado que o servidor apresenta (o certwatch liga-se na hora);
+   - carregar o ficheiro do certificado (`.cer`, `.crt`, `.pem`, `.der`);
+   - indicar à mão a nova data (por exemplo, a partir do print num comentário).
+3. **Instalado no servidor.** Fica feito quando todos os servidores verificados apresentam o certificado novo. Use **Verificar agora** para os verificar logo. Para servidores que o certwatch não vê, a instalação pode ser confirmada à mão, com uma nota.
+4. **CMDB atualizada.** A renovação registada entra como fonte `RENOVACAO` na próxima geração de **Atualizar a CMDB**. Se veio do servidor ou do ficheiro, atualiza também o emissor. O passo fica feito quando a CMDB lida pelo certwatch mostra a nova data. Até lá, a página diz em que geração está e se já foi publicada.
+5. **Pedido fechado.** O botão **Fechar no SMAX** faz um `bulk UPDATE` com `CERTWATCH_SMAX_CLOSE_FIELDS` (por omissão `{"PhaseId": "Close"}`):
+   - pode escrever um comentário no pedido, antes de fechar;
+   - depois o pedido é lido de novo para confirmar a fase;
+   - se o modelo de change exigir outros campos para fechar, o motivo do SMAX aparece na página; acrescente esses campos ao JSON;
+   - **Reabrir** usa `CERTWATCH_SMAX_REOPEN_FIELDS`.
+
+   Fica ativo com `CERTWATCH_SMAX_UPDATE_ENABLED=true`. Todas as ações ficam em **Execuções e auditoria**.
+
+## 7.4 Relatório por email
+
+Página **Relatório por email**. Escolhe-se:
+- **o intervalo**: certificados que expiram de X a Y dias, contados até à validade efetiva (a do servidor quando verificado, senão a da CMDB);
+- **o prazo de alerta**: N dias ou menos;
+- **os certificados a retirar**, se houver.
+
+Depois pré-visualiza-se e envia-se:
+- **Alertas**: caixa de alerta com os certificados a N dias ou menos (com os dias restantes) e as tabelas dos internos e externos do intervalo. As tabelas têm as colunas CommonName, ValidTo, Alteração (pedido aberto, vários pedidos ou sem pedido ativo) e Renovação automática.
+- **Reconciliação**: os certificados cujo servidor já apresenta uma validade posterior à da CMDB, com o Excel `Certificados_<Y>_Dias.xlsx` em anexo. O Excel tem a análise de cada certificado: validades, pedidos e Estado_Analise.
+- **As duas partes**, num só email ou em dois.
+
+Configuração no `.env`: `CERTWATCH_SMTP_HOST`, `_PORT`, `_SECURITY` (starttls/ssl/none), `_FROM` e `_USER`. A password vai no segredo `secrets/smtp_password`. Este ficheiro tem de existir, nem que seja vazio (`touch secrets/smtp_password`). `CERTWATCH_REPORT_ALLOWED_DOMAINS` limita os destinatários aos domínios da organização. Os envios ficam registados no relatório e na auditoria.
 
 ## 8. Classificação
 

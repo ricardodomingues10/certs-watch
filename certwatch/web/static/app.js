@@ -31,7 +31,16 @@ document.addEventListener("DOMContentLoaded", () => {
       let col = 0;
       Array.from(tr.cells).forEach((td) => {
         if (td.colSpan > 1 && td.colSpan >= labels.length) td.classList.add("full");
-        else if (!td.hasAttribute("data-label")) td.setAttribute("data-label", labels[col] || "");
+        else {
+          if (!td.hasAttribute("data-label")) td.setAttribute("data-label", labels[col] || "");
+          // conteúdo num só bloco, para ficar à direita do nome da coluna no telemóvel (display: contents no computador)
+          if (td.childNodes.length && !(td.childNodes.length === 1 && td.firstChild.classList && td.firstChild.classList.contains("cv"))) {
+            const cv = document.createElement("div");
+            cv.className = "cv";
+            while (td.firstChild) cv.appendChild(td.firstChild);
+            td.appendChild(cv);
+          }
+        }
         col += td.colSpan || 1;
       });
     }));

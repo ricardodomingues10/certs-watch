@@ -1,0 +1,93 @@
+{% extends "base.html" %}
+{% block title %}Relatório #{{ rep.id }}{% endblock %}
+{% block crumb %}<a href="/relatorio">Relatório por email</a>{% endblock %}
+{% block page_title %}Relatório #{{ rep.id }}{% endblock %}
+{% block lede %}Certificados que expiram de {{ rep.desde }} a {{ rep.ate }} dias; alerta a {{ rep.alerta }} dias ou menos. Os dados são os de agora: a pré-visualização e o envio usam o estado atual do inventário.{% endblock %}
+{% block actions %}
+<a class="button" href="/relatorio/{{ rep.id }}/excel">Descarregar o Excel</a>
+<a class="button" href="/relatorio">Novo relatório</a>
+{% endblock %}
+{% block content %}
+{% if msg %}<div class="note">{{ msg }}</div>{% endif %}
+{% if erro %}<div class="note bad">{{ erro }}</div>{% endif %}
+{% set n_in = sel.janela|length %}
+<section class="verdict {{ 'v-warn' if n_alerta else 'v-ok' }}" aria-label="Resumo">
+  <p class="say">{% if n_alerta %}<b class="warn">{{ n_alerta }} certificado{{ 's' if n_alerta != 1 }}</b> a {{ rep.alerta }} dias ou menos da expiração{% else %}<b class="ok">Nenhum certificado</b> a {{ rep.alerta }} dias ou menos da expiração{% endif %}; {{ n_in }} no intervalo.</p>
+  <div class="facts">
+    <span><b>{{ sel.janela|selectattr('scope', 'equalto', 'interno')|list|length }}</b> internos</span>
+    <span><b>{{ sel.janela|rejectattr('scope', 'equalto', 'interno')|list|length }}</b> externos</span>
+    <span><b>{{ sel.renovados|length }}</b> renovados no servidor e por refletir na CMDB</span>
+    {% if excl %}<span><b>{{ excl|length }}</b> retirados por si</span>{% endif %}
+  </div>
+</section>
+
+<details class="card" id="lista" {{ 'open' if excl }}>
+  <summary>Certificados incluídos ({{ n_in }} de {{ janela|length }}) — retirar algum</summary>
+  <form method="post" action="/relatorio/{{ rep.id }}/selecao" class="mt">
+    <input type="hidden" name="csrf" value="{{ csrf }}">
+    <div class="selbar"><label><input type="checkbox" data-check-all="inc"> Incluir todos</label>
+      <span class="small muted"><span data-sel-count>{{ janela|length - (janela|selectattr('cn', 'in', excl)|list|length) }}</span> incluídos</span>
+      <button class="primary">Guardar e atualizar a pré-visualização</button></div>
+    <div class="scroll"><table>
+      <thead><tr><th>Incluir</th><th>Certificado</th><th>Validade efetiva</th><th>Dias</th><th>Âmbito</th><th>Alteração</th><th>Renovação automática</th><th>CMDB atualizada</th></tr></thead>
+      <tbody>
+      {% for r in janela + extra %}
+      <tr class="{{ 'faded' if r.cn in excl }}">
+        <td><input type="hidden" name="k" value="{{ r.cn }}"><input type="checkbox" name="inc" value="{{ r.cn }}" {{ 'checked' if r.cn not in excl }} aria-label="Incluir {{ r.cn }}"></td>
+        <td class="mono small">{{ r.common_name }}{% if r in extra %}<div class="muted">fora do intervalo; só na reconciliação</div>{% endif %}</td>
+        <td class="nowrap">{{ r.efetiva.strftime('%d-%m-%Y') }} <span class="small muted">{{ r.origem|lower }}</span></td>
+        <td class="num {{ 'days d-crit' if 0 <= r.dias <= rep.alerta else '' }}">{{ r.dias }}</td>
+        <td>{{ r.scope or '—' }}</td><td class="small">{{ r.ticket.alteracao }}</td><td>{{ r.auto }}</td>
+        <td>{{ r.cmdb_atualizada or '—' }}</td>
+      </tr>
+      {% else %}
+      <tr><td colspan="8"><div class="empty"><b>Nenhum certificado neste intervalo</b></div></td></tr>
+      {% endfor %}
+      </tbody>
+    </table></div>
+  </form>
+</details>
+
+<h2 id="previsao">Pré-visualização</h2>
+<div class="grid2">
+  <section class="card">
+    <h3>Alertas</h3>
+    <p class="small muted">Assunto: {{ assuntos.alertas }}</p>
+    <iframe class="email-preview" src="/relatorio/{{ rep.id }}/previsao/alertas" title="Pré-visualização do email de alertas"></iframe>
+  </section>
+  <section class="card">
+    <h3>Reconciliação</h3>
+    <p class="small muted">Assunto: {{ assuntos.reconciliacao }} · anexo <a href="/relatorio/{{ rep.id }}/excel">Certificados_{{ rep.ate }}_Dias.xlsx</a></p>
+    <iframe class="email-preview" src="/relatorio/{{ rep.id }}/previsao/reconciliacao" title="Pré-visualização do email de reconciliação"></iframe>
+  </section>
+</div>
+
+<section class="card" id="enviar">
+  <h2>Enviar</h2>
+  {% if problems %}<div class="note warn small">O envio não está configurado: {{ problems|join('; ') }}.</div>{% endif %}
+  <form method="post" action="/relatorio/{{ rep.id }}/enviar" class="stack">
+    <input type="hidden" name="csrf" value="{{ csrf }}">
+    <label class="small">Para (separe vários endereços por vírgula)
+      <input type="text" name="para" value="{{ para }}" required autocomplete="email" placeholder="nome@organizacao.pt"></label>
+    {% if settings.report_allowed_domains %}<p class="small muted">Só são aceites endereços de {{ settings.report_allowed_domains|join(', ') }}.</p>{% endif %}
+    <fieldset class="plain"><legend class="small">O que enviar</legend>
+      <label><input type="checkbox" name="parte" value="alertas" checked> Alertas</label>
+      <label><input type="checkbox" name="parte" value="reconciliacao" checked> Reconciliação com o Excel em anexo</label>
+    </fieldset>
+    <fieldset class="plain"><legend class="small">Se escolher as duas</legend>
+      <label><input type="radio" name="modo" value="junto" checked> Num só email</label>
+      <label><input type="radio" name="modo" value="separado"> Em dois emails</label>
+    </fieldset>
+    <label><input type="checkbox" name="confirmo" value="1" required> Revi a pré-visualização e quero enviar.</label>
+    <div><button class="primary" {{ 'disabled' if problems }}>Enviar</button></div>
+  </form>
+  {% if rep.sends %}
+  <table class="compact mt">
+    <thead><tr><th>Quando</th><th>Por</th><th>Para</th><th>O quê</th><th>Resultado</th></tr></thead>
+    {% for e in rep.sends|reverse %}<tr><td class="small">{{ e.em|dtt }}</td><td class="small">{{ e.por }}</td><td class="small">{{ (e.para or [])|join(', ') }}</td>
+      <td class="small">{{ (e.assuntos or e.partes)|join(' | ') }}</td>
+      <td>{% if e.ok %}<span class="tag tag-ok">enviado</span>{% else %}<span class="tag tag-err" title="{{ e.erro }}">falhou</span><div class="small muted">{{ e.erro }}</div>{% endif %}</td></tr>{% endfor %}
+  </table>
+  {% endif %}
+</section>
+{% endblock %}

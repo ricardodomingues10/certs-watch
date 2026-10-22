@@ -1,0 +1,35 @@
+{% extends "base.html" %}
+{% block title %}Relatório por email{% endblock %}
+{% block crumb %}Operação{% endblock %}
+{% block page_title %}Relatório por email{% endblock %}
+{% block lede %}Envia os certificados que expiram num intervalo à sua escolha, em duas partes: os alertas (a N dias ou menos da expiração, internos e externos) e a reconciliação (renovados no servidor e ainda não refletidos na CMDB) com o Excel de análise. Pode enviar uma parte, a outra, ou as duas juntas ou separadas.{% endblock %}
+{% block content %}
+{% if problems %}<div class="note warn">O envio ainda não está configurado: {{ problems|join('; ') }}. Pode preparar e pré-visualizar; para enviar, ver README ("Relatório por email").</div>{% endif %}
+<section class="card">
+  <h2>Preparar um relatório</h2>
+  <form method="post" action="/relatorio" class="filters flat">
+    <input type="hidden" name="csrf" value="{{ csrf }}">
+    <label class="small">Expiram de <input type="number" name="desde" value="0" min="-365" max="3650" required> dias</label>
+    <label class="small">até <input type="number" name="ate" value="{{ settings.report_window_days }}" min="-365" max="3650" required> dias</label>
+    <label class="small">Alerta a <input type="number" name="alerta" value="{{ settings.report_alert_days }}" min="0" max="3650" required> dias ou menos</label>
+    <button class="primary">Preparar e pré-visualizar</button>
+  </form>
+  <p class="small muted">Os dias contam-se até à validade efetiva: a que o servidor apresenta, quando foi verificado, ou a da CMDB. Use um início negativo para incluir certificados já expirados.</p>
+</section>
+
+<section class="card flush">
+  <h2>Relatórios anteriores</h2>
+  <div class="scroll"><table>
+    <thead><tr><th>Relatório</th><th>Intervalo</th><th>Alerta</th><th>Último envio</th></tr></thead>
+    <tbody>
+    {% for r in reps %}{% set last = (r.sends or [])[-1] if r.sends else None %}
+    <tr><td><a href="/relatorio/{{ r.id }}">#{{ r.id }}</a> <span class="small muted">{{ r.created_at|dtt }} · {{ r.created_by }}</span></td>
+      <td>{{ r.desde }} a {{ r.ate }} dias</td><td>{{ r.alerta }} dias</td>
+      <td class="small">{% if last %}{% if last.ok %}<span class="tag tag-ok">enviado</span>{% else %}<span class="tag tag-err">falhou</span>{% endif %} {{ last.em|dtt }} para {{ (last.para or [])|join(', ') }}{% else %}<span class="muted">não enviado</span>{% endif %}</td></tr>
+    {% else %}
+    <tr><td colspan="4"><div class="empty"><b>Ainda não há relatórios</b>Escolha o intervalo acima e prepare o primeiro.</div></td></tr>
+    {% endfor %}
+    </tbody>
+  </table></div>
+</section>
+{% endblock %}

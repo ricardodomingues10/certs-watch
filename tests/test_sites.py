@@ -189,7 +189,8 @@ def test_smax_page_overdue_comments_and_api_tickets(env, monkeypatch):
     with TestClient(app) as cl:
         page = cl.get("/pedidos", auth=AUTH).text
         assert "7001" in page and "Aguardamos o CSR da equipa" in page and "Ana Técnica" in page
-        assert "https://smax.test/saw/Change/7001/discussions?TENANTID=123" in page
+        assert "/pedidos/smax/7001#comentarios" in page
+        assert "https://smax.test/saw/Change/7001/discussions?TENANTID=123" in cl.get("/pedidos/smax/7001", auth=AUTH).text
         late = cl.get("/pedidos", params={"vista": "atrasados"}, auth=AUTH).text
         assert "7001" in late and "7002" not in late and "expirou há 3 d" in late
         com = cl.get("/pedidos", params={"vista": "comentarios"}, auth=AUTH).text

@@ -31,11 +31,12 @@ from ..jobs import apis_configured, JOBS, enqueue
 from ..collectors.ct import SOURCE_LABELS
 from ..discovery import CT_STATE_HELP, CT_STATES, CT_TABS, TRIAGE_LABELS, classify_ct
 from ..models import (ApiRecord, AuditLog, Certificate, CmdbRecord, CtCert, Endpoint, FinalInput, FinalPublish,
-                      FinalPublishFile, FinalRun, Finding, ImportFile, JobRun, Renewal, ScanResult, SmaxComment, SmaxFile,
+                      EmailReport, FinalPublishFile, FinalRun, Finding, ImportFile, JobRun, Renewal, ScanResult, SmaxComment, SmaxFile,
                       SslLabsResult, TicketBatch, SmaxTicket)
 from .. import ticket_create as tc
 from .. import cmdb_final as cf
 from .. import renewal as rn
+from .. import report as rp
 from ..collectors.smax import ticket_url
 from ..tickets import TICKET_HELP, TICKET_ORDER, TICKET_STATES, TICKET_VIEWS, comment_files, filter_tickets, ticket_list, tickets_by_label, link as ticket_link, tickets_by_endpoint
 from ..reconcile import REC_HELP, REC_STATES, REC_TABS, scan_import_dir, reconcile
@@ -898,6 +899,152 @@ def pedido_fase(request: Request, tid: str, csrf: str = Form(""), acao: str = Fo
         return _back(tid, msg=f"Pedido {'fechado' if acao == 'fechar' else 'reaberto'} no SMAX: fase {res['fase_depois']}.{com_txt}", anchor="fase")
     return _back(tid, erro=f"O SMAX não {'fechou' if acao == 'fechar' else 'reabriu'} o pedido ({res['estado']}): "
                            f"{res['motivo']} Fase atual: {res['fase_depois'] or 'desconhecida'}.{com_txt}", anchor="fase")
+
+
+# ------------------------------------------------------------------ relatório por email
+def _report_or_404(s, rid: int) -> EmailReport:
+    r = s.get(EmailReport, rid)
+    if r is None:
+        raise HTTPException(404)
+    return r
+
+
+def _report_data(rep: EmailReport, settings):
+    with session_scope() as s:
+        rows = rp.build_rows(s, settings)
+    return rows, rp.select_rows(rows, rep.desde, rep.ate, set(rep.excluded or []))
+
+
+@app.get("/relatorio")
+def relatorio(request: Request, user: str = Depends(current_user)):
+    settings = get_settings()
+    with session_scope() as s:
+        reps = list(s.scalars(select(EmailReport).order_by(EmailReport.id.desc()).limit(15)))
+        for r in reps:
+            s.expunge(r)
+    return render(request, "relatorio.html", user, reps=reps, settings=settings, problems=rp.smtp_problems(settings))
+
+
+@app.post("/relatorio")
+def relatorio_criar(request: Request, csrf: str = Form(""), desde: int = Form(0), ate: int = Form(90),
+                    alerta: int = Form(20), user: str = Depends(current_user)):
+    check_csrf(request, csrf)
+    if not (-365 <= desde <= ate <= 3650) or not (0 <= alerta <= 3650):
+        raise HTTPException(400, "Intervalo inválido: o início tem de ser menor ou igual ao fim.")
+    with session_scope() as s:
+        rep = EmailReport(created_by=user, desde=desde, ate=ate, alerta=alerta, excluded=[], sends=[])
+        s.add(rep)
+        s.flush()
+        rid = rep.id
+    return RedirectResponse(f"/relatorio/{rid}", status_code=303)
+
+
+@app.get("/relatorio/{rid}")
+def relatorio_ver(request: Request, rid: int, user: str = Depends(current_user)):
+    settings = get_settings()
+    with session_scope() as s:
+        rep = _report_or_404(s, rid)
+        s.expunge(rep)
+        prev_to = ""
+        for r in s.scalars(select(EmailReport).order_by(EmailReport.id.desc()).limit(30)):
+            if r.sends:
+                prev_to = ", ".join(r.sends[-1].get("para") or [])
+                break
+    rows, sel = _report_data(rep, settings)
+    excl = set(rep.excluded or [])
+    janela = sorted(sel["todos_janela"], key=lambda r: (r["dias"], r["cn"]))
+    extra = [r for r in sel["todos_renovados"] if r not in sel["todos_janela"]]
+    alerta = [r for r in sel["janela"] if 0 <= r["dias"] <= rep.alerta]
+    return render(request, "relatorio_ver.html", user, rep=rep, janela=janela, extra=extra, excl=excl, sel=sel,
+                  n_alerta=len(alerta), problems=rp.smtp_problems(settings), settings=settings,
+                  para=prev_to or ", ".join(settings.report_to),
+                  assuntos={k: rp.subject_for(k, sel, rep.desde, rep.ate, rep.alerta) for k in ("alertas", "reconciliacao")},
+                  msg=request.query_params.get("msg", ""), erro=request.query_params.get("erro", ""))
+
+
+@app.post("/relatorio/{rid}/selecao")
+async def relatorio_selecao(request: Request, rid: int, user: str = Depends(current_user)):
+    form = await request.form()
+    check_csrf(request, form.get("csrf"))
+    shown = {str(x) for x in form.getlist("k")}
+    chosen = {str(x) for x in form.getlist("inc")}
+    with session_scope() as s:
+        rep = _report_or_404(s, rid)
+        excl = (set(rep.excluded or []) - shown) | (shown - chosen)
+        rep.excluded = sorted(excl)
+    return RedirectResponse(f"/relatorio/{rid}#previsao", status_code=303)
+
+
+@app.get("/relatorio/{rid}/previsao/{parte}")
+def relatorio_previsao(rid: int, parte: str, user: str = Depends(current_user)):
+    if parte not in ("alertas", "reconciliacao", "ambos"):
+        raise HTTPException(404)
+    settings = get_settings()
+    with session_scope() as s:
+        rep = _report_or_404(s, rid)
+        s.expunge(rep)
+    _, sel = _report_data(rep, settings)
+    body = rp.email_html(parte, sel, rep.desde, rep.ate, rep.alerta, settings.report_signature, utcnow().astimezone(_tz()))
+    page = f'<!doctype html><html lang="pt-PT"><head><meta charset="utf-8"></head><body style="margin:12px;background:#fff">{body}</body></html>'
+    return Response(page, media_type="text/html; charset=utf-8", headers={
+        "Content-Security-Policy": "default-src 'none'; style-src 'unsafe-inline'; frame-ancestors 'self'; sandbox",
+        "X-Frame-Options": "SAMEORIGIN"})
+
+
+@app.get("/relatorio/{rid}/excel")
+def relatorio_excel(rid: int, user: str = Depends(current_user)):
+    settings = get_settings()
+    with session_scope() as s:
+        rep = _report_or_404(s, rid)
+        s.expunge(rep)
+    _, sel = _report_data(rep, settings)
+    return Response(rp.excel(sel, rep.alerta),
+                    media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                    headers={"Content-Disposition": f'attachment; filename="{rp.excel_name(rep.ate)}"'})
+
+
+@app.post("/relatorio/{rid}/enviar")
+async def relatorio_enviar(request: Request, rid: int, user: str = Depends(current_user)):
+    form = await request.form()
+    check_csrf(request, form.get("csrf"))
+    settings = get_settings()
+    partes = [p for p in ("alertas", "reconciliacao") if p in form.getlist("parte")]
+    modo = str(form.get("modo") or "junto")
+    back = f"/relatorio/{rid}"
+    if form.get("confirmo") != "1":
+        raise HTTPException(400, "Confirmação em falta.")
+    try:
+        if not partes:
+            raise rp.ReportError("Escolha o que enviar: alertas, reconciliação ou os dois.")
+        to = rp.parse_recipients(str(form.get("para") or ""), settings)
+        with session_scope() as s:
+            rep = _report_or_404(s, rid)
+            s.expunge(rep)
+        _, sel = _report_data(rep, settings)
+        now = utcnow().astimezone(_tz())
+        groups = [["alertas", "reconciliacao"]] if len(partes) == 2 and modo == "junto" else [[p] for p in partes]
+        msgs, subjects = [], []
+        for g in groups:
+            key = "ambos" if len(g) == 2 else g[0]
+            subj = rp.subject_for(key, sel, rep.desde, rep.ate, rep.alerta)
+            att = (rp.excel_name(rep.ate), rp.excel(sel, rep.alerta)) if "reconciliacao" in g else None
+            msgs.append(rp.build_message(settings, to, subj,
+                                         rp.email_html(key, sel, rep.desde, rep.ate, rep.alerta, settings.report_signature, now), att))
+            subjects.append(subj)
+        rp.send(settings, msgs, SMTP_FACTORY)
+        ok, erro = True, ""
+    except rp.ReportError as exc:
+        ok, erro, to, subjects = False, str(exc), locals().get("to") or [], locals().get("subjects") or []
+    with session_scope() as s:
+        rep = _report_or_404(s, rid)
+        rep.sends = [*(rep.sends or []), {"em": utcnow().isoformat(), "por": user, "para": to, "partes": partes,
+                                          "modo": modo, "assuntos": subjects, "ok": ok, "erro": erro}]
+        audit(s, user, "relatorio.enviar", f"relatório {rid}", para=to, partes=partes, modo=modo, ok=ok, erro=erro[:300])
+    q = urlencode({"msg": f"Enviado para {', '.join(to)}: {' | '.join(subjects)}"} if ok else {"erro": erro})
+    return RedirectResponse(f"{back}?{q}#enviar", status_code=303)
+
+
+SMTP_FACTORY = None    # nos testes: substitui o servidor SMTP
 
 
 @app.get("/findings")

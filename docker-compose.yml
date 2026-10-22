@@ -8,11 +8,11 @@ name: certwatch
 
 x-app: &app
   build: .
-  image: certwatch:0.9.1
+  image: certwatch:0.10.0
   network_mode: host
   restart: unless-stopped
   env_file: .env
-  secrets: [db_password, ucmdb_user, ucmdb_password, admin_password, smax_user, smax_password]
+  secrets: [db_password, ucmdb_user, ucmdb_password, admin_password, smax_user, smax_password, smtp_password]
   volumes:
     - ./trust:/app/trust:ro
     - ./import:/app/import:ro
@@ -75,6 +75,10 @@ secrets:
     file: ./secrets/smax_user
   smax_password:
     file: ./secrets/smax_password
+  # Email (opcional): password do servidor SMTP; se não houver autenticação, criar o ficheiro vazio
+  # (touch secrets/smtp_password)
+  smtp_password:
+    file: ./secrets/smtp_password
 
 volumes:
   pgdata:

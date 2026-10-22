@@ -32,6 +32,25 @@
   {% endfor %}
 </ol>
 
+<section class="card" id="comentarios">
+  <h2>Comentários <small class="muted">{{ comments|length }}</small></h2>
+  {% for c in comments %}
+  <article class="comment">
+    <div class="small muted">{{ c.created_at|dtt if c.created_at else '' }} · {{ c.author or ('utilizador ' ~ c.author_id if c.author_id else 'desconhecido') }}{% if c.privacy %} · {{ c.privacy|lower }}{% endif %}</div>
+    {% if c.body %}<div class="comment-body">{{ c.body }}</div>{% endif %}
+    {% set fs = files.get(c.id, []) %}
+    {% if fs %}<div class="thumbs">
+      {% for f in fs %}
+        {% if f.imagem %}<a href="/pedidos/ficheiro/{{ f.id }}" target="_blank" rel="noopener"><img src="/pedidos/ficheiro/{{ f.id }}" alt="Imagem do comentário{{ ' ' ~ f.name if f.name and f.name != 'imagem' }}" loading="lazy"></a>
+        {% elif f.error %}<span class="tag tag-off" title="{{ f.error }}">{{ f.kind }} não disponível</span>
+        {% else %}<a class="button" href="/pedidos/ficheiro/{{ f.id }}?download=1">{{ f.name or 'anexo' }} ({{ '%.0f KB'|format(f.size / 1024) }})</a>{% endif %}
+      {% endfor %}</div>{% endif %}
+  </article>
+  {% else %}
+  <p class="small muted">Sem comentários lidos. Os comentários são lidos para os pedidos abertos em cada leitura do SMAX.</p>
+  {% endfor %}
+</section>
+
 <div class="grid2">
 <section class="card" id="renovar">
   <h2>Renovação</h2>
@@ -130,25 +149,6 @@
   {% endif %}
 </section>
 </div>
-
-<section class="card" id="comentarios">
-  <h2>Comentários <small class="muted">{{ comments|length }}</small></h2>
-  {% for c in comments %}
-  <article class="comment">
-    <div class="small muted">{{ c.created_at|dtt if c.created_at else '' }} · {{ c.author or ('utilizador ' ~ c.author_id if c.author_id else 'desconhecido') }}{% if c.privacy %} · {{ c.privacy|lower }}{% endif %}</div>
-    {% if c.body %}<div class="comment-body">{{ c.body }}</div>{% endif %}
-    {% set fs = files.get(c.id, []) %}
-    {% if fs %}<div class="thumbs">
-      {% for f in fs %}
-        {% if f.imagem %}<a href="/pedidos/ficheiro/{{ f.id }}" target="_blank" rel="noopener"><img src="/pedidos/ficheiro/{{ f.id }}" alt="Imagem do comentário{{ ' ' ~ f.name if f.name and f.name != 'imagem' }}" loading="lazy"></a>
-        {% elif f.error %}<span class="tag tag-off" title="{{ f.error }}">{{ f.kind }} não disponível</span>
-        {% else %}<a class="button" href="/pedidos/ficheiro/{{ f.id }}?download=1">{{ f.name or 'anexo' }} ({{ '%.0f KB'|format(f.size / 1024) }})</a>{% endif %}
-      {% endfor %}</div>{% endif %}
-  </article>
-  {% else %}
-  <p class="small muted">Sem comentários lidos. Os comentários são lidos para os pedidos abertos em cada leitura do SMAX.</p>
-  {% endfor %}
-</section>
 
 {% if others %}
 <section class="card">

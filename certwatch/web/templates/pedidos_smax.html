@@ -30,10 +30,10 @@
   <tbody>
   {% for r in rows %}{% set t = r.t %}
     <tr>
-      <td><a class="ticket {{ 'ticket-open' if r.aberto else 'ticket-closed' }}" href="/pedidos/smax/{{ t.id|urlencode }}" title="Percurso, comentários e ações">{{ t.id }}</a>
+      <td><a class="ticket int {{ 'ticket-open' if r.aberto else 'ticket-closed' }}" href="/pedidos/smax/{{ t.id|urlencode }}" title="Percurso, comentários e ações">{{ t.id }}</a>
         {% if r.url %}<a class="small" href="{{ r.url }}" target="_blank" rel="noopener noreferrer" title="Abrir no SMAX">SMAX ↗</a>{% endif %}
         <div class="small muted ticket-title">{{ t.display_label }}</div>
-        {% if r.percurso %}<div class="small"><span class="tag {{ 'tag-ok' if not r.percurso.current else 'tag-acc' }}">{{ r.percurso.done }}/5</span> {{ r.percurso.current_label }}</div>{% endif %}</td>
+        {% if r.percurso %}<div class="small"><span class="tag {{ 'tag-ok' if not r.percurso.current else 'tag-acc' }}" title="Passos do percurso feitos">{{ r.percurso.done }}/5</span> {{ 'concluído' if not r.percurso.current else 'próximo: ' ~ r.percurso.current_label|lower }}</div>{% endif %}</td>
       <td>{% if r.alvo %}<a class="mono" href="{{ '/certificados/detalhe?cn=' if r.alvo.tipo == 'certificado' else '/apis?q=' }}{{ r.alvo.nome|urlencode }}">{{ r.alvo.nome }}</a>
           {% if r.alvo.tipo == 'API' %} <span class="tag tag-acc">API</span>{% endif %}
         {% else %}<span class="mono">{{ t.endpoint or '—' }}</span>{% if t.endpoint %}<div class="small muted">não está no inventário</div>{% endif %}{% endif %}

@@ -469,3 +469,18 @@ class FinalPublishFile(Base):
     previous: Mapped[bytes | None] = mapped_column(LargeBinary, nullable=True, deferred=True)
     previous_sha256: Mapped[str] = mapped_column(String(64), default="")
     previous_mtime: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
+class EmailReport(Base):
+    """Relatório por email preparado na página: janela, prazo de alerta, certificados retirados e envios feitos."""
+
+    __tablename__ = "email_reports"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    created_by: Mapped[str] = mapped_column(String(128), default="")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, index=True)
+    desde: Mapped[int] = mapped_column(Integer, default=0)
+    ate: Mapped[int] = mapped_column(Integer, default=90)
+    alerta: Mapped[int] = mapped_column(Integer, default=20)
+    excluded: Mapped[list] = mapped_column(JSON, default=list)
+    sends: Mapped[list] = mapped_column(JSON, default=list)
