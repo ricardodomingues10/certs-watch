@@ -1,6 +1,6 @@
 {% extends "base.html" %}
 {% block title %}Execuções e auditoria{% endblock %}
-{% block crumb %}Operação{% endblock %}
+{% block crumb %}Sistema{% endblock %}
 {% block page_title %}Execuções e auditoria{% endblock %}
 {% block lede %}Tudo corre sozinho todos os dias às {{ daily_at }}. Aqui pode pedir uma execução imediata, ver o resultado de cada uma e quem fez o quê.{% endblock %}
 {% block content %}
@@ -42,7 +42,7 @@
 <section class="card" id="ucmdb">
   <div class="ucmdb-head"><h2>Alterações na UCMDB <small>({{ n_writes }})</small></h2>
     {% if n_writes %}<a class="button" href="/jobs/ucmdb.csv">Exportar todas (CSV)</a>{% endif %}</div>
-  <p class="small muted">Cada certificado criado ou atualizado na UCMDB pelo certwatch, a partir de uma geração ou editado à mão: o valor que tinha, o que foi enviado e o resultado. Mostra as 100 mais recentes; a exportação tem todas, uma linha por campo.</p>
+  <p class="small muted">Cada certificado criado ou atualizado na UCMDB pelo certwatch, a partir de uma reconciliação ou editado à mão: o valor que tinha, o que foi enviado e o resultado. Mostra as 100 mais recentes; a exportação tem todas, uma linha por campo.</p>
   <div class="scroll"><table class="compact">
     <thead><tr><th>Quando</th><th>Quem</th><th>Origem</th><th>Certificado</th><th>O que mudou</th><th>Resultado</th></tr></thead>
     <tbody>

@@ -36,15 +36,18 @@
     {{ navlink('/testes', 'Testes', p.startswith('/testes') and not p.startswith('/testes/como')) }}
     {{ navlink('/findings', 'Alertas', p.startswith('/findings'), nav.alertas, 'hot' if nav.alertas_altos else '') }}
 
-    <h4>Descoberta</h4>
+    <h4>CMDB</h4>
+    {{ navlink('/cmdb-final', 'Reconciliar e atualizar', p.startswith('/cmdb-final') and not p.startswith('/cmdb-final/permissoes'), nav.reconc_dif, 'warm') }}
     {{ navlink('/descoberta', 'Na internet', p.startswith('/descoberta'), nav.ct_por_triar, 'warm') }}
-    {{ navlink('/reconciliacao', 'Reconciliação', p.startswith('/reconciliacao'), nav.reconc_dif, 'warm') }}
+    {{ navlink('/ucmdb/certificado', 'Editar um certificado', p.startswith('/ucmdb/certificado')) }}
 
     <h4>Operação</h4>
-    {{ navlink('/cmdb-final', 'Atualizar a CMDB', p.startswith('/cmdb-final')) }}
     {{ navlink('/pedidos', 'Pedidos SMAX', p.startswith('/pedidos')) }}
     {{ navlink('/relatorio', 'Relatório por email', p.startswith('/relatorio')) }}
+
+    <h4>Sistema</h4>
     {{ navlink('/jobs', 'Execuções e auditoria', p.startswith('/jobs')) }}
+    {{ navlink('/cmdb-final/permissoes', 'Ligação à UCMDB', p.startswith('/cmdb-final/permissoes')) }}
     {{ navlink('/testes/como-funciona', 'Como funciona', p.startswith('/testes/como')) }}
   </nav>
 

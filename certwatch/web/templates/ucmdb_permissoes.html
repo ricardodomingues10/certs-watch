@@ -1,7 +1,7 @@
 {% extends "base.html" %}
-{% block title %}Permissões na UCMDB{% endblock %}
-{% block crumb %}<a href="/cmdb-final">Atualizar a CMDB</a>{% endblock %}
-{% block page_title %}Permissões da conta na UCMDB{% endblock %}
+{% block title %}Ligação à UCMDB{% endblock %}
+{% block crumb %}Sistema{% endblock %}
+{% block page_title %}Ligação à UCMDB{% endblock %}
 {% block lede %}Verifica o que a conta configurada no certwatch (segredo <span class="mono">ucmdb_user</span>) consegue fazer pela REST API da UCMDB: entrar, ler as listas (TQL) e, se pedir, atualizar um CI ou criar um certificado de teste. A password nunca aparece aqui nem nos registos.{% endblock %}
 {% block content %}
 {% if erro %}<div class="note bad">{{ erro }}</div>{% endif %}

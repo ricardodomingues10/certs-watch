@@ -101,6 +101,9 @@ _ADDED_COLUMNS = [
     ("email_reports", "ct_dias", "INTEGER NOT NULL DEFAULT 30"),
     ("email_reports", "textos", "JSON"),
     ("email_reports", "editados", "JSON"),
+    ("final_runs", "vistas", "JSON"),
+    ("ucmdb_writes", "parte", "VARCHAR(16) NOT NULL DEFAULT 'cert'"),
+    ("ucmdb_writes", "lista", "VARCHAR(16) NOT NULL DEFAULT 'certificados'"),
 ]
 
 

@@ -246,7 +246,7 @@ def test_empty_cmdb_stops(settings):
         cf.reconcile_final(t, {}, settings, live, TODAY)
 
 
-def test_generate_and_compare(settings, monkeypatch):
+def test_generate(settings, monkeypatch):
     (settings.import_dir / "ca1_export.csv").write_bytes(CA1)
     (settings.import_dir / "avi_export.csv").write_bytes(AVI)
     with session_scope() as s:
@@ -273,25 +273,6 @@ def test_generate_and_compare(settings, monkeypatch):
         assert run.summary["novos"] == 4 and run.csv and run.csv_sem and run.xlsx
         assert run.inputs["CA2"]["origem"] == "carregado"
         assert s.scalar(select(CmdbRecord).where(CmdbRecord.common_name == "renovado.exemplo.pt")) is not None
-
-        # comparação: o ficheiro final contra a CMDB atual (que ainda não recebeu as alterações)
-        recs = list(s.scalars(select(CmdbRecord).where(CmdbRecord.active.is_(True))))
-        rows, counts = cf.compare_with_cmdb(cf.read_final_xlsx(run.xlsx), recs, TZ)
-        st = {r["cn"]: r for r in rows}
-        assert st["igual.exemplo.pt"]["estado"] == "igual"
-        assert st["renovado.exemplo.pt"]["dif"] == ["data"]
-        assert set(st["www.exemplo.pt"]["dif"]) == {"data", "issuer", "issuer_name"}
-        assert st["novo-avi.exemplo.pt"]["estado"] == "nao_existe"
-        assert counts["nao_existe"] == 5 and counts["data"] == 3     # renovado, www e duplo
-        assert "motivo" in st["antigo.exemplo.pt"] and "motivo" not in st["novo-avi.exemplo.pt"]
-        assert all(r["cor"] for r in cf.filter_compare(rows, "todos", marked=True))
-
-        # depois de a UCMDB aplicar o ficheiro: renovado fica igual
-        rec = s.scalar(select(CmdbRecord).where(CmdbRecord.common_name == "renovado.exemplo.pt"))
-        rec.valid_to = datetime(2027, 11, 10, 12, tzinfo=timezone.utc)
-        s.flush()
-        rows, _ = cf.compare_with_cmdb(cf.read_final_xlsx(run.xlsx), list(s.scalars(select(CmdbRecord))), TZ)
-        assert {r["cn"]: r for r in rows}["renovado.exemplo.pt"]["estado"] == "igual"
 
 
 
@@ -356,31 +337,34 @@ def test_web_flow(settings, monkeypatch):
         assert r.status_code == 303
         url = r.headers["location"]
         r = c.get(url, auth=AUTH)
-        assert "Pronta" in r.text and "8 alterações" in r.text and "Aplicar na UCMDB" in r.text
-        for v in ("servidor", "erros", "colunas"):
+        assert "Pronta" in r.text and "O que foi comparado" in r.text and "Aplicar na UCMDB" in r.text
+        assert "<b>8</b> alterações" in r.text and "Quando aparece aqui" in r.text
+        for v in ("novos", "alterados", "servidor", "confirmar", "so_na_cmdb", "azure", "erros", "detalhes",
+                  "alteracoes", "colunas"):
             assert c.get(f"{url}?vista={v}", auth=AUTH).status_code == 200
         assert "MANTER" not in c.get(f"{url}?vista=servidor", auth=AUTH).text   # texto legível, não o código
+        novos = c.get(f"{url}?vista=novos", auth=AUTH).text
+        assert "novo-avi.exemplo.pt" in novos and "Não existe na CMDB" in novos and "renovado.exemplo.pt" not in novos
+        alt = c.get(f"{url}?vista=alterados", auth=AUTH).text
+        assert "renovado.exemplo.pt" in alt and "Na CMDB está 10-11-2026" in alt
+        assert "Sem exportação do Azure" in c.get(f"{url}?vista=azure", auth=AUTH).text
         r = c.get(f"{url}/ficheiro/csv", auth=AUTH)
         assert r.content.startswith(b'"Display Label"|')
         assert c.get(f"{url}/ficheiro/xlsx", auth=AUTH).content[:2] == b"PK"
         for what in ("alteracoes", "erros", "servidor", "colunas"):
             assert c.get(f"{url}/exportar/{what}", auth=AUTH).status_code == 200
         # excluir uma alteração e voltar a incluí-la
-        rid = url.rsplit("/", 1)[1]
-        assert 'name="incluir"' in c.get(url, auth=AUTH).text
-        r = c.post(f"{url}/selecao", data={"csrf": token, "k": ["1", "2"], "incluir": ["2"]}, auth=AUTH)
-        assert r.status_code == 200 and "7 alterações" in r.text and "1 excluída" in r.text
+        assert 'name="incluir"' in novos
+        r = c.post(f"{url}/selecao", data={"csrf": token, "k": ["1", "2"], "incluir": ["2"],
+                                           "next": f"{url}?vista=alterados"}, auth=AUTH)
+        assert r.status_code == 200 and "1 excluída no total" in r.text and "<b>7</b> alterações" in r.text
         r = c.post(f"{url}/selecao", data={"csrf": token, "k": ["1"], "incluir": ["1"]}, auth=AUTH)
-        assert "8 alterações" in r.text
+        assert "<b>8</b> alterações" in r.text
         assert c.post(f"{url}/selecao", data={"csrf": token, "k": ["x"]}, auth=AUTH).status_code == 400
-        # comparar: geração e ficheiro carregado
-        r = c.get("/cmdb-final/comparar", auth=AUTH)
-        assert r.status_code == 200 and f"geracao:{rid}" in r.text
-        r = c.post("/cmdb-final/comparar/carregar", data={"csrf": token},
-                   files={"ficheiro": ("final.xlsx", c.get(f"{url}/ficheiro/xlsx", auth=AUTH).content)}, auth=AUTH)
-        assert r.status_code == 200 and "final.xlsx (carregado)" in r.text
-        r = c.get(f"/cmdb-final/comparar/exportar?origem=geracao:{rid}&vista=todos", auth=AUTH)
-        assert "novo-avi.exemplo.pt" in r.content.decode("utf-8-sig")
+        # páginas antigas
+        assert c.get("/cmdb-final/comparar", auth=AUTH).status_code in (404, 422)
+        page = c.get("/cmdb-final", auth=AUTH).text
+        assert "Reconciliar agora" in page and "Renovações" in page and "Azure" in page
 
 
 def _ucmdb(topology_query_status=200):
@@ -521,32 +505,6 @@ def test_exclusion_updates_pending(settings):
         assert "Por verificar" not in run.csv.decode()
 
 
-def test_exclude_from_compare_page(settings, monkeypatch):
-    from fastapi.testclient import TestClient
-    from certwatch.web import app as webapp
-    monkeypatch.setattr(webapp, "get_settings", lambda: settings)
-    (settings.import_dir / "ca1.csv").write_bytes(CA1)
-    (settings.import_dir / "ca2.xlsx").write_bytes(ca2_xlsx())
-    (settings.import_dir / "avi.csv").write_bytes(AVI)
-    with session_scope() as s:
-        run_id = cf.start_run(s, "admin").id
-    cf.generate(run_id, settings, fetch=_fetch, live_factory=lambda s, st: live, today=TODAY)
-    AUTH = ("admin", "teste-admin-123")
-    with TestClient(webapp.app) as c:
-        url = f"/cmdb-final/comparar?origem=geracao:{run_id}&vista=todos"
-        page = c.get(url, auth=AUTH).text
-        assert 'name="incluir"' in page and "Guardar seleção e refazer os ficheiros" in page
-        token = c.cookies["cw_csrf"]
-        with session_scope() as s:
-            keys = {ch["cn"]: ch["chave"] for ch in s.get(FinalRun, run_id).changes}
-        r = c.post(f"/cmdb-final/{run_id}/selecao", data={"csrf": token, "next": url,
-                                                         "k": [keys["novo-avi.exemplo.pt"], keys["renovado.exemplo.pt"]],
-                                                         "incluir": [keys["renovado.exemplo.pt"]]}, auth=AUTH)
-        assert r.status_code == 200 and "1 já excluída" in r.text and "novo-avi.exemplo.pt" not in r.text
-    with session_scope() as s:
-        assert "novo-avi.exemplo.pt" not in s.get(FinalRun, run_id).csv.decode()
-
-
 def test_missing_serial_and_issuer(settings):
     """Linhas novas (Global Id = x): Issuer e IssuerName sempre preenchidos ("Por verificar" se não houver em nenhuma
     fonte); o SerialNumber nunca é inventado. Antes disso, procura noutras fontes e nos certificados já vistos."""
@@ -653,10 +611,9 @@ def test_run_page_shows_pending(settings, monkeypatch):
         run_id = cf.start_run(s, "admin").id
     cf.generate(run_id, st, fetch=_fetch, live_factory=lambda s, x: live, today=TODAY)
     with TestClient(webapp.app) as c:
-        page = c.get(f"/cmdb-final/{run_id}", auth=("admin", "teste-admin-123")).text
-        assert "com dados por confirmar" in page and "Os CSV não foram gerados" not in page
-        only = c.get(f"/cmdb-final/{run_id}?vista=alteracoes&pendente=1", auth=("admin", "teste-admin-123")).text
-        assert "novo-ca2.exemplo.pt" in only and "novo-avi.exemplo.pt" not in only
+        page = c.get(f"/cmdb-final/{run_id}?vista=confirmar", auth=("admin", "teste-admin-123")).text
+        assert "Por confirmar" in page and "Os ficheiros CSV não foram gerados" not in page
+        assert "novo-ca2.exemplo.pt" in page and "novo-avi.exemplo.pt" not in page
 
 
 def test_duplicate_key_cases(settings):

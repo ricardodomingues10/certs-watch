@@ -1,9 +1,20 @@
 {% extends "base.html" %}
 {% block title %}Como testamos{% endblock %}
-{% block crumb %}Operação{% endblock %}
+{% block crumb %}Sistema{% endblock %}
 {% block page_title %}Como funciona{% endblock %}
 {% block lede %}Para cada servidor, o certwatch faz o mesmo que um browser: liga-se, recebe o certificado e a cadeia, e confirma que tudo está em ordem. Não envia dados nem credenciais. Os testes estão em camadas: se a rede falha, não há ligação para testar o resto.{% endblock %}
 {% block content %}
+<section class="card" id="cmdb">
+  <h2>Como a CMDB é mantida</h2>
+  <ol class="small">
+    <li><b>Fontes</b>: as exportações das CAs (CA1, CA2) e do AVI, a exportação das App Registrations do Azure, os certificados encontrados na internet e as renovações registadas nos pedidos SMAX.</li>
+    <li><b>Reconciliar</b>: a CMDB é lida pela REST API e cada certificado das fontes é procurado pelo CommonName e comparado pela data de expiração, ao dia. Quando a fonte tem uma data mais antiga, decide o servidor.</li>
+    <li><b>Rever</b>: cada diferença aparece num separador (novos, renovados e alterados, data mais antiga, por confirmar, só na CMDB, Azure, erros nas fontes), com o que se comparou e porquê. Escolhe-se o que entra.</li>
+    <li><b>Aplicar</b>: as escolhidas são criadas ou atualizadas na UCMDB pela REST API, uma a uma ou todas, com verificação antes e depois. Tudo fica em Execuções e auditoria.</li>
+  </ol>
+  <p class="small"><a href="/cmdb-final">Reconciliar e atualizar</a> · <a href="/ucmdb/certificado">Editar um certificado</a> · <a href="/jobs#ucmdb">Alterações na UCMDB</a></p>
+</section>
+
 {% for lid, ltitle, lq in LAYERS %}
 <section class="card" id="camada-{{ lid }}">
   <h2>{{ ltitle }} <small>{{ lq }}</small></h2>

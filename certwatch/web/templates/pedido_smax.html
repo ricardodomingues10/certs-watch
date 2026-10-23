@@ -71,7 +71,7 @@
   {% endfor %}
   <details class="mt" {{ 'open' if not perc.evidence }}>
     <summary>Registar a renovação</summary>
-    <p class="small muted">A renovação registada entra na próxima geração dos ficheiros da CMDB.</p>
+    <p class="small muted">A renovação registada entra na próxima reconciliação da CMDB.</p>
     <form method="post" action="/pedidos/smax/{{ t.id }}/renovacao" class="mt">
       <input type="hidden" name="csrf" value="{{ csrf }}"><input type="hidden" name="modo" value="servidor">
       <button>Usar o certificado que o servidor apresenta</button>
@@ -127,8 +127,8 @@
   <p class="small">{{ perc.steps[3].detail }}</p>
   {% if perc.cmdb %}<p class="small muted">Na CMDB: {% for r in perc.cmdb %}{{ r.valid_to|dt }}{{ ' (' ~ (r.issuer_name or r.issuer) ~ ')' if (r.issuer_name or r.issuer) }}{{ ', ' if not loop.last }}{% endfor %}</p>{% endif %}
   {% if not perc.steps[3].done %}
-  <p>{% if perc.steps[3].run %}<a class="button" href="/cmdb-final/{{ perc.steps[3].run.id }}?vista=alteracoes&amp;q={{ perc.cn|urlencode }}">Ver na geração #{{ perc.steps[3].run.id }}</a>{% endif %}
-     <a class="button" href="/cmdb-final">Atualizar a CMDB</a></p>
+  <p>{% if perc.steps[3].run %}<a class="button" href="/cmdb-final/{{ perc.steps[3].run.id }}?vista=alterados&amp;q={{ perc.cn|urlencode }}">Ver na reconciliação #{{ perc.steps[3].run.id }}</a>{% endif %}
+     <a class="button" href="/cmdb-final">Reconciliar e atualizar</a></p>
   {% endif %}
 </section>
 

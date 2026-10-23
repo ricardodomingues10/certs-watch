@@ -98,7 +98,7 @@ def test_import_and_reconcile(env, tmp_path):
         assert ingest_imports(db, s)["CA1"]["estado"] == "sem alterações"
 
 
-def test_reconcile_pages(env, tmp_path, monkeypatch):
+def test_old_reconcile_page_redirects_and_directory_panel(env, tmp_path, monkeypatch):
     from fastapi.testclient import TestClient
     from certwatch import config
     from certwatch.web.app import app
@@ -110,20 +110,10 @@ def test_reconcile_pages(env, tmp_path, monkeypatch):
     config.get_settings.cache_clear()
     auth = ("admin", "teste-admin-123")
     with TestClient(app) as c:
-        c.get("/reconciliacao", auth=auth)
-        token = c.cookies["cw_csrf"]
-        from certwatch.jobs import run_now
-        assert run_now("ingest_imports", "teste", config.get_settings()).status == "ok"
-        from certwatch.web.app import invalidate_nav
-        invalidate_nav()
-        page = c.get("/reconciliacao", auth=auth).text
-        assert "novo.exemplo.pt" in page and "Novo: não existe na CMDB" in page
-        csv_text = c.get("/reconciliacao/exportar", auth=auth).content.decode("utf-8")
-        assert "novo.exemplo.pt" in csv_text and "AVI" in csv_text
-        assert c.post("/jobs/ingest_imports", data={"csrf": token, "next": "/reconciliacao"}, auth=auth,
-                      follow_redirects=False).headers["location"] == "/reconciliacao"
-        dash = c.get("/", auth=auth).text
-        assert "Configuração" in dash and "Ficheiros de reconciliação" in dash and "AVI: avi_x.csv" in dash
+        r = c.get("/reconciliacao", auth=auth, follow_redirects=False)
+        assert r.status_code == 301 and r.headers["location"] == "/cmdb-final"
+        page = c.get("/cmdb-final", auth=auth).text
+        assert "avi_x.csv" in page and "fonte AVI" in page and "Reconciliar agora" in page
 
 
 def test_azure_credentials_against_api_list(env, tmp_path):
@@ -195,6 +185,6 @@ def test_old_env_still_reads_azure_and_directory_panel(env, tmp_path, monkeypatc
     from certwatch.jobs import run_now
     assert run_now("ingest_imports", "teste", config.get_settings()).summary["ingest_imports"]["AZURE"]["registos"] == 1
     with TestClient(app) as c:
-        page = c.get("/reconciliacao", params={"fonte": "AZURE", "estado": "novo"}, auth=("admin", "teste-admin-123")).text
-    assert "App X" in page and "fonte AZURE" in page
+        page = c.get("/cmdb-final", auth=("admin", "teste-admin-123")).text
+    assert "azure.csv" in page and "fonte AZURE" in page
     assert "extensão .docx não suportada" in page and "não começa por nenhum prefixo conhecido" in page

@@ -47,13 +47,14 @@ from sqlalchemy.orm import Session
 
 from .config import Settings
 from .db import as_utc, session_scope, utcnow
-from .models import (Certificate, CmdbRecord, CtCert, Endpoint, FinalDecision, FinalInput,
+from .models import (ApiRecord, Certificate, CtCert, Endpoint, FinalDecision, FinalInput,
                      FinalRun, ScanResult)
-from .normalize import norm_host, norm_serial
+from .normalize import norm_issuer, norm_serial
 from .reconcile import ALLOWED_EXT, _fix_mojibake, map_columns, norm_header, read_table_bytes, source_for
 
 log = logging.getLogger(__name__)
 
+AZURE_SOURCE = "AZURE"         # exportação das App Registrations do Azure (segredos e certificados), opcional
 INTERNET = "INTERNET"          # fonte: certificados encontrados na internet (Certificate Transparency)
 RENOVACAO = "RENOVACAO"        # fonte: renovações registadas nos pedidos (servidor, ficheiro ou à mão)
 SOURCE_LABELS = {INTERNET: "Internet (CT)", RENOVACAO: "Renovação registada"}
@@ -595,7 +596,7 @@ def current_inputs(session: Session, settings: Settings) -> dict[str, dict]:
             if not p.is_file() or p.name.startswith(".") or p.suffix.lower() not in ALLOWED_EXT:
                 continue
             src = source_for(p.name, settings)
-            if src not in settings.final_sources:
+            if src not in settings.final_sources and src != AZURE_SOURCE:
                 continue
             try:
                 mtime = datetime.fromtimestamp(p.stat().st_mtime, tz=timezone.utc)
@@ -603,7 +604,7 @@ def current_inputs(session: Session, settings: Settings) -> dict[str, dict]:
                 continue
             if src not in out or mtime > out[src]["quando"]:
                 out[src] = {"fonte": src, "origem": "diretoria", "nome": p.name, "quando": mtime, "path": str(p)}
-    for src in settings.final_sources:
+    for src in [*settings.final_sources, AZURE_SOURCE]:
         up = session.scalar(select(FinalInput).where(FinalInput.source == src).order_by(FinalInput.id.desc()).limit(1))
         if up is not None and (src not in out or as_utc(up.uploaded_at) >= out[src]["quando"]):
             out[src] = {"fonte": src, "origem": "carregado", "nome": up.name, "quando": as_utc(up.uploaded_at),
@@ -640,6 +641,7 @@ class Result:
     summary: dict
     originals: dict[int, dict]
     row_src: dict[int, dict] = field(default_factory=dict)
+    extra: dict = field(default_factory=dict)          # outras vistas: só na CMDB, Azure
 
 
 def _identity(row: dict, t: CmdbTable) -> tuple[str, str | None]:
@@ -651,6 +653,33 @@ def _identity(row: dict, t: CmdbTable) -> tuple[str, str | None]:
         if v and identifier_type(v) != "OUTRO":
             return v, name
     return "", None
+
+
+def _src_label(fonte: str) -> str:
+    return SOURCE_LABELS.get(fonte, fonte)
+
+
+def _fmt_day(d) -> str:
+    if isinstance(d, str):
+        d = parse_day(d).day
+    return d.strftime("%d-%m-%Y") if d else "sem data"
+
+
+def _why(entry: dict, src: dict) -> str:
+    """Porque é que esta linha é uma alteração, em linguagem simples (a partir dos dados da comparação)."""
+    fonte = _src_label(src.get("fonte") or "")
+    onde = f"{fonte}" + (f", linha {src['linha']}" if src.get("linha") else "") + (f" ({src['ref']})" if src.get("ref") else "")
+    if entry["tipo"] == "novo":
+        return (f"Não existe na CMDB: nenhum certificado com este CommonName (nem com este Name, Display Label ou "
+                f"Hostname quando o CommonName está vazio). Vem de {onde}, válido até {_fmt_day(src.get('dia_final'))}.")
+    if src.get("servidor") and src.get("dia_fonte") and src.get("dia_cmdb") and src["dia_fonte"] < src["dia_cmdb"]:
+        return (f"{onde} tem {_fmt_day(src['dia_fonte'])}, anterior à CMDB ({_fmt_day(src['dia_cmdb'])}). Para não andar "
+                f"para trás por engano, decidiu o certificado que o servidor apresenta: {_fmt_day(src.get('dia_final'))}.")
+    if src.get("dia_cmdb") and src.get("dia_final"):
+        rel = "mais recente" if src["dia_final"] > src["dia_cmdb"] else "diferente"
+        return (f"Na CMDB está {_fmt_day(src['dia_cmdb'])}; {onde} tem {_fmt_day(src['dia_final'])} ({rel}). "
+                "Comparado pelo CommonName e pela data ao dia.")
+    return f"Os dados de {onde} são diferentes dos da CMDB."
 
 
 KnownLookup = Callable[[str, "date | None"], dict]
@@ -729,7 +758,8 @@ def reconcile_final(table: CmdbTable, sources: dict[str, list[SourceItem]], sett
     for e in falsos:
         it = e["it"]
         item = {"cn": it.cn, "day": it.day, "serial": it.serial, "issuer": it.issuer, "san": it.san,
-                "source": it.source, "live": it.auth == "servidor", "auth": it.auth, "triage": it.triage}
+                "source": it.source, "live": it.auth == "servidor", "auth": it.auth, "triage": it.triage,
+                "row_no": it.row_no, "ref": it.ref, "cmdb_day": e["cmdb_day"], "source_day": it.day}
         regress = e["cmdb_day"] is not None and it.day is not None and it.day < e["cmdb_day"]
         if not regress:
             final_items.append(item)
@@ -836,7 +866,9 @@ def reconcile_final(table: CmdbTable, sources: dict[str, list[SourceItem]], sett
     row_src: dict[int, dict] = {}
 
     def note_src(i: int, it: dict) -> None:
-        row_src.setdefault(i, {"fonte": it["source"], "triagem": it.get("triage", "")})
+        row_src.setdefault(i, {"fonte": it["source"], "triagem": it.get("triage", ""), "linha": it.get("row_no"),
+                               "ref": it.get("ref") or "", "dia_fonte": it.get("source_day"), "dia_cmdb": it.get("cmdb_day"),
+                               "dia_final": it.get("day"), "servidor": bool(it.get("live"))})
 
     for it in final_items:
         cn = it["cn"].lower().strip()
@@ -979,7 +1011,28 @@ def reconcile_final(table: CmdbTable, sources: dict[str, list[SourceItem]], sett
         if i not in new_rows:
             entry["campos"] = [{"campo": inv.get(c, c), "antes": originals[i].get(c, ""), "depois": row.get(c, "")}
                                for c in mods[i] if c != H("Description")]
+        entry["motivo"] = _why(entry, src)
         changes.append(entry)
+
+    # --- só na CMDB: certificados com o emissor de uma CA lida que não aparecem na exportação dessa CA
+    issuer_of = {src.upper(): norm_issuer(v) for src, v in settings.import_issuers.items() if v}
+    so_na_cmdb = []
+    for src, items in sources.items():
+        inorm = issuer_of.get(src.upper())
+        if not inorm or not items:
+            continue
+        present = {x.cn.lower().strip() for x in items if x.cn}
+        for i, r in originals.items():
+            ident, _ = _identity(r, t)
+            d = parse_day(r.get(H("ValidTo"))).day
+            iss = norm_issuer(r.get(H("IssuerName")) or r.get(H("Issuer")) or "")
+            if ident and iss == inorm and ident.lower() not in present and d is not None and d >= today:
+                so_na_cmdb.append({"cn": ident, "fonte": src, "ucmdb_id": t.ids[i] if i < len(t.ids) else "",
+                                   "global_id": r.get(H("Global Id"), ""), "validto": d.isoformat(),
+                                   "issuer": r.get(H("IssuerName")) or r.get(H("Issuer")) or "",
+                                   "estado": r.get(t.display.get("Certificate Status", ""), "") if "Certificate Status" in t.display else "",
+                                   "description": r.get(H("Description"), "")})
+    so_na_cmdb.sort(key=lambda x: (x["fonte"], x["cn"].lower()))
 
     expired = {i for i, r in enumerate(rows) if (d := parse_day(r.get(H("ValidTo"))).day) is not None and d < today}
     src_counts = {src: {"lidas": len(items), "validas": sum(1 for x in items if x.keep)} for src, items in sources.items()}
@@ -989,11 +1042,13 @@ def reconcile_final(table: CmdbTable, sources: dict[str, list[SourceItem]], sett
         "expirados": len(expired), "diferencas_fontes": len(falsos), "coincidentes": len(kept) - len(falsos),
         "regressoes": len(live_rows_info),
         "regressoes_atualizadas": sum(1 for x in live_rows_info if x["decisao"] == "ATUALIZAR_COM_SERVIDOR"),
-        "erros": len(problems), "fontes": src_counts, "hoje": today.isoformat(),
+        "erros": len(problems), "fontes": src_counts, "hoje": today.isoformat(), "so_na_cmdb": len(so_na_cmdb),
+        "fontes_validas": sum(v["validas"] for v in src_counts.values()),
+        "fontes_comparadas": len(kept),
     }
     return Result(table=t, mods=mods, new_rows=new_rows, live_rows=live_rows, expired_rows=expired,
                   changes=changes, problems=problems, live=live_rows_info, summary=summary, originals=originals,
-                  row_src=row_src)
+                  row_src=row_src, extra={"so_na_cmdb": so_na_cmdb})
 
 
 # ------------------------------------------------------------------ saídas
@@ -1212,7 +1267,7 @@ def editable(session: Session, run: FinalRun) -> bool:
 def apply_selection(session: Session, run: FinalRun, shown: list[int], chosen: set[int], actor: str) -> int:
     """Grava a escolha (incluir/excluir) das alterações mostradas e refaz os ficheiros. Devolve quantas mudaram."""
     if not editable(session, run):
-        raise FinalError("Só a geração mais recente, pronta ou bloqueada, pode ser alterada. Gere de novo.")
+        raise FinalError("Só a reconciliação mais recente pode ser alterada. Reconcilie de novo.")
     changes = [dict(c) for c in (run.changes or [])]
     by_key = {c["chave"]: c for c in changes}
     changed = 0
@@ -1301,12 +1356,29 @@ def make_known_lookup(session: Session, settings: Settings) -> KnownLookup:
 
 
 # ------------------------------------------------------------------ execução
+def azure_view(session: Session, table: CmdbTable, filename: str, data: bytes, today: date) -> tuple[list[dict], dict]:
+    """Compara a exportação do Azure com a lista de APIs (cópia do certwatch) e com os certificados da CMDB lida agora."""
+    from .azure_rec import compare, read_azure
+    rows, info = read_azure(data, filename, today)
+    apis = [{"ucmdb_id": a.ucmdb_id, "nome": a.name, "aplicacao": a.application, "localizacao": a.location,
+             "data": as_utc(a.expiry).date() if a.expiry else None}
+            for a in session.scalars(select(ApiRecord).where(ApiRecord.active.is_(True)))]
+    H = table.h
+    certs = []
+    for i, r in enumerate(table.rows):
+        names = [r.get(table.display[c], "") for c in ("CommonName", "Name", "Display Label") if c in table.display]
+        certs.append({"ucmdb_id": table.ids[i] if i < len(table.ids) else "", "nomes": [x for x in names if x],
+                      "data": parse_day(r.get(H("ValidTo"))).day})
+    info["apis_lidas"] = len(apis)
+    return compare(rows, apis, certs, today), info
+
+
 def start_run(session: Session, actor: str) -> FinalRun:
     busy = session.scalar(select(FinalRun).where(FinalRun.status == "a_gerar").limit(1))
     if busy is not None:
         if utcnow() - as_utc(busy.created_at) < STALE_AFTER:
-            raise FinalError(f"Já está a ser gerada a versão #{busy.id}. Aguarde que termine.")
-        busy.status, busy.error, busy.finished_at = "erro", "Interrompido (o processo parou durante a geração).", utcnow()
+            raise FinalError(f"A reconciliação #{busy.id} ainda está a decorrer. Aguarde que termine.")
+        busy.status, busy.error, busy.finished_at = "erro", "Interrompido (o processo parou durante a reconciliação).", utcnow()
     run = FinalRun(created_by=actor, status="a_gerar")
     session.add(run)
     session.flush()
@@ -1350,6 +1422,17 @@ def generate(run_id: int, settings: Settings, fetch: Callable | None = None,
                     src_info[INTERNET] = {**ct_info, "origem": "internet"}
             res = reconcile_final(table, sources, settings, (live_factory or make_live_lookup)(s, settings), today,
                                   make_known_lookup(s, settings))
+            if AZURE_SOURCE in inputs:
+                az_info = inputs[AZURE_SOURCE]
+                az_data = _input_bytes(s, az_info)
+                try:
+                    res.extra["azure"], ainfo = azure_view(s, table, az_info["nome"], az_data, today)
+                    src_info[AZURE_SOURCE] = {**{k: v for k, v in ainfo.items() if k != "problemas"},
+                                              "origem": az_info["origem"], "quando": az_info["quando"].isoformat(),
+                                              "sha256": hashlib.sha256(az_data).hexdigest()}
+                    res.problems.extend(ainfo["problemas"])
+                except ValueError as exc:
+                    res.problems.append({"fonte": AZURE_SOURCE, "cn": "", "erro": f"Ficheiro do Azure ignorado: {exc}"})
             decisions = {d.key: d for d in s.scalars(select(FinalDecision))}
             for c in res.changes:
                 c["incluir"], c["porque"] = default_include(c, decisions)
@@ -1366,6 +1449,7 @@ def generate(run_id: int, settings: Settings, fetch: Callable | None = None,
             run.problems = res.problems[:5000]
             run.live = res.live
             run.validation = problems
+            run.vistas = res.extra
             run.state = state
             run.xlsx, run.csv, run.csv_sem = xlsx, csv, csv_sem
             run.status = "bloqueado" if problems else "pronto"
@@ -1411,27 +1495,6 @@ def run_file(run: FinalRun, key: str) -> bytes | None:
     return {"xlsx": run.xlsx, "csv": run.csv, "csv_sem": run.csv_sem}.get(key)
 
 
-# ------------------------------------------------------------------ comparação com a CMDB atual
-COMPARE_VIEWS = {
-    "diferencas": "Diferenças",
-    "data": "Data diferente",
-    "issuer": "Issuer diferente",
-    "issuer_name": "IssuerName diferente",
-    "nao_existe": "Não existe na CMDB",
-    "so_na_cmdb": "Só na CMDB",
-    "iguais": "Iguais",
-    "todos": "Todos",
-}
-COMPARE_HELP = {
-    "data": "A data de expiração (ao dia) do ficheiro é diferente da CMDB.",
-    "issuer": "O Issuer do ficheiro é diferente do da CMDB.",
-    "issuer_name": "O IssuerName do ficheiro é diferente do da CMDB.",
-    "nao_existe": "A linha do ficheiro não existe na CMDB (por exemplo, um certificado novo, Global Id = x, ainda não criado).",
-    "so_na_cmdb": "Existe na CMDB mas não no ficheiro (criado depois de o ficheiro ser gerado, ou ausente do TQL).",
-    "iguais": "Data, Issuer e IssuerName iguais.",
-}
-
-
 def read_final_xlsx(data: bytes) -> list[dict]:
     """Lê um CMDB_Final.xlsx (deste certwatch ou do n8n): identificação, ValidTo, Issuer, IssuerName e a cor."""
     from openpyxl import load_workbook
@@ -1475,89 +1538,81 @@ def read_final_xlsx(data: bytes) -> list[dict]:
         wb.close()
 
 
-def _norm_text(v) -> str:
-    return re.sub(r"\s+", " ", str(v or "")).strip().casefold()
+# ------------------------------------------------------------------ o que cada separador compara (para o utilizador)
+VIEWS = {
+    "novos": {
+        "label": "Novos",
+        "compara": "Cada certificado das fontes (CA1, CA2, AVI, internet e renovações registadas) com os certificados da CMDB lidos agora pela API.",
+        "chave": "O CommonName (sem maiúsculas). Se o CommonName da CMDB estiver vazio, usa-se o Name, o Display Label ou o Hostname.",
+        "regra": "Está aqui quando o nome não existe na CMDB.",
+        "aplicar": "Cria o certificado na UCMDB (no certs_update fica com Global Id = x). Emissor que nenhuma fonte tenha fica \"Por verificar\"; série que falte num certificado da internet fica x1, x2…",
+    },
+    "alterados": {
+        "label": "Renovados e alterados",
+        "compara": "Os mesmos certificados, quando o nome já existe na CMDB.",
+        "chave": "O CommonName e a data de expiração ao dia (a hora não conta).",
+        "regra": "Está aqui quando a data é diferente. Data da fonte mais recente: renovação por registar. Data mais antiga: decide o servidor (separador seguinte). Também quando o CommonName da CMDB estava vazio e foi encontrado pelo Name.",
+        "aplicar": "Atualiza só os campos que mudaram (ValidTo, SerialNumber, emissor e a Description com o registo da mudança), depois de confirmar que a UCMDB ainda tem os valores de antes.",
+    },
+    "servidor": {
+        "label": "Data mais antiga",
+        "compara": "A data da fonte com a da CMDB, quando a da fonte é anterior.",
+        "chave": "O nome do certificado como servidor, na porta 443.",
+        "regra": "Para não andar para trás por engano, usa-se o certificado que o servidor apresenta (verificação do certwatch recente ou ligação na hora). Sem resposta, num wildcard ou num nome que não é servidor, a CMDB fica como está.",
+        "aplicar": "Os que o servidor confirma passam para Renovados e alterados, com os dados do servidor.",
+    },
+    "confirmar": {
+        "label": "Por confirmar",
+        "compara": "As alterações dos dois primeiros separadores que precisam de atenção.",
+        "chave": "IssuerName + SerialNumber, a chave do certificado na CMDB.",
+        "regra": "Está aqui quando nenhuma fonte trouxe o emissor (\"Por verificar\") ou a série (x1, x2…), ou quando outra linha tem a mesma chave IssuerName + SerialNumber.",
+        "aplicar": "Pode aplicar. As de chave repetida ficam de fora até escolher qual entra.",
+    },
+    "so_na_cmdb": {
+        "label": "Só na CMDB",
+        "compara": "Os certificados da CMDB com o emissor de uma CA (CERTWATCH_IMPORT_ISSUERS) com a exportação dessa CA.",
+        "chave": "O CommonName.",
+        "regra": "Está aqui quando está na CMDB, ainda válido, mas não aparece na exportação da CA: pode ter sido revogado, ou a exportação estar incompleta.",
+        "aplicar": "Nada é feito automaticamente. Use Editar para mudar o que entender, por exemplo o estado.",
+    },
+    "azure": {
+        "label": "Azure",
+        "compara": "Cada credencial das App Registrations (exportação do Azure) com a lista de APIs e com a lista de certificados da CMDB.",
+        "chave": "O nome da App Registration e, como alternativa, o da Enterprise Application (sem sufixos nem maiúsculas); a data de fim ao dia, com 1 dia de tolerância.",
+        "regra": "É uma API (segredo) ou um certificado: se já está numa das listas, é dessa; senão decide o tipo de credencial do Azure (Certificate ou Secret). Pode sempre escolher a outra.",
+        "aplicar": "Não existe: inclui na lista escolhida (cria o registo). Data mais recente: atualiza a data do registo, quando só há um com esse nome.",
+    },
+    "erros": {
+        "label": "Erros nas fontes",
+        "compara": "Cada linha dos ficheiros, antes da comparação.",
+        "chave": "—",
+        "regra": "Linhas postas de lado: sem nome, data vazia ou ilegível, pedido não emitido, já expirado, nome que não é domínio. Também avisos sobre datas da CMDB.",
+        "aplicar": "Nada. Corrija a fonte, se for preciso, e reconcilie de novo.",
+    },
+}
 
 
-def compare_with_cmdb(final_rows: list[dict], records: list[CmdbRecord], tz: ZoneInfo) -> tuple[list[dict], dict]:
-    by_gid: dict[str, list[CmdbRecord]] = {}
-    by_cn: dict[str, list[CmdbRecord]] = {}
-    for r in records:
-        if r.global_id:
-            by_gid.setdefault(str(r.global_id).strip().lower(), []).append(r)
-        by_cn.setdefault(r.cn_norm, []).append(r)
-    used: set[int] = set()
-    out = []
-
-    def rec_day(r: CmdbRecord) -> date | None:
-        return as_utc(r.valid_to).astimezone(tz).date() if r.valid_to else None
-
-    for fr in final_rows:
-        fday = parse_day(fr["validto"]).day
-        gid = fr["global_id"].strip().lower()
-        rec = None
-        if gid and gid != "x":
-            rec = next((r for r in by_gid.get(gid, []) if r.id not in used), None)
-        if rec is None and fr["cn"]:
-            cands = [r for r in by_cn.get(norm_host(fr["cn"]), []) if r.id not in used]
-            if cands:
-                def distance(r: CmdbRecord) -> int:
-                    d = rec_day(r)
-                    return abs((d - fday).days) if d and fday else 10 ** 6
-                rec = min(cands, key=distance)
-        row = {"linha": fr["linha"], "cn": fr["cn"], "global_id": fr["global_id"], "cor": fr["cor"],
-               "f_validto": fday, "f_validto_raw": fr["validto"], "f_issuer": fr["issuer"],
-               "f_issuer_name": fr["issuer_name"], "c_validto": None, "c_issuer": "", "c_issuer_name": "",
-               "c_cn": "", "dif": []}
-        if rec is None:
-            row["estado"] = "nao_existe"
-            if gid and gid != "x":
-                row["motivo"] = ("O Global Id não está na CMDB lida pelo certwatch: o CI foi apagado ou não tem "
-                                 "CommonName (o certwatch só guarda CIs com CommonName).")
-        else:
-            used.add(rec.id)
-            row.update({"c_validto": rec_day(rec), "c_issuer": rec.issuer, "c_issuer_name": rec.issuer_name,
-                        "c_cn": rec.common_name, "ucmdb_id": rec.ucmdb_id})
-            if row["c_validto"] != fday:
-                row["dif"].append("data")
-            if _norm_text(rec.issuer) != _norm_text(fr["issuer"]):
-                row["dif"].append("issuer")
-            if _norm_text(rec.issuer_name) != _norm_text(fr["issuer_name"]):
-                row["dif"].append("issuer_name")
-            row["estado"] = "diferente" if row["dif"] else "igual"
-        out.append(row)
-    for r in records:
-        if r.id not in used:
-            out.append({"linha": None, "cn": r.common_name, "global_id": r.global_id or "", "cor": None,
-                        "f_validto": None, "f_validto_raw": "", "f_issuer": "", "f_issuer_name": "",
-                        "c_validto": rec_day(r), "c_issuer": r.issuer, "c_issuer_name": r.issuer_name,
-                        "c_cn": r.common_name, "ucmdb_id": r.ucmdb_id, "dif": [], "estado": "so_na_cmdb"})
-    counts = {
-        "diferencas": sum(1 for x in out if x["estado"] in ("diferente", "nao_existe", "so_na_cmdb")),
-        "data": sum(1 for x in out if "data" in x["dif"]),
-        "issuer": sum(1 for x in out if "issuer" in x["dif"]),
-        "issuer_name": sum(1 for x in out if "issuer_name" in x["dif"]),
-        "nao_existe": sum(1 for x in out if x["estado"] == "nao_existe"),
-        "so_na_cmdb": sum(1 for x in out if x["estado"] == "so_na_cmdb"),
-        "iguais": sum(1 for x in out if x["estado"] == "igual"),
-        "todos": len(out),
-    }
-    return out, counts
-
-
-def filter_compare(rows: list[dict], view: str, q: str = "", marked: bool = False) -> list[dict]:
-    pick = {
-        "diferencas": lambda x: x["estado"] in ("diferente", "nao_existe", "so_na_cmdb"),
-        "data": lambda x: "data" in x["dif"], "issuer": lambda x: "issuer" in x["dif"],
-        "issuer_name": lambda x: "issuer_name" in x["dif"], "nao_existe": lambda x: x["estado"] == "nao_existe",
-        "so_na_cmdb": lambda x: x["estado"] == "so_na_cmdb", "iguais": lambda x: x["estado"] == "igual",
-        "todos": lambda x: True,
-    }.get(view, lambda x: x["estado"] in ("diferente", "nao_existe", "so_na_cmdb"))
-    rows = [x for x in rows if pick(x)]
-    if marked:
-        rows = [x for x in rows if x["cor"] in ("novo", "alterado")]
-    if q:
-        ql = q.lower().strip()
-        rows = [x for x in rows if ql in (x["cn"] or "").lower() or ql in (x["global_id"] or "").lower()
-                or ql in (x["f_issuer_name"] or "").lower() or ql in (x["c_issuer_name"] or "").lower()]
-    return rows
+def data_flow(run, tql: str = "") -> list[dict]:
+    """Percurso dos dados na reconciliação, com os números desta execução."""
+    sm, inp = run.summary or {}, run.inputs or {}
+    srcs = [f"{k}: {v.get('validas', 0)} de {v.get('linhas', 0)}" for k, v in inp.items() if k != AZURE_SOURCE]
+    az = inp.get(AZURE_SOURCE)
+    azure = (run.vistas or {}).get("azure") or []
+    return [
+        {"titulo": "Fontes", "n": sm.get("fontes_validas", sum(v.get("validas", 0) for k, v in inp.items() if k != AZURE_SOURCE)),
+         "txt": "linhas válidas", "det": "; ".join(srcs) or "—",
+         "como": "Lê cada ficheiro, reconhece as colunas e as datas (DD/MM/AAAA, nunca troca dia e mês) e põe de lado as linhas sem nome, sem data, não emitidas, expiradas ou que não são domínios."},
+        {"titulo": "CMDB", "n": sm.get("cmdb_linhas", 0), "txt": "certificados lidos",
+         "det": f"TQL {(run.columns or {}).get('tql') or tql or '(não definido)'}",
+         "como": "Lê os certificados ativos pela REST API da UCMDB, com todos os atributos."},
+        {"titulo": "Comparação", "n": sm.get("fontes_comparadas", 0), "txt": "certificados comparados",
+         "det": f"{sm.get('coincidentes', 0)} iguais, {sm.get('diferencas_fontes', 0)} diferentes",
+         "como": "Procura cada certificado na CMDB pelo CommonName e compara a data de expiração ao dia. Repetidos entre fontes contam uma vez."},
+        {"titulo": "Servidor", "n": sm.get("regressoes", 0), "txt": "com data mais antiga",
+         "det": f"{sm.get('regressoes_atualizadas', 0)} atualizados com o servidor",
+         "como": "Quando a fonte tem uma data anterior à da CMDB, decide o certificado que o servidor apresenta."},
+        {"titulo": "Resultado", "n": sm.get("novos", 0) + sm.get("alterados", 0), "txt": "alterações",
+         "det": f"{sm.get('novos', 0)} novos, {sm.get('alterados', 0)} alterados, {sm.get('so_na_cmdb', 0)} só na CMDB"
+                + (f", {sum(1 for x in azure if x['estado'] in ('novo', 'data_posterior'))} do Azure por tratar" if az else ""),
+         "como": "Cada alteração pode ser incluída ou excluída e aplicada na UCMDB, uma a uma ou todas."},
+    ]

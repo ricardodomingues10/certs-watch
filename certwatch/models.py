@@ -420,6 +420,7 @@ class FinalRun(Base):
     problems: Mapped[list] = mapped_column(JSON, default=list)     # relatório de erros das fontes e da CMDB
     live: Mapped[list] = mapped_column(JSON, default=list)         # regressões e decisão da verificação TLS
     validation: Mapped[list] = mapped_column(JSON, default=list)   # motivos de bloqueio dos CSV
+    vistas: Mapped[dict | None] = mapped_column(JSON, nullable=True)  # outras comparações: só na CMDB, Azure
     xlsx: Mapped[bytes | None] = mapped_column(LargeBinary, nullable=True, deferred=True)
     csv: Mapped[bytes | None] = mapped_column(LargeBinary, nullable=True, deferred=True)
     csv_sem: Mapped[bytes | None] = mapped_column(LargeBinary, nullable=True, deferred=True)
@@ -510,6 +511,8 @@ class UcmdbWrite(Base):
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     run_id: Mapped[int | None] = mapped_column(Integer, nullable=True, index=True)   # geração (None = edição à mão)
     chave: Mapped[int | None] = mapped_column(Integer, nullable=True)                # alteração da geração
+    parte: Mapped[str] = mapped_column(String(16), default="cert")   # cert (alterações) | azure
+    lista: Mapped[str] = mapped_column(String(16), default="certificados")   # certificados | apis
     lote: Mapped[str] = mapped_column(String(32), default="", index=True)
     acao: Mapped[str] = mapped_column(String(16))              # criar | atualizar
     cn: Mapped[str] = mapped_column(String(512), default="")

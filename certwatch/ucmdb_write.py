@@ -1,6 +1,6 @@
 """Escrever certificados na UCMDB pela REST API, em vez de publicar o certs_update.csv na pasta de rede.
 
-- A partir de uma geração (Atualizar a CMDB): cada alteração revista passa a uma chamada à API.
+- A partir de uma reconciliação (Reconciliar e atualizar): cada alteração revista passa a uma chamada à API.
   Linha nova (Global Id = x) -> POST /rest-api/dataModel (criar). Linha alterada -> PUT /rest-api/dataModel/ci/{id}
   só com os campos que mudaram.
 - Editar um certificado à mão: PUT só com o que o utilizador mudou.
@@ -207,11 +207,11 @@ def execute(s: UcmdbSession, plan: Plan, col_attr: dict[str, str], settings: Set
             return Outcome("erro", plan.ucmdb_id, detalhe=f"Não foi possível ler o CI antes de o atualizar: {exc}")
         cprops = cur.get("properties") or {}
         antes = {col_attr[c]: format_value(col_attr[c], cprops.get(col_attr[c]), tz) for c in plan.campos}
-        changed_meanwhile = [f"{c}: está \"{antes[col_attr[c]] or '(vazio)'}\", na geração era \"{plan.esperado[c] or '(vazio)'}\""
+        changed_meanwhile = [f"{c}: está \"{antes[col_attr[c]] or '(vazio)'}\", na reconciliação era \"{plan.esperado[c] or '(vazio)'}\""
                              for c in plan.esperado if not same(c, antes[col_attr[c]], plan.esperado[c])]
         if changed_meanwhile:
             return Outcome("ignorado", plan.ucmdb_id, antes=antes,
-                           detalhe="Mudou na UCMDB depois da geração; não foi escrito (gere de novo). "
+                           detalhe="Mudou na UCMDB depois da reconciliação; não foi escrito (reconcilie de novo). "
                                    + "; ".join(changed_meanwhile))
         ci_type = cur.get("type") or settings.ucmdb_cert_type
     else:
@@ -279,7 +279,7 @@ def execute(s: UcmdbSession, plan: Plan, col_attr: dict[str, str], settings: Set
     return Outcome(estado, cid, enviado=props, antes=antes, resposta=lists, verificado=verificado, detalhe=detalhe.strip())
 
 
-# ------------------------------------------------------------------ a partir de uma geração
+# ------------------------------------------------------------------ a partir de uma reconciliação
 def run_columns(run: FinalRun) -> dict[str, str]:
     return columns_from_run(run.columns)
 
@@ -289,7 +289,7 @@ def queue(session: Session, run: FinalRun, keys: list[int], actor: str) -> str:
     if session.scalar(select(UcmdbWrite.id).where(UcmdbWrite.estado.in_(BUSY)).limit(1)) is not None:
         raise WriteError("Já há escritas na UCMDB a decorrer. Aguarde que terminem.")
     by_key = {c["chave"]: c for c in (run.changes or [])}
-    done = {w.chave for w in session.scalars(select(UcmdbWrite).where(UcmdbWrite.run_id == run.id,
+    done = {w.chave for w in session.scalars(select(UcmdbWrite).where(UcmdbWrite.run_id == run.id, UcmdbWrite.parte == "cert",
                                                                      UcmdbWrite.estado.in_(DONE)))}
     lote = uuid.uuid4().hex[:12]
     n = 0
@@ -315,29 +315,39 @@ def process(lote: str, settings: Settings, client: httpx.Client | None = None) -
         state = unpack_state(run.state) if run is not None and run.state else None
         col_attr = run_columns(run) if run is not None else {}
         changes = {c["chave"]: c for c in (run.changes or [])} if run is not None else {}
+        azure = {x["chave"]: x for x in ((run.vistas or {}).get("azure") or [])} if run is not None else {}
         ids = [w.id for w in writes]
+        used_x = [w.enviado for w in s.scalars(select(UcmdbWrite).where(UcmdbWrite.estado.in_(DONE)))]
     try:
         if state is None:
-            raise WriteError("A geração já não tem os dados necessários (foi apagada?).")
+            raise WriteError("A reconciliação já não tem os dados necessários (foi apagada?).")
+        ctx = AzureContext(state=state, col_attr=col_attr, used=used_x)
         with UcmdbSession(settings, client) as us:
             for wid in ids:
                 with session_scope() as s:
                     w = s.get(UcmdbWrite, wid)
                     w.estado = "a_aplicar"
-                    chave = w.chave
-                plan = plan_change(state, changes[chave], col_attr, settings)
+                    chave, parte, lista, acao = w.chave, w.parte, w.lista, w.acao
                 try:
-                    out = execute(us, plan, col_attr, settings)
+                    if parte == "azure":
+                        plan, attrs = plan_azure(us, azure[chave], lista, acao, ctx, settings)
+                    else:
+                        plan, attrs = plan_change(state, changes[chave], col_attr, settings), col_attr
+                    out = execute(us, plan, attrs, settings)
+                    if out.estado in DONE and plan.acao == "criar":
+                        ctx.used.append(out.enviado)
+                except (UcmdbError, WriteError) as exc:
+                    plan, out = Plan(acao, ""), Outcome("erro", detalhe=str(exc)[:500])
                 except Exception as exc:          # noqa: BLE001 - uma falha não pára o lote
                     log.exception("Escrita na UCMDB falhou")
-                    out = Outcome("erro", plan.ucmdb_id, detalhe=f"{type(exc).__name__}: {exc}"[:500])
+                    plan, out = Plan(acao, ""), Outcome("erro", detalhe=f"{type(exc).__name__}: {exc}"[:500])
                 with session_scope() as s:
                     w = s.get(UcmdbWrite, wid)
                     w.estado, w.ucmdb_id, w.enviado, w.antes = out.estado, out.ucmdb_id, out.enviado, out.antes
                     w.resposta, w.verificado, w.detalhe, w.feito_em = out.resposta, out.verificado, out.detalhe, utcnow()
                     s.add(AuditLog(actor=w.por, action="ucmdb.escrever", target=f"{w.acao} {w.cn}"[:600],
-                                   details={"geracao": w.run_id, "ci": out.ucmdb_id, "estado": out.estado,
-                                            "campos": sorted(plan.campos), "detalhe": out.detalhe[:300]}))
+                                   details={"geracao": w.run_id, "parte": w.parte, "lista": w.lista, "ci": out.ucmdb_id,
+                                            "estado": out.estado, "campos": sorted(plan.campos), "detalhe": out.detalhe[:300]}))
     except (UcmdbError, WriteError) as exc:
         with session_scope() as s:
             for w in s.scalars(select(UcmdbWrite).where(UcmdbWrite.lote == lote, UcmdbWrite.estado.in_(BUSY))):
@@ -346,14 +356,136 @@ def process(lote: str, settings: Settings, client: httpx.Client | None = None) -
                                details={"geracao": w.run_id, "estado": "erro", "detalhe": str(exc)[:300]}))
 
 
+# ------------------------------------------------------------------ Azure: incluir na lista de APIs ou na de certificados
+AZURE_API_LOCATION = "AzureAD - App Registration - Client Secret"
+
+
+@dataclass
+class AzureContext:
+    state: dict
+    col_attr: dict[str, str]
+    used: list = field(default_factory=list)              # enviado de escritas anteriores (para o próximo x<n>)
+    api: dict | None = None                               # {"type", "fields", "props", "location"}
+
+
+def next_placeholder_serial(state: dict, used: list) -> str:
+    """SerialNumber x<n> seguinte: depois do maior da CMDB lida e dos já enviados pelo certwatch."""
+    import re as _re
+    rx = _re.compile(r"^x(\d+)$", _re.I)
+    n = 0
+    col = state["display"].get("SerialNumber")
+    for r in state["rows"]:
+        m = rx.match(str(r.get(col, "") or "").strip()) if col else None
+        if m:
+            n = max(n, int(m.group(1)))
+    for env in used:
+        for v in (env or {}).values():
+            m = rx.match(str(v or "").strip())
+            if m:
+                n = max(n, int(m.group(1)))
+    return f"x{n + 1}"
+
+
+def api_model(us: UcmdbSession, settings: Settings) -> dict:
+    """Tipo de CI e atributos da lista de APIs, a partir dos CIs do TQL das APIs."""
+    from collections import Counter
+    from .collectors.ucmdb import detect_api_fields
+    if not settings.ucmdb_tql_apis:
+        raise WriteError("Defina CERTWATCH_UCMDB_TQL_APIS (a lista de APIs) para incluir segredos do Azure.")
+    cis = us.topology(settings.ucmdb_tql_apis)
+    if not cis:
+        raise WriteError(f"O TQL {settings.ucmdb_tql_apis} não devolveu APIs: não sei que tipo de CI criar.")
+    fields = detect_api_fields(cis, settings)
+    if not fields.get("nome") or not fields.get("validade"):
+        raise WriteError("Não foi possível reconhecer na lista de APIs os atributos do nome e da data de validade "
+                         "(CERTWATCH_APIS_FIELD_NAME / CERTWATCH_APIS_FIELD_EXPIRY).")
+    types = Counter(c.get("type") for c in cis if c.get("type"))
+    props = set()
+    for c in cis[:50]:
+        props.update((c.get("properties") or {}).keys())
+    locs = Counter(str((c.get("properties") or {}).get(fields["localizacao"]) or "") for c in cis) if fields.get("localizacao") else Counter()
+    azure_locs = [(n, l) for l, n in locs.items() if "azure" in l.lower() and "secret" in l.lower()]
+    location = max(azure_locs)[1] if azure_locs else AZURE_API_LOCATION
+    return {"type": types.most_common(1)[0][0], "fields": fields, "props": props, "location": location}
+
+
+def plan_azure(us: UcmdbSession, row: dict, lista: str, acao: str, ctx: AzureContext,
+               settings: Settings) -> tuple[Plan, dict[str, str]]:
+    nome, fim = row["nome"], row.get("fim") or ""
+    if lista == "apis":
+        if ctx.api is None:
+            ctx.api = api_model(us, settings)
+        f, props = ctx.api["fields"], ctx.api["props"]
+        col_attr = {"Name": f["nome"], "ValidTo": f["validade"]}
+        if f.get("aplicacao"):
+            col_attr["Aplicação"] = f["aplicacao"]
+        if f.get("localizacao"):
+            col_attr["Localização"] = f["localizacao"]
+        if "display_label" in props and f["nome"] != "display_label":
+            col_attr["Display Label"] = "display_label"
+        if "description" in props:
+            col_attr["Description"] = "description"
+        if acao == "atualizar":
+            alvo = row.get("alvo")
+            cur = next((c for c in row.get("cmdb") or [] if c["ucmdb_id"] == alvo), None)
+            if not alvo or cur is None:
+                raise WriteError("Há mais de um registo para este nome na lista de APIs: atualize à mão (Editar).")
+            return Plan("atualizar", nome, ucmdb_id=alvo, campos={"ValidTo": fim}, esperado={"ValidTo": cur["data"]}), \
+                {"ValidTo": f["validade"]}
+        campos = {"Name": nome, "ValidTo": fim, "Aplicação": row.get("app") or nome,
+                  "Localização": ctx.api["location"], "Display Label": nome,
+                  "Description": f"{settings.final_description} - novo segredo do Azure ({row.get('tipo_credencial') or 'credencial'}"
+                                 + (f", KeyId {row['key_id']}" if row.get("key_id") else "") + ")"}
+        return Plan("criar", nome, ci_type=ctx.api["type"], campos={c: v for c, v in campos.items() if c in col_attr}), col_attr
+    # lista de certificados
+    col_attr = ctx.col_attr
+    if acao == "atualizar":
+        alvo = row.get("alvo")
+        cur = next((c for c in row.get("cmdb") or [] if c["ucmdb_id"] == alvo), None)
+        if not alvo or cur is None:
+            raise WriteError("Há mais de um certificado com este nome: atualize à mão (Editar).")
+        return Plan("atualizar", nome, ucmdb_id=alvo, campos={"ValidTo": fim}, esperado={"ValidTo": cur["data"]}), col_attr
+    campos = {"Display Label": nome, "Name": nome, "CommonName": nome, "ValidTo": fim, "Issuer": "Por verificar",
+              "IssuerName": "Por verificar", "SerialNumber": next_placeholder_serial(ctx.state, ctx.used),
+              "Certificate Status": "Ativo", "Localização": "AZURE", "Certificate Type": "SSL",
+              "Description": f"{settings.final_description} - novo certificado (Azure, App Registration {nome})"}
+    return Plan("criar", nome, ci_type=settings.ucmdb_cert_type,
+                campos={c: v for c, v in campos.items() if c in col_attr}), col_attr
+
+
+def queue_azure(session: Session, run: FinalRun, chave: int, lista: str, actor: str) -> str:
+    if session.scalar(select(UcmdbWrite.id).where(UcmdbWrite.estado.in_(BUSY)).limit(1)) is not None:
+        raise WriteError("Já há escritas na UCMDB a decorrer. Aguarde que terminem.")
+    row = next((x for x in ((run.vistas or {}).get("azure") or []) if x["chave"] == chave), None)
+    if row is None:
+        raise WriteError("Linha do Azure não encontrada nesta reconciliação.")
+    if lista not in ("apis", "certificados"):
+        raise WriteError("Escolha a lista: APIs ou certificados.")
+    if row["estado"] == "novo":
+        acao = "criar"
+    elif row["estado"] == "data_posterior" and row.get("alvo"):
+        acao = "atualizar"
+    else:
+        raise WriteError("Esta linha não tem nada para aplicar automaticamente: use Editar.")
+    done = session.scalar(select(UcmdbWrite.id).where(UcmdbWrite.run_id == run.id, UcmdbWrite.parte == "azure",
+                                                      UcmdbWrite.chave == chave, UcmdbWrite.estado.in_(DONE)).limit(1))
+    if done is not None:
+        raise WriteError("Esta linha do Azure já foi aplicada na UCMDB.")
+    lote = uuid.uuid4().hex[:12]
+    session.add(UcmdbWrite(run_id=run.id, chave=chave, lote=lote, parte="azure", lista=lista, acao=acao,
+                           cn=row["nome"], estado="pendente", por=actor))
+    return lote
+
+
 def process_in_background(lote: str, settings: Settings) -> None:
     threading.Thread(target=process, args=(lote, settings), name=f"ucmdb-{lote}", daemon=True).start()
 
 
-def writes_for_run(session: Session, run_id: int) -> dict[int, UcmdbWrite]:
-    """A escrita mais recente de cada alteração da geração."""
+def writes_for_run(session: Session, run_id: int, parte: str = "cert") -> dict[int, UcmdbWrite]:
+    """A escrita mais recente de cada alteração (ou linha do Azure) da reconciliação."""
     out: dict[int, UcmdbWrite] = {}
-    for w in session.scalars(select(UcmdbWrite).where(UcmdbWrite.run_id == run_id).order_by(UcmdbWrite.id)):
+    for w in session.scalars(select(UcmdbWrite).where(UcmdbWrite.run_id == run_id, UcmdbWrite.parte == parte)
+                             .order_by(UcmdbWrite.id)):
         out[w.chave] = w
     return out
 
@@ -464,5 +596,5 @@ def history_rows(writes: list[UcmdbWrite]) -> list[dict]:
             before = (w.antes or {}).get(attr)
             mud.append({"atributo": attr, "antes": "" if before is None else str(before), "depois": "" if v is None else str(v)})
         out.append({"w": w, "mudancas": mud,
-                    "origem": f"geração #{w.run_id}" if w.run_id else "edição à mão"})
+                    "origem": f"reconciliação #{w.run_id}" if w.run_id else "edição à mão"})
     return out

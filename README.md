@@ -1,4 +1,4 @@
-# certwatch 0.11
+# certwatch
 
 Aplicação autónoma de gestão de certificados X.509 de uma organização. Não depende do n8n.
 
@@ -10,17 +10,16 @@ Aplicação autónoma de gestão de certificados X.509 de uma organização. Nã
 5. Classifica cada certificado por tipo (Hostname, Wildcard, IP, API, CA, outro) e âmbito (interno/externo).
 6. Mostra uma aba de testes por camada, com o que significa cada falha e como corrigir.
 7. Procura na internet (Certificate Transparency: crt.sh, Cert Spotter, ctlogs.dev) os certificados emitidos para os domínios da organização e mostra os que não estão na CMDB, para triagem.
-8. Reconcilia ficheiros de exportação da CA1, CA2, AVI e Azure AD colocados numa diretoria com a CMDB: certificados e segredos novos, datas alteradas e registos em falta.
+8. **Reconcilia e atualiza a CMDB**: compara as exportações da CA1, CA2 e AVI, as App Registrations do Azure, os certificados encontrados na internet e as renovações registadas com a CMDB, explica cada diferença e aplica as escolhidas diretamente na UCMDB pela REST API (com a lógica do workflow n8n de reconciliação).
 9. Identifica os certificados com renovação automática (Let's Encrypt) e só alerta quando a renovação falhou.
 10. Pede (opcional) ao Qualys SSL Labs a nota A+–F dos nomes externos, vista a partir da internet.
 11. Lê (opcional) os pedidos de certificados do SMAX e mostra, para cada certificado, o número do pedido com link para o SMAX.
 12. Cria (opcional) pedidos de renovação no SMAX para um certificado, para os selecionados ou para todos os de uma vista filtrada, com revisão e confirmação.
 13. Distingue o **site** (onde está instalado) do **certificado** (o que se renova): um wildcard ou um certificado com vários nomes pode servir muitos sites, e os pedidos são sempre feitos para o certificado.
-14. **Atualiza a CMDB** com a lógica do workflow n8n de reconciliação: lê a CMDB pela API e as exportações CA1, CA2 e AVI, mostra as diferenças, aplica as escolhidas diretamente na UCMDB pela REST API e deixa descarregar o `CMDB_Final.xlsx`, o `certs_update.csv` e o `certs_update_sem_cabecalho.csv`.
+14. **Edita um certificado** diretamente na UCMDB (data, emissor, série, estado…), com revisão antes de gravar.
 15. **Acompanha cada pedido SMAX até ao fim**: comentários com imagens e anexos, percurso da renovação (pedido → renovado → instalado → CMDB atualizada → fechado), registo da renovação, fechar e reabrir o pedido no SMAX.
 16. **Envia o relatório por email**: alertas e reconciliação com o Excel, com intervalo, prazo de alerta e destinatários à escolha.
 
-Fora desta versão: escrita direta na UCMDB pela API (a atualização é feita pela integração que lê os ficheiros), email.
 
 ---
 
@@ -95,7 +94,7 @@ ssh -L 8088:127.0.0.1:8088 utilizador@servidor
 
 Abrir `http://localhost:8088`. O utilizador é `admin` e a palavra-passe é o conteúdo de `secrets/admin_password`.
 
-A interface ocupa a largura toda do ecrã e adapta-se a qualquer tamanho. Cada tabela ajusta-se ao espaço que tem: se não couber, escondem-se primeiro as colunas secundárias e, se ainda não couber, cada linha passa a cartão com os campos em grelha. No telemóvel há menu no botão do canto e cartões com o nome de cada campo à esquerda. A matriz de testes desliza na horizontal, com o nome sempre visível. A navegação lateral está agrupada por tarefa: **Inventário** (o que existe), **Verificação** (o que está bem ou mal), **Descoberta** (o que existe e ninguém registou) e **Operação**. A caixa no topo procura em tudo.
+A interface ocupa a largura toda do ecrã e adapta-se a qualquer tamanho. Cada tabela ajusta-se ao espaço que tem: se não couber, escondem-se primeiro as colunas secundárias e, se ainda não couber, cada linha passa a cartão com os campos em grelha. No telemóvel há menu no botão do canto e cartões com o nome de cada campo à esquerda. A matriz de testes desliza na horizontal, com o nome sempre visível. A navegação lateral está agrupada por tarefa: **Inventário** (o que existe), **Verificação** (o que está bem ou mal), **CMDB** (reconciliar, triar o que aparece na internet, editar), **Operação** (pedidos SMAX, relatório) e **Sistema**. A caixa no topo procura em tudo.
 
 | Página | Para que serve |
 |---|---|
@@ -106,10 +105,12 @@ A interface ocupa a largura toda do ecrã e adapta-se a qualquer tamanho. Cada t
 | Como testamos | Explicação de cada teste, de como é feito e de como se corrige |
 | APIs e segredos | Lista de APIs da CMDB: aplicação, localização, expiração, "Expirado?" (e se está desatualizado), registo; vistas e CSV |
 | Na internet | Certificados públicos dos domínios da organização, comparados com a CMDB; decidir adicionar, investigar ou ignorar; exportar CSV |
-| Reconciliação | Exportações CA1/CA2/AVI comparadas com a CMDB e com o servidor, e Azure comparado com a lista de APIs; CSV |
+| Reconciliar e atualizar | Fontes, comparação com a CMDB explicada passo a passo, diferenças por separador e aplicação na UCMDB |
+| Editar um certificado | Corrigir um certificado na UCMDB, com revisão antes de gravar |
 | Alertas | Lista filtrável; **aceitar risco** (justificação obrigatória e prazo até 1 ano) ou reabrir |
 | Servidores | Alvos de verificação; adicionar servidores à mão (ex.: os que usam um wildcard) |
-| Jobs | Executar jobs, histórico de execuções e auditoria |
+| Execuções e auditoria | Executar jobs, histórico de execuções, alterações feitas na UCMDB e auditoria |
+| Ligação à UCMDB | O que a conta da UCMDB pode fazer (ler, atualizar, criar), com testes seguros |
 
 API só de leitura (mesma autenticação): `GET /api/inventario`, `GET /api/testes`, `GET /api/findings?status=aberto|aceite|resolvido`.
 
@@ -156,36 +157,46 @@ Se a saída for por proxy, acrescente `HTTPS_PROXY=http://proxy:porta` e `NO_PRO
 
 SSL Shopper e SSL Labs não servem para descoberta: não procuram certificados, avaliam um nome que já se conhece. O SSL Shopper não tem API; o SSL Labs está integrado como avaliação externa (secção 6).
 
-## 5. Reconciliação com exportações
+## 5. Reconciliar e atualizar a CMDB
 
-Copie os ficheiros exportados para a diretoria `import/` da aplicação. O início do nome indica a fonte (`CERTWATCH_IMPORT_SOURCES`, por omissão `ca1*`, `ca2*`, `avi*` e `azure*`). São aceites CSV (UTF-8, UTF-16 do certutil, Windows-1252; vírgula, ponto e vírgula ou tabulação) e Excel `.xlsx`.
+Menu **CMDB → Reconciliar e atualizar**. Faz o mesmo que o workflow n8n "Reconciliação de Certificados", explica cada passo e aplica as alterações diretamente na UCMDB.
 
-- Colunas reconhecidas: as do certutil (`Issued Common Name`, `Certificate Expiration Date`, `Serial Number`, `Request Disposition`) e as do AVI (`Subject_CommonName`, `Validity_NotAfter`, `SerialNumber`, `Issuer_CommonName`, `SubjectAlternativeName`), mesmo com acentos estragados.
-- Datas: DD/MM/AAAA (nunca trocadas por MM/DD), ISO, seriais do Excel e AAAAMMDD; o formato americano só é aceite com AM/PM explícito.
-- Pedidos revogados ou não emitidos são ignorados; linhas com problemas aparecem na página com o número da linha.
-- Em cada fonte é usado o ficheiro mais recente; um ficheiro igual ao anterior não é lido de novo.
+### 5.1 Fontes
+- **CA1, CA2 e AVI** (obrigatórias, `CERTWATCH_FINAL_SOURCES`) e **Azure** (opcional): o ficheiro mais recente de cada uma, seja o da diretoria `import/` (o início do nome indica a fonte: `ca1*`, `ca2*`, `avi*`, `azure*`, `CERTWATCH_IMPORT_SOURCES`) ou o carregado na página. A página mostra também o que acontece a cada ficheiro da diretoria.
+- **Internet** (`CERTWATCH_FINAL_CT=true`): os certificados encontrados na Certificate Transparency, o mais recente de cada nome; os "Ignorar" ficam de fora e só os "Adicionar à CMDB" vêm incluídos.
+- **Renovações** registadas nos pedidos SMAX: têm prioridade sobre as outras fontes.
+- Ficheiros aceites: CSV (UTF-8, UTF-16 do certutil, Windows-1252; vírgula, ponto e vírgula ou tabulação) e Excel `.xlsx`. Colunas do certutil (`Issued Common Name`, `Certificate Expiration Date`, `Serial Number`, `Request Disposition`), do AVI (`Subject_CommonName`, `Validity_NotAfter`, `SerialNumber`, `Issuer_CommonName`, `SubjectAlternativeName`) e do Azure (`EnterpriseApplication;AppRegistration;AppId;CredentialType;KeyId;StartDate;EndDate;Status`), mesmo com acentos estragados. Datas DD/MM/AAAA (nunca trocadas por MM/DD), ISO, seriais do Excel e AAAAMMDD.
 
-**Azure AD** (`azure*.csv`, colunas `EnterpriseApplication;AppRegistration;AppId;CredentialType;KeyId;StartDate;EndDate;DaysRemaining;Status`): cada credencial (Secret ou Certificate) é procurada **nas duas listas da CMDB**, a lista de APIs e os certificados, pelo nome da App Registration ou da Enterprise Application (sem o sufixo de identificador que a CMDB às vezes acrescenta) e pela data de fim. A página e o CSV indicam em que lista foi encontrada. Segredos da CMDB com localização "AzureAD…" que não aparecem na exportação ficam como **só na CMDB**.
+### 5.2 Reconciliar
+**Reconciliar agora** lê a CMDB pela REST API (o TQL de `CERTWATCH_UCMDB_TQL`, com todos os atributos) e compara. A página da reconciliação começa por **O que foi comparado**: os cinco passos (fontes, CMDB, comparação, servidor, resultado), cada um com os números desta execução e o que faz.
 
-Resultados: **novo** (não existe na CMDB), **data mais recente** (renovado; atualizar a CMDB), **data mais antiga** (confirmar no servidor), **só na CMDB** (quando `CERTWATCH_IMPORT_ISSUERS` diz qual é o emissor de cada CA) e **igual**. Quando o servidor foi verificado, a data que ele apresenta é mostrada ao lado para desempatar.
+### 5.3 Diferenças
+Cada separador começa com uma caixa que diz **o que compara**, **como encontra** cada certificado, **quando aparece ali** e **o que acontece ao aplicar**; cada linha diz **porquê** (por exemplo "Na CMDB está 10-11-2026; CA1, linha 3, tem 10-11-2027 (mais recente)").
 
-## 5.1 Atualizar a CMDB (CMDB_Final e certs_update)
+| Separador | O que mostra |
+|---|---|
+| Novos | Certificados das fontes que não existem na CMDB |
+| Renovados e alterados | O nome existe, mas a data (ao dia) ou outros dados mudaram |
+| Data mais antiga | A fonte tem uma data anterior à CMDB: decide o servidor (porta 443); sem resposta ou num wildcard, a CMDB fica |
+| Por confirmar | Emissor "Por verificar", série x1, x2… ou chave IssuerName + SerialNumber repetida |
+| Só na CMDB | Certificados com o emissor de uma CA (`CERTWATCH_IMPORT_ISSUERS`) que não aparecem na exportação dessa CA; cada um tem **Editar** |
+| Azure | Cada credencial das App Registrations comparada com a lista de APIs e com a de certificados (ver 5.5) |
+| Erros nas fontes | Linhas postas de lado e avisos sobre datas da CMDB |
+| Detalhes técnicos | Ficheiros (`CMDB_Final.xlsx`, `certs_update.csv`, `certs_update_sem_cabecalho.csv`) para descarregar e o mapeamento das colunas |
 
-Página **Atualizar a CMDB**. Faz o mesmo que o workflow n8n "Reconciliação de Certificados", com cliques:
+Cada alteração tem a caixa **Incluir**: ao excluir uma linha nova, sai do Excel e dos CSV; ao excluir uma alterada, volta ao que está na CMDB. A escolha fica guardada para as reconciliações seguintes (mesmo CommonName e mesma data).
 
-1. **Fontes**: CA1, CA2 e AVI (`CERTWATCH_FINAL_SOURCES`). Usa o ficheiro mais recente de cada fonte, seja o da diretoria `import/` (mesmos prefixos da reconciliação) ou o carregado na página. Entram também os **certificados encontrados na internet** (`CERTWATCH_FINAL_CT=true`), como fonte `INTERNET`, depois do AVI:
-   - por nome, só o mais recente ainda válido;
-   - o emissor e o número de série são os do certificado;
-   - os marcados "Ignorar" na triagem ficam de fora.
-2. **Gerar ficheiros**: lê a CMDB pela REST API (o TQL de `CERTWATCH_UCMDB_TQL`) com **todos** os atributos e aplica as regras do workflow. A página mostra o resultado: alterações (antes → depois), certificados novos, decisões da verificação no servidor e relatório de erros.
-3. **Escolher o que entra**: no separador **Alterações**, cada alteração tem uma caixa **Incluir**.
-   - Ao excluir uma linha nova, ela sai do Excel e dos CSV; ao excluir uma linha alterada, ela volta ao que está na CMDB.
-   - "Guardar seleção" refaz os três ficheiros e volta a validá-los. Excluir um certificado novo sem emissor desbloqueia os CSV.
-   - A escolha fica guardada para as gerações seguintes (mesmo CommonName e mesma nova data).
-   - Por omissão, as alterações vindas da internet só vêm incluídas se o certificado estiver marcado "Adicionar à CMDB" na página **Na internet**.
-3a. **Na comparação com a CMDB** de uma geração, as linhas novas ou alteradas também têm a caixa **Incluir**. Desmarcar e guardar refaz os ficheiros dessa geração.
-4. **Aplicar na UCMDB**: cria e atualiza os certificados pela REST API (ver "Escrever diretamente na UCMDB"). Os ficheiros continuam disponíveis para descarregar.
-5. **Comparar com a CMDB**: compara um CMDB_Final (de uma geração ou um carregado, incluindo o do n8n) com a CMDB atual, linha a linha, pelo Global Id ou, nas linhas novas, pelo CommonName. Mostra as diferenças de data de validade (ao dia), Issuer e IssuerName. Antes de aplicar, mostra o que vai mudar; depois, o que ficou por aplicar.
+### 5.4 Aplicar na UCMDB
+Com `CERTWATCH_UCMDB_WRITE=true` no `.env`: **Aplicar** numa linha (para testar com um certificado) ou **Aplicar todas na UCMDB** (as incluídas que ainda não foram aplicadas, em segundo plano, com progresso). Linha nova → `POST /rest-api/dataModel`; linha alterada → `PUT /rest-api/dataModel/ci/{id}` só com os campos que mudaram. Para confirmar no fim, basta reconciliar de novo: não devem aparecer diferenças.
+
+### 5.5 Azure: API ou certificado
+Cada credencial é procurada na lista de APIs e na de certificados, pelo nome da App Registration ou da Enterprise Application (sem o sufixo que a CMDB às vezes acrescenta), e comparada pela data de fim (1 dia de tolerância): não existe, data mais recente, mais antiga, igual, expirada; os segredos da lista de APIs com localização Azure que já não aparecem na exportação ficam como **só na CMDB**.
+
+**É uma API ou um certificado?** Se já está numa das listas, é dessa; senão decide o tipo de credencial do Azure (`Certificate` → certificado; `Secret`/`Password` → API); senão fica "por decidir". Pode sempre escolher a outra.
+- **Não existe** → **Incluir** na lista escolhida. Lista de APIs: cria um CI do tipo das APIs (lido do TQL `CERTWATCH_UCMDB_TQL_APIS`) com o nome, a data de fim, a aplicação (Enterprise Application) e a localização dos segredos do Azure. Lista de certificados: cria um certificado com emissor "Por verificar" e série x<n>.
+- **Data mais recente** → **Atualizar a data** do registo, quando há só um com esse nome; senão, à mão.
+
+### 5.6 Regras em detalhe
 
 **Regras**: são as do workflow.
 - Datas ao dia, sem trocar dia e mês.
@@ -198,7 +209,7 @@ Página **Atualizar a CMDB**. Faz o mesmo que o workflow n8n "Reconciliação de
   - nomes sem domínio.
 - Linhas da CMDB que já existem: são atualizados ValidTo e SerialNumber na linha de data mais próxima.
 - Certificados novos: linha com `Global Id = x`, com o emissor de `CERTWATCH_IMPORT_ISSUERS` para CA1/CA2 ou o `Issuer_CommonName` no AVI.
-- **Linhas novas** (`Global Id = x`): Issuer e IssuerName vão sempre preenchidos, porque IssuerName + SerialNumber é a chave primária do certificado na CMDB. O emissor e a série que faltem procuram-se primeiro noutra fonte com o mesmo certificado (mesmo nome e mesma data de fim) e depois nos certificados já vistos pelo certwatch nos servidores ou na internet (mesmo nome, data de fim com ±1 dia). Sem emissor em lado nenhum: Issuer e IssuerName `Por verificar`. Certificado encontrado na internet sem série: SerialNumber `x1`, `x2`… numerados a seguir ao maior `xN` que já exista na CMDB, para que cada um tenha a sua chave IssuerName + SerialNumber e nunca coincida com um CI que já lá está. Nos ficheiros (CA1/CA2/AVI) a série vem sempre; se faltar, a linha fica fora dos CSV por omissão (pode incluí-la, mas então os CSV ficam bloqueados). Numa linha que já existe e cujo certificado mudou (outra data de fim) sem que nenhuma fonte traga a série nova, o SerialNumber também passa a `x<n>`: a série antiga já não é a do certificado e, mantida, repetia a chave noutras linhas (o workflow deixava-a vazia). Com a mesma data, a série fica como está. A geração avisa quantos ficaram assim, com o filtro "Só com dados por confirmar".
+- **Linhas novas** (`Global Id = x`): Issuer e IssuerName vão sempre preenchidos, porque IssuerName + SerialNumber é a chave primária do certificado na CMDB. O emissor e a série que faltem procuram-se primeiro noutra fonte com o mesmo certificado (mesmo nome e mesma data de fim) e depois nos certificados já vistos pelo certwatch nos servidores ou na internet (mesmo nome, data de fim com ±1 dia). Sem emissor em lado nenhum: Issuer e IssuerName `Por verificar`. Certificado encontrado na internet sem série: SerialNumber `x1`, `x2`… numerados a seguir ao maior `xN` que já exista na CMDB, para que cada um tenha a sua chave IssuerName + SerialNumber e nunca coincida com um CI que já lá está. Nos ficheiros (CA1/CA2/AVI) a série vem sempre; se faltar, a linha fica fora dos CSV por omissão (pode incluí-la, mas então os CSV ficam bloqueados). Numa linha que já existe e cujo certificado mudou (outra data de fim) sem que nenhuma fonte traga a série nova, o SerialNumber também passa a `x<n>`: a série antiga já não é a do certificado e, mantida, repetia a chave noutras linhas (o workflow deixava-a vazia). Com a mesma data, a série fica como está. Ficam no separador **Por confirmar**.
 - Fonte com data anterior à CMDB: decide o certificado apresentado na porta 443.
 - A Description regista o que mudou, a começar por "Changed with n8n" (`CERTWATCH_FINAL_DESCRIPTION`).
 - Os CSV levam só o delta, sempre com estas 26 colunas, por esta ordem: Display Label, ValidTo, Aplicação, Localização, Responsabilidade de instalação, Certificate Status, Certificado Gerido, Ambiente, Name, CommonName, Issuer, IssuerName, SerialNumber, Certificate Type, IsSelfSigned, Global Id, Link para a Documentação, Subject Alternative Names, Organization, Version, Type, Subject, CreateOn, Hostname, Description, OrganizationUnit. Separador `|`, CRLF, UTF-8 sem BOM. Uma coluna que não exista na CMDB vai vazia, mas vai.
@@ -215,11 +226,11 @@ Com os mesmos dados (e todos os emissores e séries presentes), os ficheiros ger
 
 **Emissores das CAs**: os ficheiros do certutil não trazem o emissor. Para os certificados novos de CA1/CA2 não ficarem com `Por verificar`, defina-o no `.env` com o texto usado pelo workflow: `CERTWATCH_IMPORT_ISSUERS=CA1=<nome da CA01>;CA2=<nome da CA02>`.
 
-**Colunas**: os atributos da UCMDB passam a colunas com os cabeçalhos do export (`[Digital Certificate] : CommonName`). Se o layout do TQL só tiver alguns atributos, os restantes são pedidos à REST API (`CERTWATCH_FINAL_ENRICH=auto`). A correspondência atributo → coluna é automática (`issuer_name` → IssuerName, `responsabilidade_instalacao` → Responsabilidade de instalação). Para corrigir: na geração, separador **Colunas**, descarregue o modelo `cmdb-colunas.csv`, ajuste-o e coloque-o em `import/`. Em cada linha fica `atributo;coluna`; a coluna vazia exclui o atributo e a ordem das linhas é a ordem das colunas.
+**Colunas**: os atributos da UCMDB passam a colunas com os cabeçalhos do export (`[Digital Certificate] : CommonName`). Se o layout do TQL só tiver alguns atributos, os restantes são pedidos à REST API (`CERTWATCH_FINAL_ENRICH=auto`). A correspondência atributo → coluna é automática (`issuer_name` → IssuerName, `responsabilidade_instalacao` → Responsabilidade de instalação). Para corrigir: na reconciliação, separador **Detalhes técnicos**, descarregue o modelo `cmdb-colunas.csv`, ajuste-o e coloque-o em `import/`. Em cada linha fica `atributo;coluna`; a coluna vazia exclui o atributo e a ordem das linhas é a ordem das colunas.
 
-### Permissões da conta na UCMDB
+### 5.8 Ligação à UCMDB (permissões)
 
-Em **Atualizar a CMDB → Permissões na UCMDB** verifica-se o que a conta configurada (segredo `ucmdb_user`) consegue fazer pela REST API:
+Em **Sistema → Ligação à UCMDB** verifica-se o que a conta configurada (segredo `ucmdb_user`) consegue fazer pela REST API:
 - **Leitura** (não muda nada): `POST /rest-api/authenticate`, execução de cada TQL configurado (`POST /rest-api/topology`) e leitura de um CI completo (`GET /rest-api/dataModel/ci/{id}`).
 - **Escrita** (só com confirmação, num certificado escolhido): `PUT /rest-api/dataModel/ci/{id}` com a Description (ou o Display Label) igual ao valor que já tem. A UCMDB verifica a permissão de atualização, mas nenhum valor muda. Criar (`POST /rest-api/dataModel`) e apagar (`DELETE /rest-api/dataModel/ci/{id}`) não são testados, porque o único teste seria criar ou apagar um CI de verdade.
 
@@ -229,26 +240,22 @@ Em **Atualizar a CMDB → Permissões na UCMDB** verifica-se o que a conta confi
 
 Cada verificação fica na auditoria (`ucmdb.permissoes`, `ucmdb.teste_criacao`), sem credenciais.
 
-### Escrever diretamente na UCMDB
+### 5.7 Escrever na UCMDB e editar um certificado
 
 Com `CERTWATCH_UCMDB_WRITE=true` no `.env`, a aplicação cria e atualiza os certificados na UCMDB pela REST API, com a mesma conta da leitura.
 
-**A partir de uma geração** (Atualizar a CMDB → geração → Alterações → **Aplicar na UCMDB**):
-1. **Um certificado:** botão **Aplicar** na linha. Linha nova → `POST /rest-api/dataModel` (cria). Linha alterada → `PUT /rest-api/dataModel/ci/{id}` só com os campos que mudaram (ValidTo, SerialNumber, Issuer, IssuerName, Description…).
-2. **Todos:** **Aplicar todas na UCMDB** aplica as alterações incluídas que ainda não foram aplicadas, uma a uma, em segundo plano; a página mostra o progresso.
+Cada linha da reconciliação mostra o resultado (criado / atualizado / aviso / erro / não aplicado) e o ID do CI. Uma alteração já aplicada não é enviada de novo.
 
-Cada linha mostra o resultado (criado / atualizado / aviso / erro / não aplicado) e o ID do CI. Uma alteração já aplicada não é enviada de novo.
-
-**Editar um certificado** (Atualizar a CMDB → **Editar um certificado**, ou **Editar na UCMDB** na página do certificado): procura-se pelo CommonName, Global Id ou ID do CI; os valores são lidos na hora da UCMDB. Muda-se o que for preciso (data, emissor, série, estado, Description…), **Rever alterações** mostra o antes e o depois e **Gravar na UCMDB** envia só esses campos. Por omissão a Description regista a alteração ("Changed with n8n - Data de expiracao alterado de … para …").
+**Editar um certificado** (CMDB → **Editar um certificado**, ou **Editar na UCMDB** na página do certificado): procura-se pelo CommonName, Global Id ou ID do CI; os valores são lidos na hora da UCMDB. Muda-se o que for preciso (data, emissor, série, estado, Description…), **Rever alterações** mostra o antes e o depois e **Gravar na UCMDB** envia só esses campos. Por omissão a Description regista a alteração ("Changed with n8n - Data de expiracao alterado de … para …").
 
 **Proteções:**
 - Só se escrevem estes campos: Display Label, Name, CommonName, ValidTo, Localização, Certificate Status, SerialNumber, Issuer, IssuerName, Subject Alternative Names, Certificate Type e Description. Nunca o Global Id nem datas de criação.
-- Antes de atualizar, o CI é lido e os campos a mudar têm de ter ainda o valor da geração (ou o que estava no ecrã ao rever). Se alguém os mudou entretanto, não se escreve e a linha diz o que mudou.
+- Antes de atualizar, o CI é lido e os campos a mudar têm de ter ainda o valor da reconciliação (ou o que estava no ecrã ao rever). Se alguém os mudou entretanto, não se escreve e a linha diz o que mudou.
 - Depois de escrever, o CI é lido de novo e confirma-se que ficou o que foi enviado; se não, a linha fica com aviso.
 - Se a UCMDB identificar um certificado "novo" como um CI que já existia (regra de identificação), a linha fica com aviso a dizer qual.
-- Só a geração mais recente pode ser aplicada.
+- Só a reconciliação mais recente pode ser aplicada.
 - Datas: ValidTo vai às 00:00 de Lisboa, primeiro como `AAAA-MM-DDThh:mm:ss` (sem fuso: a UCMDB recusa o `Z` do UTC); se a UCMDB recusar o formato, tenta com milissegundos (`.000`), depois em milissegundos desde 1970 e por fim em UTC. O formato que funcionar passa a ser o primeiro a tentar. Uma alteração com erro pode ser repetida com **Tentar de novo**.
-- Tudo fica em **Execuções e auditoria → Alterações na UCMDB**: quando, quem, origem (geração ou edição à mão), certificado, CI, cada campo com o valor que tinha e o que foi enviado, o resultado e se foi confirmado na UCMDB. **Exportar todas (CSV)** dá o histórico completo, uma linha por campo. A auditoria também regista cada escrita (`ucmdb.escrever`, `ucmdb.editar`).
+- Tudo fica em **Execuções e auditoria → Alterações na UCMDB**: quando, quem, origem (reconciliação ou edição à mão), certificado, CI, cada campo com o valor que tinha e o que foi enviado, o resultado e se foi confirmado na UCMDB. **Exportar todas (CSV)** dá o histórico completo, uma linha por campo. A auditoria também regista cada escrita (`ucmdb.escrever`, `ucmdb.editar`).
 
 ## 6. Renovação automática e avaliação externa
 
@@ -339,7 +346,7 @@ Em **Pedidos SMAX**, o número do pedido abre a página do pedido. O link "SMAX 
    - carregar o ficheiro do certificado (`.cer`, `.crt`, `.pem`, `.der`);
    - indicar à mão a nova data (por exemplo, a partir do print num comentário).
 3. **Instalado no servidor.** Fica feito quando todos os servidores verificados apresentam o certificado novo. Use **Verificar agora** para os verificar logo. Para servidores que o certwatch não vê, a instalação pode ser confirmada à mão, com uma nota.
-4. **CMDB atualizada.** A renovação registada entra como fonte `RENOVACAO` na próxima geração de **Atualizar a CMDB**. Se veio do servidor ou do ficheiro, atualiza também o emissor. O passo fica feito quando a alteração é aplicada na UCMDB ou quando a CMDB lida pelo certwatch mostra a nova data. Até lá, a página diz em que reconciliação está e se já foi aplicada.
+4. **CMDB atualizada.** A renovação registada entra como fonte `RENOVACAO` na próxima reconciliação. Se veio do servidor ou do ficheiro, atualiza também o emissor. O passo fica feito quando a alteração é aplicada na UCMDB ou quando a CMDB lida pelo certwatch mostra a nova data. Até lá, a página diz em que reconciliação está e se já foi aplicada.
 5. **Pedido fechado.** O botão **Fechar no SMAX** faz um `bulk UPDATE` com `CERTWATCH_SMAX_CLOSE_FIELDS` (por omissão `{"PhaseId": "Close"}`):
    - pode escrever um comentário no pedido, antes de fechar;
    - depois o pedido é lido de novo para confirmar a fase;

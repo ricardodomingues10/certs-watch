@@ -152,7 +152,7 @@ def test_changed_meanwhile_is_not_written(setup):
         token = c.cookies["cw_csrf"]
         k = changes["renovado.exemplo.pt"]["chave"]
         r = c.post(f"/cmdb-final/{rid}/ucmdb", data={"csrf": token, "modo": "um", "chave": k}, auth=AUTH)
-        assert "Mudou na UCMDB depois da geração" in r.text and not fake.writes()
+        assert "Mudou na UCMDB depois da reconciliação" in r.text and not fake.writes()
         assert "Tentar de novo" in r.text
 
 
@@ -247,7 +247,7 @@ def test_date_format_fallback_and_history(setup):
             assert w.estado == "erro" and "Formatos de data tentados" in w.detalhe
         # histórico em Execuções e auditoria + exportação
         page = c.get("/jobs", auth=AUTH).text
-        assert "Alterações na UCMDB" in page and "renovado.exemplo.pt" in page and "geração #" in page
+        assert "Alterações na UCMDB" in page and "renovado.exemplo.pt" in page and "reconciliação #" in page
         assert "serial_number" in page and "<del>0A01</del>" in page
         csvt = c.get("/jobs/ucmdb.csv", auth=AUTH).content.decode("utf-8-sig")
         assert csvt.splitlines()[0].startswith("Quando;Quem;Origem") and "renovado.exemplo.pt" in csvt and "erro" in csvt

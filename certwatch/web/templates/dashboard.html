@@ -40,7 +40,7 @@
     <div class="todo-group">
       <span class="todo-h">Rever</span>
       <a class="pill {{ 'pill-warm' if nav.ct_por_triar }}" href="/descoberta"><b>{{ nav.ct_por_triar }}</b> encontrados na internet por triar</a>
-      <a class="pill {{ 'pill-warm' if nav.reconc_dif }}" href="/reconciliacao"><b>{{ nav.reconc_dif }}</b> diferenças na reconciliação</a>
+      <a class="pill {{ 'pill-warm' if nav.reconc_dif }}" href="/cmdb-final{{ '/' ~ nav.reconc_run if nav.reconc_run }}"><b>{{ nav.reconc_dif }}</b> alterações por aplicar na CMDB</a>
     </div>
     <div class="todo-group">
       <span class="todo-h">Inventário</span>

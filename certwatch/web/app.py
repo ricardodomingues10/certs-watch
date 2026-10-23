@@ -40,9 +40,9 @@ from .. import renewal as rn
 from .. import report as rp
 from .. import ucmdb_access as ua
 from .. import ucmdb_write as uw
+from ..azure_rec import CLASS_LABELS as AZ_CLASSES, STATE_LABELS as AZ_STATES
 from ..collectors.smax import ticket_url
 from ..tickets import TICKET_HELP, TICKET_ORDER, TICKET_STATES, TICKET_VIEWS, comment_files, filter_tickets, ticket_list, tickets_by_label, link as ticket_link, tickets_by_endpoint
-from ..reconcile import REC_HELP, REC_STATES, REC_TABS, scan_import_dir, reconcile
 from ..trust import local_trust_files
 from ..normalize import norm_label, split_api_name, is_ip, is_valid_hostname, norm_host, norm_issuer
 from .security import check_csrf, current_user, security_middleware
@@ -105,9 +105,7 @@ templates.env.globals.update(
     STATE_LABELS=STATE_LABELS, STATUS_LABELS=STATUS_LABELS, CHECKS=CHECKS, CHECK_BY_ID=CHECK_BY_ID,
     LAYERS=LAYERS, MONTHS=MONTHS, JOB_LABELS=JOB_LABELS, JOB_HELP=JOB_HELP,
     CT_STATES=CT_STATES, CT_TABS=CT_TABS, CT_SOURCE_LABELS=SOURCE_LABELS, CT_STATE_HELP=CT_STATE_HELP, TRIAGE_LABELS=TRIAGE_LABELS,
-    REC_STATES=REC_STATES, REC_TABS=REC_TABS, REC_HELP=REC_HELP,
     FINAL_FILES=cf.FILES, FINAL_FILE_LABELS=cf.FILE_LABELS, LIVE_LABELS=cf.LIVE_LABELS, FINAL_SOURCE_LABELS=cf.SOURCE_LABELS,
-    COMPARE_VIEWS=cf.COMPARE_VIEWS, COMPARE_HELP=cf.COMPARE_HELP,
 )
 
 _NAV_CACHE: dict = {"at": 0.0, "data": None}
@@ -127,9 +125,14 @@ def nav_counts() -> dict:
             if s.scalar(select(CtCert.id).limit(1)) is not None:
                 data["ct_por_triar"] = sum(1 for r in classify_ct(s, settings)
                                            if r["state"] != "na_cmdb" and r["ct"].triage == "por_triar" and not r["expired"])
-            if s.scalar(select(ImportFile.id).where(ImportFile.is_current.is_(True)).limit(1)) is not None:
-                c = reconcile(s, settings)["counts"]
-                data["reconc_dif"] = c.get("novo", 0) + c.get("data_posterior", 0) + c.get("data_anterior", 0)
+            run = s.scalar(select(FinalRun).where(FinalRun.status.in_(("pronto", "bloqueado")))
+                           .order_by(FinalRun.id.desc()).limit(1))
+            if run is not None:
+                done = {w.chave for w in s.scalars(select(UcmdbWrite).where(UcmdbWrite.run_id == run.id,
+                                                                            UcmdbWrite.parte == "cert",
+                                                                            UcmdbWrite.estado.in_(("ok", "aviso"))))}
+                data["reconc_dif"] = sum(1 for c in (run.changes or []) if c.get("incluir", True) and c["chave"] not in done)
+                data["reconc_run"] = run.id
     except Exception:
         pass
     _NAV_CACHE.update(at=time.monotonic(), data=data)
@@ -841,7 +844,7 @@ async def pedido_renovacao(request: Request, tid: str, user: str = Depends(curre
         audit(s, user, "pedido.registar_renovacao", tid, cn=cn, origem=r.origin, validade=r.valid_to.isoformat(),
               serie=r.serial)
         d = r.valid_to
-    return _back(tid, msg=f"Renovação registada: válido até {fmt_dt(d)}. Entra na próxima geração dos ficheiros da CMDB.",
+    return _back(tid, msg=f"Renovação registada: válido até {fmt_dt(d)}. Entra na próxima reconciliação da CMDB.",
                  anchor="percurso")
 
 
@@ -1414,57 +1417,15 @@ def descoberta_exportar(triagem: str = "adicionar", user: str = Depends(current_
 
 # ------------------------------------------------------------------ reconciliação
 @app.get("/reconciliacao")
-def reconciliacao(request: Request, estado: str = "", fonte: str = "", q: str = "", user: str = Depends(current_user)):
-    settings = get_settings()
-    with session_scope() as s:
-        res = reconcile(s, settings)
-        history = list(s.scalars(select(ImportFile).order_by(ImportFile.id.desc()).limit(20)))
-        dir_files = scan_import_dir(settings)
-        for f in dir_files:   # último resultado de leitura deste ficheiro (para mostrar erros de colunas, datas...)
-            last = s.scalar(select(ImportFile).where(ImportFile.name == f["name"]).order_by(ImportFile.id.desc()).limit(1))
-            f["last"] = last
-            if last is not None and last.status == "erro":
-                f["ok"] = False
-                f["what"] += " — a última leitura falhou"
-    rows = res["rows"]
-    if not estado:
-        estado = "diferencas"
-    if estado == "diferencas":
-        rows = [r for r in rows if r["state"] in ("novo", "data_posterior", "data_anterior", "so_na_cmdb")]
-    elif estado in REC_STATES:
-        rows = [r for r in rows if r["state"] == estado]
-    if fonte:
-        rows = [r for r in rows if r["source"] == fonte]
-    if q:
-        rows = [r for r in rows if q.lower() in r["cn_norm"]]
-    n_diff = sum(res["counts"].get(k, 0) for k in ("novo", "data_posterior", "data_anterior", "so_na_cmdb"))
-    return render(request, "reconciliacao.html", user, rows=rows[:2000], n_rows=len(rows), counts=res["counts"],
-                  n_diff=n_diff, files=res["files"], history=history, estado=estado, fonte=fonte, q=q,
-                  sources=sorted(settings.import_sources), prefixes=settings.import_sources,
-                  import_dir=str(settings.import_dir), dir_files=dir_files)
-
-
-@app.get("/reconciliacao/exportar")
-def reconciliacao_exportar(estado: str = "diferencas", user: str = Depends(current_user)):
-    with session_scope() as s:
-        rows = reconcile(s, get_settings())["rows"]
-    if estado == "diferencas":
-        rows = [r for r in rows if r["state"] in ("novo", "data_posterior", "data_anterior", "so_na_cmdb")]
-    elif estado in REC_STATES:
-        rows = [r for r in rows if r["state"] == estado]
-    return csv_response(f"reconciliacao-{estado}.csv",
-                        ["Fonte", "Nome (CommonName ou App Registration)", "Situação", "Validade na fonte", "Validade na CMDB", "Validade no servidor",
-                         "Servidor confirma a fonte", "Serial ou KeyId", "Emissor ou tipo de credencial", "SAN", "Encontrado na CMDB em",
-                         "Ficheiro", "Linha"],
-                        [[r["source"], r["cn"], REC_STATES[r["state"]], fmt_dt(r["valid_to"]), fmt_dt(r["cmdb_valid_to"]),
-                          fmt_dt(r["live_valid_to"]), "sim" if r["live_confirma"] else "", r["serial"], r["issuer"],
-                          r["san"], " e ".join(r.get("onde") or []), r["file"], r["row_no"] or ""] for r in rows])
+def reconciliation_page(user: str = Depends(current_user)):
+    """A reconciliação com as exportações passou a fazer parte de Reconciliar e atualizar."""
+    return RedirectResponse("/cmdb-final", status_code=301)
 
 
 # ------------------------------------------------------------------ CMDB final (CMDB_Final.xlsx, certs_update)
-FINAL_STATES = {"a_gerar": "A reconciliar", "pronto": "Pronta", "bloqueado": "CSV bloqueados", "erro": "Com erro"}
-FINAL_VIEWS = {"alteracoes": "Alterações", "servidor": "Verificação no servidor", "erros": "Relatório de erros",
-               "colunas": "Colunas"}
+FINAL_STATES = {"a_gerar": "A reconciliar", "pronto": "Pronta", "bloqueado": "Pronta (CSV bloqueados)", "erro": "Com erro"}
+FINAL_VIEWS = {**{k: v["label"] for k, v in cf.VIEWS.items()}, "detalhes": "Detalhes técnicos"}
+_OLD_VIEWS = {"alteracoes": "novos", "colunas": "detalhes"}
 
 
 def _final_error(request: Request, user: str, message: str, back: str):
@@ -1481,22 +1442,30 @@ def _run_or_404(s, run_id: int) -> FinalRun:
 def _stale_runs(s) -> None:
     for run in s.scalars(select(FinalRun).where(FinalRun.status == "a_gerar")):
         if utcnow() - as_utc(run.created_at) > cf.STALE_AFTER:
-            run.status, run.error, run.finished_at = "erro", "Interrompido (o processo parou durante a geração).", utcnow()
+            run.status, run.error, run.finished_at = "erro", "Interrompido (o processo parou durante a reconciliação).", utcnow()
 
 
 @app.get("/cmdb-final")
 def final_page(request: Request, user: str = Depends(current_user)):
     settings = get_settings()
+    today = utcnow().astimezone(_tz()).date()
     with session_scope() as s:
         _stale_runs(s)
         inputs = cf.current_inputs(s, settings)
         runs = list(s.scalars(select(FinalRun).order_by(FinalRun.id.desc()).limit(30)))
         for r in runs:
             s.expunge(r)
+        applied = dict(s.execute(select(UcmdbWrite.run_id, func.count()).where(UcmdbWrite.estado.in_(uw.DONE))
+                                 .group_by(UcmdbWrite.run_id)).all())
         cmdb_at = s.scalar(select(CmdbRecord.last_seen).order_by(CmdbRecord.last_seen.desc()).limit(1))
-        ct = cf.ct_source(s, settings, utcnow().astimezone(_tz()).date())[1] if settings.final_ct else None
+        apis_at = s.scalar(select(ApiRecord.last_seen).order_by(ApiRecord.last_seen.desc()).limit(1))
+        ct = cf.ct_source(s, settings, today)[1] if settings.final_ct else None
+        renewals = len(rn.source_items(s, today))
+    from ..reconcile import scan_import_dir
     latest = runs[0] if runs else None
-    return render(request, "final.html", user, inputs=inputs, runs=runs, latest=latest, cmdb_at=cmdb_at, settings=settings, FINAL_STATES=FINAL_STATES, ct=ct,
+    return render(request, "final.html", user, inputs=inputs, runs=runs, latest=latest, cmdb_at=cmdb_at,
+                  apis_at=apis_at, settings=settings, FINAL_STATES=FINAL_STATES, ct=ct, renewals=renewals,
+                  applied=applied, AZURE=cf.AZURE_SOURCE, dir_files=scan_import_dir(settings),
                   issuers={k: settings.import_issuers.get(k, "") for k in settings.final_sources})
 
 
@@ -1509,7 +1478,7 @@ def final_generate(request: Request, csrf: str = Form(""), user: str = Depends(c
             _stale_runs(s)
             run = cf.start_run(s, user)
             run_id = run.id
-            audit(s, user, "cmdb_final.gerar", f"geração {run_id}")
+            audit(s, user, "cmdb_final.gerar", f"reconciliação {run_id}")
     except cf.FinalError as exc:
         return _final_error(request, user, str(exc), "/cmdb-final")
     cf.generate_in_background(run_id, settings)
@@ -1522,7 +1491,7 @@ async def final_upload(request: Request, source: str, csrf: str = Form(""), fich
     check_csrf(request, csrf)
     settings = get_settings()
     source = source.upper()
-    if source not in settings.final_sources:
+    if source not in settings.final_sources and source != cf.AZURE_SOURCE:
         raise HTTPException(404)
     name = Path(ficheiro.filename or "").name[:200]
     data = await ficheiro.read(cf.MAX_UPLOAD + 1)
@@ -1531,7 +1500,11 @@ async def final_upload(request: Request, source: str, csrf: str = Form(""), fich
     if len(data) > cf.MAX_UPLOAD:
         return _final_error(request, user, f"Ficheiro demasiado grande (máximo {cf.MAX_UPLOAD // 1024 // 1024} MB).", "/cmdb-final")
     try:
-        items, info = cf.read_source(source, name, data, utcnow().astimezone(_tz()).date())
+        if source == cf.AZURE_SOURCE:
+            from ..azure_rec import read_azure
+            items, info = read_azure(data, name, utcnow().astimezone(_tz()).date())
+        else:
+            items, info = cf.read_source(source, name, data, utcnow().astimezone(_tz()).date())
     except Exception as exc:   # ficheiro ilegível ou sem as colunas esperadas
         return _final_error(request, user, f"Não foi possível usar o ficheiro de {source}: {exc}", "/cmdb-final")
     if not items:
@@ -1548,11 +1521,11 @@ async def final_upload(request: Request, source: str, csrf: str = Form(""), fich
 
 @app.post("/cmdb-final/{run_id}/ucmdb")
 def final_apply_ucmdb(request: Request, run_id: int, csrf: str = Form(""), modo: str = Form("um"), chave: int = Form(-1),
-                      confirmo: str = Form(""), user: str = Depends(current_user)):
+                      confirmo: str = Form(""), vista: str = Form(""), user: str = Depends(current_user)):
     """Aplica na UCMDB, pela REST API, uma alteração (modo=um) ou todas as incluídas e ainda não aplicadas."""
     check_csrf(request, csrf)
     settings = get_settings()
-    back = f"/cmdb-final/{run_id}?vista=alteracoes"
+    back = f"/cmdb-final/{run_id}?vista={vista if vista in FINAL_VIEWS else 'novos'}"
     problem = uw.enabled_problem(settings)
     if problem:
         return RedirectResponse(f"{back}&{urlencode({'erro': problem})}#ucmdb", status_code=303)
@@ -1560,7 +1533,7 @@ def final_apply_ucmdb(request: Request, run_id: int, csrf: str = Form(""), modo:
         with session_scope() as s:
             run = _run_or_404(s, run_id)
             if not cf.editable(s, run):
-                raise uw.WriteError("Só a geração mais recente pode ser aplicada na UCMDB. Gere de novo.")
+                raise uw.WriteError("Só a reconciliação mais recente pode ser aplicada na UCMDB. Reconcilie de novo.")
             if modo == "todas":
                 if confirmo != "1":
                     raise uw.WriteError("Confirme a aplicação na UCMDB.")
@@ -1569,8 +1542,12 @@ def final_apply_ucmdb(request: Request, run_id: int, csrf: str = Form(""), modo:
                 keys = [chave]
             lote = uw.queue(s, run, keys, user)
             n = len(keys)
+            run_changes = list(run.changes or [])
     except uw.WriteError as exc:
         return RedirectResponse(f"{back}&{urlencode({'erro': str(exc)})}#ucmdb", status_code=303)
+    if modo == "um" and vista not in FINAL_VIEWS:
+        tipo = next((c["tipo"] for c in (run_changes or []) if c["chave"] == chave), "novo")
+        back = f"/cmdb-final/{run_id}?vista={'novos' if tipo == 'novo' else 'alterados'}"
     if modo == "um" or UCMDB_WRITE_SYNC:
         uw.process(lote, settings, UCMDB_CLIENT)
         msg = "Aplicado na UCMDB: veja o resultado na linha." if modo == "um" else "Aplicado na UCMDB."
@@ -1741,124 +1718,11 @@ def ucmdb_criacao_apagar(request: Request, csrf: str = Form(""), ci_id: str = Fo
 UCMDB_CLIENT = None    # nos testes: cliente httpx para a UCMDB simulada
 
 
-@app.get("/cmdb-final/comparar")
-def final_compare(request: Request, origem: str = "", vista: str = "diferencas", q: str = "", marcadas: int = 0,
-                  user: str = Depends(current_user)):
-    settings = get_settings()
-    vista = vista if vista in cf.COMPARE_VIEWS else "diferencas"
-    try:
-        label, origem, data, choices = _compare_source(origem, settings)
-    except cf.FinalError as exc:
-        return _final_error(request, user, str(exc), "/cmdb-final")
-    rows, counts, cmdb_at, err = [], {}, None, ""
-    if data is not None:
-        try:
-            final_rows = cf.read_final_xlsx(data)
-            with session_scope() as s:
-                recs = list(s.scalars(select(CmdbRecord).where(CmdbRecord.active.is_(True))))
-                cmdb_at = s.scalar(select(CmdbRecord.last_seen).order_by(CmdbRecord.last_seen.desc()).limit(1))
-                for r in recs:
-                    s.expunge(r)
-            all_rows, counts = cf.compare_with_cmdb(final_rows, recs, _tz())
-            rows = cf.filter_compare(all_rows, vista, q, bool(marcadas))
-        except cf.FinalError as exc:
-            err = str(exc)
-        except Exception as exc:   # ficheiro que não é um Excel válido
-            err = f"Não foi possível ler o ficheiro: {exc}"
-    # Geração mais recente: escolher aqui o que entra nos ficheiros (linha do Excel -> alteração da geração)
-    edit = None
-    kind, _, ident = origem.partition(":")
-    if kind == "geracao" and ident.isdigit():
-        with session_scope() as s:
-            run = s.get(FinalRun, int(ident))
-            if run is not None and cf.editable(s, run):
-                changes = run.changes or []
-                edit = {"run": run.id, "by_line": {c["linha"]: c for c in changes if c.get("linha") and c.get("incluir", True)},
-                        "excluidas": sum(1 for c in changes if not c.get("incluir", True))}
-    return render(request, "final_comparar.html", user, rows=rows[:3000], n_rows=len(rows), counts=counts, vista=vista,
-                  q=q, marcadas=marcadas, origem=origem, label=label, choices=choices, cmdb_at=cmdb_at, err=err,
-                  edit=edit, here=str(request.url.path) + ("?" + request.url.query if request.url.query else ""))
-
-
-def _compare_source(origem: str, settings) -> tuple[str, str, bytes | None, list[tuple[str, str]]]:
-    """Ficheiro CMDB_Final a comparar: uma geração ou um carregado."""
-    with session_scope() as s:
-        runs = list(s.execute(select(FinalRun.id, FinalRun.created_at).where(FinalRun.xlsx.is_not(None))
-                              .order_by(FinalRun.id.desc()).limit(15)))
-        ups = list(s.execute(select(FinalInput.id, FinalInput.name, FinalInput.uploaded_at)
-                             .where(FinalInput.source == "CMDB_FINAL").order_by(FinalInput.id.desc()).limit(5)))
-        choices = [(f"geracao:{r.id}", f"Geração #{r.id} de {fmt_dt(r.created_at, True)}") for r in runs]
-        choices += [(f"carregado:{u.id}", f"Carregado: {u.name} ({fmt_dt(u.uploaded_at, True)})") for u in ups]
-        if not origem:
-            origem = choices[0][0] if choices else ""
-        if not origem:
-            return "", "", None, choices
-        kind, _, ident = origem.partition(":")
-        if kind == "geracao" and ident.isdigit():
-            run = s.get(FinalRun, int(ident))
-            if run is None or run.xlsx is None:
-                raise cf.FinalError("Essa geração já não tem o ficheiro (só se guardam as mais recentes).")
-            return f"CMDB_Final.xlsx da geração #{run.id}", origem, run.xlsx, choices
-        if kind == "carregado" and ident.isdigit():
-            up = s.get(FinalInput, int(ident))
-            if up is None or up.source != "CMDB_FINAL" or up.data is None:
-                raise HTTPException(404)
-            return f"{up.name} (carregado)", origem, up.data, choices
-    raise HTTPException(404)
-
-
-@app.post("/cmdb-final/comparar/carregar")
-async def final_compare_upload(request: Request, csrf: str = Form(""), ficheiro: UploadFile = File(...),
-                               user: str = Depends(current_user)):
-    check_csrf(request, csrf)
-    name = Path(ficheiro.filename or "").name[:200]
-    data = await ficheiro.read(cf.MAX_UPLOAD + 1)
-    if Path(name).suffix.lower() not in (".xlsx", ".xlsm") or len(data) > cf.MAX_UPLOAD:
-        return _final_error(request, user, "Carregue um ficheiro Excel (.xlsx) até 25 MB.", "/cmdb-final/comparar")
-    try:
-        cf.read_final_xlsx(data)
-    except Exception as exc:
-        return _final_error(request, user, f"O ficheiro não pode ser comparado: {exc}", "/cmdb-final/comparar")
-    import hashlib
-    with session_scope() as s:
-        up = FinalInput(source="CMDB_FINAL", name=name, sha256=hashlib.sha256(data).hexdigest(), size=len(data),
-                        data=data, uploaded_by=user)
-        s.add(up)
-        s.flush()
-        uid = up.id
-    return RedirectResponse(f"/cmdb-final/comparar?origem=carregado:{uid}", status_code=303)
-
-
-@app.get("/cmdb-final/comparar/exportar")
-def final_compare_export(origem: str = "", vista: str = "diferencas", q: str = "", marcadas: int = 0,
-                         user: str = Depends(current_user)):
-    settings = get_settings()
-    label, origem, data, _ = _compare_source(origem, settings)
-    if data is None:
-        raise HTTPException(404)
-    with session_scope() as s:
-        recs = list(s.scalars(select(CmdbRecord).where(CmdbRecord.active.is_(True))))
-        for r in recs:
-            s.expunge(r)
-    rows, _ = cf.compare_with_cmdb(cf.read_final_xlsx(data), recs, _tz())
-    rows = cf.filter_compare(rows, vista if vista in cf.COMPARE_VIEWS else "diferencas", q, bool(marcadas))
-    estado = {"igual": "Igual", "diferente": "Diferente", "nao_existe": "Não existe na CMDB", "so_na_cmdb": "Só na CMDB"}
-    d = lambda v: v.strftime("%d-%m-%Y") if v else ""
-    return csv_response(f"comparacao-cmdb-{vista}.csv",
-                        ["Linha no ficheiro", "CommonName", "Global Id", "Marcação no ficheiro", "Situação", "Diferenças",
-                         "ValidTo no ficheiro", "ValidTo na CMDB", "Issuer no ficheiro", "Issuer na CMDB",
-                         "IssuerName no ficheiro", "IssuerName na CMDB"],
-                        [[r["linha"] or "", r["cn"], r["global_id"], r["cor"] or "", estado[r["estado"]],
-                          ", ".join({"data": "data", "issuer": "Issuer", "issuer_name": "IssuerName"}[x] for x in r["dif"]),
-                          d(r["f_validto"]) or str(r["f_validto_raw"] or ""), d(r["c_validto"]), r["f_issuer"], r["c_issuer"],
-                          r["f_issuer_name"], r["c_issuer_name"]] for r in rows])
-
-
 @app.get("/cmdb-final/{run_id}")
-def final_run(request: Request, run_id: int, vista: str = "alteracoes", tipo: str = "", q: str = "", fonte: str = "",
-              incluida: str = "", pendente: str = "", user: str = Depends(current_user)):
+def final_run(request: Request, run_id: int, vista: str = "", q: str = "", fonte: str = "",
+              incluida: str = "", user: str = Depends(current_user)):
     settings = get_settings()
-    vista = vista if vista in FINAL_VIEWS else "alteracoes"
+    vista = _OLD_VIEWS.get(vista, vista)
     with session_scope() as s:
         _stale_runs(s)
         run = _run_or_404(s, run_id)
@@ -1868,33 +1732,70 @@ def final_run(request: Request, run_id: int, vista: str = "alteracoes", tipo: st
         can_edit = cf.editable(s, run)
         uw.recover_stale(s)
         writes = uw.writes_for_run(s, run_id)
-        for w in writes.values():
+        writes_az = uw.writes_for_run(s, run_id, "azure")
+        for w in [*writes.values(), *writes_az.values()]:
             s.expunge(w)
         s.expunge(run)
-    changes = run.changes or []
-    all_changes = changes
-    if tipo in ("novo", "alterado"):
-        changes = [c for c in changes if c["tipo"] == tipo]
+    all_changes = run.changes or []
+    vistas = run.vistas or {}
+    azure = vistas.get("azure") or []
+    groups = {
+        "novos": [c for c in all_changes if c["tipo"] == "novo"],
+        "alterados": [c for c in all_changes if c["tipo"] != "novo"],
+        "confirmar": [c for c in all_changes if c.get("pendente") or c.get("chave_repetida")],
+    }
+    counts = {"novos": len(groups["novos"]), "alterados": len(groups["alterados"]), "confirmar": len(groups["confirmar"]),
+              "servidor": len(run.live or []), "so_na_cmdb": len(vistas.get("so_na_cmdb") or []),
+              "azure": sum(1 for x in azure if x["estado"] not in ("igual", "expirado")), "erros": len(run.problems or [])}
+    if vista not in FINAL_VIEWS:
+        vista = next((k for k in ("novos", "alterados", "azure", "so_na_cmdb") if counts.get(k)), "novos")
+    changes = groups.get(vista, [])
     if fonte:
         changes = [c for c in changes if c.get("fonte") == fonte]
     if incluida in ("sim", "nao"):
         changes = [c for c in changes if c.get("incluir", True) == (incluida == "sim")]
-    if pendente:
-        changes = [c for c in changes if c.get("pendente")]
     if q:
         ql = q.lower()
         changes = [c for c in changes if any(ql in (c.get(k) or "").lower() for k in ("cn", "global_id", "serial", "issuer_name"))]
-    return render(request, "final_run.html", user, run=run, vista=vista, views=FINAL_VIEWS, changes=changes[:3000],
-                  n_changes=len(changes), tipo=tipo, q=q, newest=newest, sizes=sizes,
+    az_view = request.query_params.get("az", "")
+    azure_shown = [x for x in azure if (az_view == "todos" or x["estado"] not in ("igual", "expirado"))]
+    return render(request, "final_run.html", user, run=run, vista=vista, views=FINAL_VIEWS, VIEWS=cf.VIEWS,
+                  changes=changes[:3000], n_changes=len(changes), counts=counts, q=q, newest=newest, sizes=sizes,
                   FINAL_STATES=FINAL_STATES, settings=settings, fonte=fonte, incluida=incluida,
-                  pendente=bool(pendente), can_edit=can_edit, writes=writes, WRITE_STATES=uw.STATE_LABELS,
+                  can_edit=can_edit, writes=writes, writes_az=writes_az, WRITE_STATES=uw.STATE_LABELS,
                   write_problem=uw.enabled_problem(settings),
-                  write_busy=any(w.estado in uw.BUSY for w in writes.values()),
+                  write_busy=any(w.estado in uw.BUSY for w in [*writes.values(), *writes_az.values()]),
                   to_apply=[c["chave"] for c in all_changes if c.get("incluir", True)
                             and not (writes.get(c["chave"]) and writes[c["chave"]].estado in uw.DONE)],
-                  msg=request.query_params.get("msg", ""), erro_msg=request.query_params.get("erro", ""), fontes=sorted({c.get("fonte") for c in all_changes if c.get("fonte")}),
+                  msg=request.query_params.get("msg", ""), erro_msg=request.query_params.get("erro", ""),
+                  fontes=sorted({c.get("fonte") for c in all_changes if c.get("fonte")}),
                   n_excl=sum(1 for c in all_changes if not c.get("incluir", True)),
+                  so_na_cmdb=vistas.get("so_na_cmdb") or [], azure=azure_shown, az_view=az_view,
+                  azure_total=len(azure), AZ_STATES=AZ_STATES, AZ_CLASSES=AZ_CLASSES, flow=cf.data_flow(run, settings.ucmdb_tql),
                   age_min=(utcnow() - as_utc(run.created_at)).total_seconds() / 60)
+
+
+@app.post("/cmdb-final/{run_id}/azure")
+def final_apply_azure(request: Request, run_id: int, csrf: str = Form(""), chave: int = Form(-1),
+                      lista: str = Form(""), user: str = Depends(current_user)):
+    """Inclui uma credencial do Azure na lista de APIs ou na de certificados (ou atualiza a data do registo)."""
+    check_csrf(request, csrf)
+    settings = get_settings()
+    back = f"/cmdb-final/{run_id}?vista=azure"
+    problem = uw.enabled_problem(settings)
+    if problem:
+        return RedirectResponse(f"{back}&{urlencode({'erro': problem})}", status_code=303)
+    try:
+        with session_scope() as s:
+            run = _run_or_404(s, run_id)
+            if not cf.editable(s, run):
+                raise uw.WriteError("Só a reconciliação mais recente pode ser aplicada na UCMDB. Reconcilie de novo.")
+            lote = uw.queue_azure(s, run, chave, lista, user)
+    except uw.WriteError as exc:
+        return RedirectResponse(f"{back}&{urlencode({'erro': str(exc)})}", status_code=303)
+    uw.process(lote, settings, UCMDB_CLIENT)
+    return RedirectResponse(f"{back}&{urlencode({'msg': 'Aplicado na UCMDB: veja o resultado na linha.'})}#az-{chave}",
+                            status_code=303)
 
 
 @app.get("/cmdb-final/{run_id}/ficheiro/{key}")
@@ -1905,8 +1806,8 @@ def final_download(run_id: int, key: str, user: str = Depends(current_user)):
         run = _run_or_404(s, run_id)
         data = cf.run_file(run, key)
         if data is None:
-            raise HTTPException(404, "Ficheiro não disponível nesta geração.")
-        audit(s, user, "cmdb_final.descarregar", f"geração {run_id}: {cf.FILES[key]}")
+            raise HTTPException(404, "Ficheiro não disponível nesta reconciliação.")
+        audit(s, user, "cmdb_final.descarregar", f"reconciliação {run_id}: {cf.FILES[key]}")
     media = ("application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" if key == "xlsx"
              else "text/csv; charset=utf-8")
     name = cf.FILES[key]
@@ -1959,7 +1860,7 @@ async def final_selection(request: Request, run_id: int, user: str = Depends(cur
             run = _run_or_404(s, run_id)
             n = cf.apply_selection(s, run, shown, chosen, user)
             if n:
-                audit(s, user, "cmdb_final.selecao", f"geração {run_id}", alteradas=n,
+                audit(s, user, "cmdb_final.selecao", f"reconciliação {run_id}", alteradas=n,
                       excluidas=sum(1 for c in run.changes if not c.get("incluir", True)))
     except cf.FinalError as exc:
         return _final_error(request, user, str(exc), f"/cmdb-final/{run_id}")
