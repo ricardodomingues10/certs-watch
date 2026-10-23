@@ -206,3 +206,38 @@ def test_azure_api_fields_unknown_lists_attributes(setup, monkeypatch):
     with session_scope() as s:
         w = s.scalar(select(UcmdbWrite).where(UcmdbWrite.parte == "azure"))
         assert w.estado == "erro" and "fim da validade" in w.detalhe and "secret_expiration_date" in w.detalhe
+
+
+class FakeHiddenDate(FakeThinTql):
+    """Como na UCMDB real: nenhum CI devolve a data de fim (nem o TQL, nem o GET), mas o modelo de classes
+    (GET /classModel/citypes/{tipo}) diz que o tipo tem um atributo de data "scml_fim"."""
+    def handler(self, request):
+        p = request.url.path
+        if request.method == "GET" and p.endswith("/classModel/citypes/exemplo_api"):
+            self.calls.append(("GET", p, None))
+            return httpx.Response(200, json={"name": "exemplo_api", "attributes": [
+                {"name": "display_label", "displayLabel": "Display Label", "type": "string"},
+                {"name": "create_time", "displayLabel": "Create Time", "type": "date"},
+                {"name": "last_modified_time", "displayLabel": "Last Modified Time", "type": "date"},
+                {"name": "scml_fim", "displayLabel": "Data de fim de validade", "type": "date"}]})
+        r = super().handler(request)
+        if request.method == "GET" and "/dataModel/ci/a" in p and r.status_code == 200:
+            data = json.loads(r.content)
+            data["properties"].pop("secret_expiration_date", None)
+            return httpx.Response(200, json=data)
+        return r
+
+
+def test_azure_api_expiry_from_class_model(setup, monkeypatch):
+    st, rid, fake, webapp = setup
+    hidden = FakeHiddenDate(list(CIS) + API_CIS)
+    monkeypatch.setattr(webapp, "UCMDB_CLIENT", hidden.client())
+    with session_scope() as s:
+        az = {x["nome"]: x for x in s.get(FinalRun, rid).vistas["azure"]}
+    with TestClient(webapp.app) as c:
+        c.get(f"/cmdb-final/{rid}", auth=AUTH)
+        token = c.cookies["cw_csrf"]
+        r = c.post(f"/cmdb-final/{rid}/azure", data={"csrf": token, "chave": az["Pagamentos API"]["chave"], "lista": "apis"}, auth=AUTH)
+        assert "incluído na lista de APIs" in r.text, r.text[:3000]
+    props = hidden.writes()[-1][2]["cis"][0]["properties"]
+    assert props["scml_fim"] == "2027-06-15T00:00:00" and "create_time" not in props

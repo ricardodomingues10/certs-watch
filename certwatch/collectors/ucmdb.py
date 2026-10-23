@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import logging
 import re
+from dataclasses import replace
 from datetime import datetime, timezone
 from urllib.parse import urlsplit
 from zoneinfo import ZoneInfo
@@ -121,6 +122,10 @@ class UcmdbSession:
     def ci(self, ucmdb_id: str) -> dict:
         """Todas as propriedades de um CI (GET /dataModel/ci/{id})."""
         return self._request("GET", f"/dataModel/ci/{ucmdb_id}", f"Leitura do CI {ucmdb_id}").json() or {}
+
+    def ci_type(self, name: str) -> dict:
+        """Definição de um tipo de CI (GET /classModel/citypes/{nome}): atributos, tipos e nomes visíveis."""
+        return self._request("GET", f"/classModel/citypes/{name}", f"Leitura do tipo de CI {name}").json() or {}
 
 
 def fetch_topology(settings: Settings, tql: str, client: httpx.Client | None = None) -> list[dict]:
@@ -320,7 +325,69 @@ def _merge(cis: list[dict], extra: dict[str, dict]) -> list[dict]:
     return out
 
 
-def enrich_cis(session: UcmdbSession, cis: list[dict], mode: str = "auto") -> tuple[list[dict], str, list[str]]:
+_LABEL_KEYS = ("displayLabel", "displayName", "display_label", "label")
+_TYPE_KEYS = ("type", "attributeType", "typeName", "valueType", "dataType")
+
+
+def type_attributes(data) -> list[dict]:
+    """Atributos de uma definição de tipo de CI: [{"name", "label", "type"}]. Aceita várias formas do JSON."""
+    out, seen = [], set()
+
+    def walk(node, depth=0):
+        if depth > 6:
+            return
+        if isinstance(node, dict):
+            name = node.get("name")
+            typ = next((node[k] for k in _TYPE_KEYS if isinstance(node.get(k), str)), None)
+            if isinstance(name, str) and typ is not None and name not in seen and depth > 0:
+                seen.add(name)
+                label = next((node[k] for k in _LABEL_KEYS if isinstance(node.get(k), str)), "")
+                out.append({"name": name, "label": label, "type": typ})
+            for v in node.values():
+                if isinstance(v, (dict, list)):
+                    walk(v, depth + 1)
+        elif isinstance(node, list):
+            for v in node:
+                walk(v, depth + 1)
+
+    walk(data)
+    return out
+
+
+def date_attributes(attrs: list[dict]) -> list[dict]:
+    return [a for a in attrs if re.search(r"date|time", a["type"], re.I)]
+
+
+def expiry_candidates(attrs: list[dict]) -> list[dict]:
+    """Atributos de data que podem ser o fim da validade (não os de criação/alteração da UCMDB)."""
+    out = []
+    for a in date_attributes(attrs):
+        n, label = a["name"], a.get("label") or ""
+        if REGISTERED_KEY.search(n) or re.search(r"^(last_|root_|track_)|modif|update|access|discover", n, re.I):
+            continue
+        if DATE_KEY.search(n) or DATE_KEY.search(label) or re.search(r"expira|validade|fim", label, re.I):
+            out.append(a)
+    return out
+
+
+def class_expiry(session: UcmdbSession, ci_type: str) -> tuple[str | None, list[dict], str]:
+    """Pergunta à UCMDB que atributos de data tem o tipo de CI. Devolve (atributo do fim da validade ou None,
+    atributos de data, aviso)."""
+    if not ci_type:
+        return None, [], "tipo de CI desconhecido"
+    try:
+        attrs = type_attributes(session.ci_type(ci_type))
+    except UcmdbError as exc:
+        return None, [], f"modelo de classes indisponível: {exc}"
+    dates = date_attributes(attrs)
+    cands = expiry_candidates(attrs)
+    strong = [a for a in cands if EXPIRY_STRONG.search(a["name"]) or re.search(r"expira", a.get("label") or "", re.I)]
+    pick = strong[0] if len(strong) == 1 else (cands[0] if len(cands) == 1 else None)
+    return (pick["name"] if pick else None), dates, ""
+
+
+def enrich_cis(session: UcmdbSession, cis: list[dict], mode: str = "auto",
+               extra_layout: list[str] | None = None) -> tuple[list[dict], str, list[str]]:
     """Quando o layout do TQL não traz os atributos, vai buscá-los à REST API sem mexer no TQL:
     1) lê um CI (GET /dataModel/ci/{id}) para saber que atributos existem;
     2) pede esses atributos para todos os CIs numa só consulta ad-hoc (POST /topologyQuery);
@@ -345,7 +412,7 @@ def enrich_cis(session: UcmdbSession, cis: list[dict], mode: str = "auto") -> tu
                         seen_props[k] = v
             if probe is None:
                 raise UcmdbError("Não foi possível ler nenhum CI")
-            layout = _layout_from(seen_props)
+            layout = sorted(set(_layout_from(seen_props)) | set(extra_layout or []))
             ci_type = str(cis[0].get("type") or probe.get("type") or "")
             got = session.topology_query(ci_type, layout, ids)
             extra = {str(c.get("ucmdbId")): safe_properties(c.get("properties") or {}) for c in got}
@@ -378,7 +445,14 @@ def fetch_apis(settings: Settings, client: httpx.Client | None = None) -> tuple[
         method, notes = "tql", []
         fields = detect_api_fields(cis, settings)
         if not fields.get("validade") and settings.apis_enrich != "off":
-            cis, method, notes = enrich_cis(s, cis, settings.apis_enrich)
+            # o modelo de classes diz qual é o atributo da data, mesmo quando o CI não o devolve
+            attr, _, note = class_expiry(s, str((cis[0] if cis else {}).get("type") or ""))
+            if note:
+                notes.append(note)
+            cis, method, more = enrich_cis(s, cis, settings.apis_enrich, [attr] if attr else None)
+            notes += more
+            if attr and not detect_api_fields(cis, settings).get("validade"):
+                settings = replace(settings, apis_field_expiry=attr)
     records, fields = parse_apis(cis, settings)
     fields = {**fields, "metodo": method}
     if notes:

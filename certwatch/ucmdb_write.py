@@ -263,7 +263,17 @@ def execute(s: UcmdbSession, plan: Plan, col_attr: dict[str, str], settings: Set
     # confirmar o que ficou
     verificado, diffs = None, []
     try:
-        after = s.ci(cid).get("properties") or {}
+        got_ci = s.ci(cid)
+        after = dict(got_ci.get("properties") or {})
+        missing = sorted({col_attr[c] for c in plan.campos if col_attr[c] not in after})
+        if missing and got_ci.get("type"):
+            # o GET nem sempre devolve todos os atributos (ex.: datas): pede-os numa consulta ad-hoc
+            try:
+                for c in s.topology_query(str(got_ci["type"]), missing, [cid]):
+                    if str(c.get("ucmdbId")) == str(cid):
+                        after.update({k: v for k, v in (c.get("properties") or {}).items() if v not in (None, "")})
+            except UcmdbError:
+                pass
         for col, v in plan.campos.items():
             got = format_value(col_attr[col], after.get(col_attr[col]), tz)
             if not same(col, got, v):
@@ -389,30 +399,38 @@ def next_placeholder_serial(state: dict, used: list) -> str:
 def api_model(us: UcmdbSession, settings: Settings) -> dict:
     """Tipo de CI e atributos da lista de APIs, a partir dos CIs do TQL das APIs."""
     from collections import Counter
-    from .collectors.ucmdb import detect_api_fields, enrich_cis
+    from .collectors.ucmdb import _is_date, class_expiry, detect_api_fields, enrich_cis
     if not settings.ucmdb_tql_apis:
         raise WriteError("Defina CERTWATCH_UCMDB_TQL_APIS (a lista de APIs) para incluir segredos do Azure.")
     cis = us.topology(settings.ucmdb_tql_apis)
     if not cis:
         raise WriteError(f"O TQL {settings.ucmdb_tql_apis} não devolveu APIs: não sei que tipo de CI criar.")
+    ci_type = Counter(c.get("type") for c in cis if c.get("type")).most_common(1)[0][0] if any(c.get("type") for c in cis) else ""
+    # o modelo de classes da UCMDB diz que atributos de data o tipo tem (mesmo sem valor nos CIs)
+    cls_attr, cls_dates, cls_note = class_expiry(us, ci_type)
     fields = detect_api_fields(cis, settings)
     if not fields.get("nome") or not fields.get("validade"):
         # o layout do TQL não traz todos os atributos: vai buscá-los à REST API (como a importação das APIs)
-        cis, _, _ = enrich_cis(us, cis, settings.apis_enrich if settings.apis_enrich in ("query", "ci") else "auto")
+        cis, _, _ = enrich_cis(us, cis, settings.apis_enrich if settings.apis_enrich in ("query", "ci") else "auto",
+                               [a for a in (settings.apis_field_expiry, cls_attr) if a])
         fields = detect_api_fields(cis, settings)
     seen = sorted({k for c in cis for k, v in (c.get("properties") or {}).items() if v not in (None, "")})
-    from .collectors.ucmdb import _is_date
+    in_type = {a["name"] for a in cls_dates}
     date_like = sorted({k for c in cis for k, v in (c.get("properties") or {}).items() if v not in (None, "") and _is_date(v)})
-    for k in ("nome", "validade"):
-        if fields.get(k) and fields[k] not in seen:
-            fields[k] = None                     # definido no .env mas nenhuma API o tem
+    if fields.get("nome") and fields["nome"] not in seen:
+        fields["nome"] = None                         # definido no .env mas nenhuma API o tem
+    if fields.get("validade") and fields["validade"] not in seen and fields["validade"] not in in_type:
+        fields["validade"] = None
+    if not fields.get("validade") and cls_attr:
+        fields["validade"] = cls_attr
     if not fields.get("nome") or not fields.get("validade"):
+        listed = ", ".join(f"{a['name']} ({a['label']})" if a.get("label") else a["name"] for a in cls_dates)
         raise WriteError("Não foi possível reconhecer na lista de APIs o atributo do "
                          + " e do ".join(x for x, k in (("nome", "nome"), ("fim da validade", "validade")) if not fields.get(k))
                          + f". Foram lidas {len(cis)} APIs pela REST API. Atributos com valor: {', '.join(seen[:60]) or 'nenhum'}. "
-                         + (f"Com datas: {', '.join(date_like)}. " if date_like else
-                            "Nenhum tem uma data de fim: a data pode estar num atributo que a REST API não devolve "
-                            "para esta conta, ou num CI ligado. ")
+                         + (f"Com datas: {', '.join(date_like)}. " if date_like else "")
+                         + (f"Atributos de data do tipo {ci_type} na UCMDB: {listed}. " if listed else
+                            f"Não consegui ler os atributos do tipo {ci_type} ({cls_note or 'sem atributos de data'}). ")
                          + "Indique o atributo no .env (CERTWATCH_APIS_FIELD_EXPIRY=<atributo>) e reinicie.")
     types = Counter(c.get("type") for c in cis if c.get("type"))
     props = set()

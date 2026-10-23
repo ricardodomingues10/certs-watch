@@ -201,7 +201,7 @@ def test_enrich_ci_by_ci_when_query_not_allowed(env):
     settings = replace(env, ucmdb_tql_apis="APIs_Exemplo")
     c, calls = rest_client(allow_query=False)
     records, fields = fetch_apis(settings, c)
-    assert fields["metodo"] == "ci" and "HTTP 403" in fields["avisos"][0]
+    assert fields["metodo"] == "ci" and any("HTTP 403" in a for a in fields["avisos"])
     assert sum(1 for r in records if r["expiry"]) == 2 and records[0]["cmdb_expired"] is True
     assert "Xy7~Qk2" not in json.dumps(records, default=str)
     info = describe_tql(settings, "APIs_Exemplo", rest_client(allow_query=False)[0])
@@ -253,3 +253,14 @@ def test_portuguese_data_attributes_are_not_internal(env):
     assert detect_api_fields(cis, env)["validade"] == "data_expiracao"
     layout = _layout_from(cis[0]["properties"])
     assert "data_expiracao" in layout
+
+
+def test_class_model_shapes():
+    from certwatch.collectors.ucmdb import expiry_candidates, type_attributes
+    nested = {"classModelClass": {"name": "api_secret", "attributes": {"attribute": [
+        {"name": "create_time", "displayName": "Create Time", "attributeType": "date"},
+        {"name": "scml_data_expiracao", "displayName": "Data de expiração", "attributeType": "date"},
+        {"name": "aplicacao", "displayName": "Aplicação", "attributeType": "string"}]}}}
+    attrs = type_attributes(nested)
+    assert {a["name"] for a in attrs} == {"create_time", "scml_data_expiracao", "aplicacao"}
+    assert [a["name"] for a in expiry_candidates(attrs)] == ["scml_data_expiracao"]
