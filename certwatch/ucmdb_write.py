@@ -389,7 +389,7 @@ def next_placeholder_serial(state: dict, used: list) -> str:
 def api_model(us: UcmdbSession, settings: Settings) -> dict:
     """Tipo de CI e atributos da lista de APIs, a partir dos CIs do TQL das APIs."""
     from collections import Counter
-    from .collectors.ucmdb import detect_api_fields
+    from .collectors.ucmdb import detect_api_fields, enrich_cis
     if not settings.ucmdb_tql_apis:
         raise WriteError("Defina CERTWATCH_UCMDB_TQL_APIS (a lista de APIs) para incluir segredos do Azure.")
     cis = us.topology(settings.ucmdb_tql_apis)
@@ -397,8 +397,18 @@ def api_model(us: UcmdbSession, settings: Settings) -> dict:
         raise WriteError(f"O TQL {settings.ucmdb_tql_apis} não devolveu APIs: não sei que tipo de CI criar.")
     fields = detect_api_fields(cis, settings)
     if not fields.get("nome") or not fields.get("validade"):
-        raise WriteError("Não foi possível reconhecer na lista de APIs os atributos do nome e da data de validade "
-                         "(CERTWATCH_APIS_FIELD_NAME / CERTWATCH_APIS_FIELD_EXPIRY).")
+        # o layout do TQL não traz todos os atributos: vai buscá-los à REST API (como a importação das APIs)
+        cis, _, _ = enrich_cis(us, cis, settings.apis_enrich if settings.apis_enrich in ("query", "ci") else "auto")
+        fields = detect_api_fields(cis, settings)
+    seen = sorted({k for c in cis[:50] for k, v in (c.get("properties") or {}).items() if v not in (None, "")})
+    for k in ("nome", "validade"):
+        if fields.get(k) and fields[k] not in seen:
+            fields[k] = None                     # definido no .env mas nenhuma API o tem
+    if not fields.get("nome") or not fields.get("validade"):
+        raise WriteError("Não foi possível reconhecer na lista de APIs o atributo do "
+                         + " e do ".join(x for x, k in (("nome", "nome"), ("fim da validade", "validade")) if not fields.get(k))
+                         + ". Defina-o no .env (CERTWATCH_APIS_FIELD_NAME / CERTWATCH_APIS_FIELD_EXPIRY). Atributos que as "
+                         f"APIs têm: {', '.join(seen[:40]) or 'nenhum'}.")
     types = Counter(c.get("type") for c in cis if c.get("type"))
     props = set()
     for c in cis[:50]:

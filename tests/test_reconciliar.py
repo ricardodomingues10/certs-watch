@@ -166,3 +166,43 @@ def test_azure_writes(setup):
     # o histórico mostra as escritas do Azure
     with TestClient(webapp.app) as c:
         assert "Pagamentos API" in c.get("/jobs", auth=AUTH).text
+
+
+class FakeThinTql(FakeWithApis):
+    """O TQL das APIs só traz o display_label (como na UCMDB real): o resto vem por CI."""
+    def handler(self, request):
+        if request.url.path.endswith("/topology") and request.content == b"APIs_Exemplo":
+            self.calls.append(("POST", request.url.path, None))
+            return httpx.Response(200, json={"cis": [{"ucmdbId": k, "type": v["type"],
+                                                      "properties": {"display_label": v["properties"]["display_label"]}}
+                                                     for k, v in self.store.items() if v["type"] == "exemplo_api"]})
+        return super().handler(request)
+
+
+def test_azure_api_with_thin_tql(setup, monkeypatch):
+    st, rid, fake, webapp = setup
+    thin = FakeThinTql(list(CIS) + API_CIS)
+    monkeypatch.setattr(webapp, "UCMDB_CLIENT", thin.client())
+    with session_scope() as s:
+        az = {x["nome"]: x for x in s.get(FinalRun, rid).vistas["azure"]}
+    with TestClient(webapp.app) as c:
+        c.get(f"/cmdb-final/{rid}", auth=AUTH)
+        token = c.cookies["cw_csrf"]
+        r = c.post(f"/cmdb-final/{rid}/azure", data={"csrf": token, "chave": az["Pagamentos API"]["chave"], "lista": "apis"}, auth=AUTH)
+        assert "incluído na lista de APIs" in r.text
+        props = thin.writes()[-1][2]["cis"][0]["properties"]
+        assert props["secret_expiration_date"] == "2027-06-15T00:00:00" and props["secret_location"] == LOC
+
+
+def test_azure_api_fields_unknown_lists_attributes(setup, monkeypatch):
+    st, rid, fake, webapp = setup
+    monkeypatch.setattr(webapp, "get_settings", lambda: replace(st, apis_field_expiry="nao_existe_attr"))
+    with session_scope() as s:
+        az = {x["nome"]: x for x in s.get(FinalRun, rid).vistas["azure"]}
+    with TestClient(webapp.app) as c:
+        c.get(f"/cmdb-final/{rid}", auth=AUTH)
+        token = c.cookies["cw_csrf"]
+        c.post(f"/cmdb-final/{rid}/azure", data={"csrf": token, "chave": az["Pagamentos API"]["chave"], "lista": "apis"}, auth=AUTH)
+    with session_scope() as s:
+        w = s.scalar(select(UcmdbWrite).where(UcmdbWrite.parte == "azure"))
+        assert w.estado == "erro" and "fim da validade" in w.detalhe and "secret_expiration_date" in w.detalhe
