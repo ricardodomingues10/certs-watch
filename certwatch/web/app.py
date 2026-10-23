@@ -32,7 +32,7 @@ from ..jobs import apis_configured, JOBS, enqueue
 from ..collectors.ct import SOURCE_LABELS
 from ..discovery import CT_STATE_HELP, CT_STATES, CT_TABS, TRIAGE_LABELS, classify_ct
 from ..models import (ApiRecord, AuditLog, Certificate, CmdbRecord, CtCert, Endpoint, FinalInput,
-                      EmailReport, EmailTemplate, FinalRun, Finding, ImportFile, JobRun, Renewal, ScanResult, SmaxComment, SmaxFile,
+                      EmailReport, EmailTemplate, FinalRun, Finding, JobRun, Renewal, ScanResult, SmaxComment, SmaxFile,
                       SslLabsResult, TicketBatch, SmaxTicket, UcmdbWrite)
 from .. import ticket_create as tc
 from .. import cmdb_final as cf
@@ -50,14 +50,13 @@ from .security import check_csrf, current_user, security_middleware
 BASE = Path(__file__).parent
 MONTHS = ["jan", "fev", "mar", "abr", "mai", "jun", "jul", "ago", "set", "out", "nov", "dez"]
 JOB_LABELS = {"pipeline": "Executar tudo", "ingest_cmdb": "Importar certificados da CMDB",
-              "ingest_apis": "Importar lista de APIs", "ingest_imports": "Ler ficheiros de reconciliação",
+              "ingest_apis": "Importar lista de APIs",
               "ingest_smax": "Ler pedidos do SMAX",
               "ingest_ct": "Procurar na internet (CT)", "scan": "Verificar servidores",
               "ssllabs": "Avaliação externa (SSL Labs)", "evaluate": "Reavaliar regras"}
-JOB_HELP = {"pipeline": "Faz todos os passos pela ordem: CMDB, APIs, ficheiros, SMAX, internet, servidores, SSL Labs e regras.",
+JOB_HELP = {"pipeline": "Faz todos os passos pela ordem: CMDB, APIs, SMAX, internet, servidores, SSL Labs e regras.",
             "ingest_cmdb": "Lê os certificados da UCMDB (nome, validade e emissor).",
             "ingest_apis": "Lê a lista de APIs da UCMDB.",
-            "ingest_imports": "Lê os ficheiros CA1, CA2, AVI e Azure da diretoria de importação.",
             "ingest_smax": "Lê os pedidos (changes) de certificados do SMAX, só leitura.",
             "ingest_ct": "Consulta crt.sh, Cert Spotter e ctlogs.dev para os domínios configurados.",
             "scan": "Liga-se a cada servidor e recolhe o certificado e a cadeia.",
@@ -231,10 +230,10 @@ def setup_checklist(s, settings, stats) -> list[dict]:
     else:
         items.append({"ok": None, "title": "Avaliação externa SSL Labs",
                       "hint": "Opcional: registar um email da organização e definir CERTWATCH_SSLLABS_EMAIL."})
-    files = list(s.scalars(select(ImportFile).where(ImportFile.is_current.is_(True))))
-    items.append({"ok": True if files else None, "title": "Ficheiros de reconciliação",
-                  "hint": (", ".join(f"{f.source}: {f.name}" for f in files) if files else
-                           "Opcional: colocar exportações CA1*, CA2*, AVI* e Azure* na diretoria import/.")})
+    files = cf.current_inputs(s, settings)
+    items.append({"ok": True if files else None, "title": "Fontes da reconciliação",
+                  "hint": (", ".join(f"{k}: {v['nome']}" for k, v in files.items()) if files else
+                           "Colocar exportações ca1*, ca2*, avi* e azure* na diretoria import/ ou carregá-las em Reconciliar e atualizar.")})
     items.append({"ok": True if settings.ucmdb_write else None, "title": "Escrita na UCMDB",
                   "hint": ("Ligada: a reconciliação aplica as alterações diretamente na UCMDB." if settings.ucmdb_write else
                            "Opcional: definir CERTWATCH_UCMDB_WRITE=true no .env para aplicar as alterações na UCMDB.")})

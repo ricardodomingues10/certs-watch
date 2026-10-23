@@ -241,7 +241,6 @@ def test_api_file_fallback(env, tmp_path):
     with session_scope() as db:
         out = ingest_apis(db, s, records, fields)
         assert out["com_validade"] == 3
-    # O ficheiro da lista de APIs não aparece como "ignorado" na reconciliação
-    from certwatch.reconcile import ingest_imports
-    with session_scope() as db:
-        assert "ignorados" not in ingest_imports(db, s)
+    # O ficheiro da lista de APIs é reconhecido na diretoria (não aparece como ignorado)
+    from certwatch.reconcile import scan_import_dir
+    assert all(f["ok"] for f in scan_import_dir(s) if f["name"].lower().startswith(s.apis_file))

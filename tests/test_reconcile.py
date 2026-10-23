@@ -3,10 +3,9 @@ from datetime import datetime, timedelta, timezone
 
 from openpyxl import Workbook
 
-from certwatch.db import session_scope, utcnow
-from certwatch.jobs import ingest_cmdb
-from certwatch.models import ImportFile
-from certwatch.reconcile import ingest_imports, map_columns, norm_header, parse_date, reconcile
+from certwatch import cmdb_final as cf
+from certwatch.db import utcnow
+from certwatch.reconcile import map_columns, norm_header, parse_date
 from zoneinfo import ZoneInfo
 
 TZ = ZoneInfo("Europe/Lisbon")
@@ -31,71 +30,37 @@ def test_headers_and_dates():
     assert parse_date("20280410", TZ) is not None
 
 
-def test_import_and_reconcile(env, tmp_path):
-    imp = tmp_path / "import"
-    imp.mkdir()
-    s = replace(env, import_dir=imp, import_issuers={"CA1": "Exemplo Issuing CA01"}, ucmdb_min_cis=1)
-
-    with session_scope() as db:
-        ingest_cmdb(db, s, [
-            {"ucmdb_id": "1", "global_id": "1", "common_name": "igual.exemplo.local",
-             "valid_to": (NOW + timedelta(days=100)).isoformat(), "issuer": "Exemplo Issuing CA01", "issuer_name": ""},
-            {"ucmdb_id": "2", "global_id": "2", "common_name": "renovado.exemplo.local",
-             "valid_to": (NOW + timedelta(days=10)).isoformat(), "issuer": "Exemplo Issuing CA01", "issuer_name": ""},
-            {"ucmdb_id": "3", "global_id": "3", "common_name": "lb.exemplo.pt",
-             "valid_to": (NOW + timedelta(days=300)).isoformat(), "issuer": "DigiCert", "issuer_name": ""},
-            {"ucmdb_id": "4", "global_id": "4", "common_name": "sumiu.exemplo.local",
-             "valid_to": (NOW + timedelta(days=60)).isoformat(), "issuer": "Exemplo Issuing CA01", "issuer_name": ""},
-        ])
-
-    # CA1: certutil em UTF-16 com BOM, separado por vírgulas, datas portuguesas
+def test_reading_real_exports(env, tmp_path):
+    """Os ficheiros reais: certutil em UTF-16 com BOM, Excel do AVI e CSV Windows-1252 com acentos estragados."""
+    today = NOW.astimezone(TZ).date()
     ca1 = "\n".join([
         '"Req ID:","Requester Name:","Issued Common Name:","Certificate Expiration Date:","Serial Number:","Request Disposition:"',
         f'"10","DOM\\\\a","novo.exemplo.local","{d(200)}","1a2b","20 -- Issued"',
         f'"11","DOM\\\\b","igual.exemplo.local","{d(100)}","3c4d","20 -- Issued"',
-        f'"12","DOM\\\\c","renovado.exemplo.local","{d(375)}","5e6f","20 -- Issued"',
         f'"13","DOM\\\\d","revogado.exemplo.local","{d(50)}","7a8b","21 -- Revoked"',
         '"14","DOM\\\\e","malformado.exemplo.local","31/31/2026","9c9d","20 -- Issued"',
     ])
-    (imp / "CA1_export.csv").write_bytes(b"\xff\xfe" + ca1.encode("utf-16-le"))
+    items, info = cf.read_source("CA1", "CA1_export.csv", b"\xff\xfe" + ca1.encode("utf-16-le"), today)
+    by = {x.cn: x for x in items}
+    assert by["novo.exemplo.local"].keep and by["novo.exemplo.local"].serial == "1a2b"
+    assert not by["revogado.exemplo.local"].keep and by["revogado.exemplo.local"].drop == "NAO_EMITIDO"
+    assert not by["malformado.exemplo.local"].keep and by["malformado.exemplo.local"].drop.startswith("DATA_")
+    assert info["validas"] == 2
 
-    # AVI: Excel com data em texto ISO e em célula de data
     wb = Workbook()
     ws = wb.active
     ws.append(["Nome", "Subject_CommonName", "Validity_NotAfter", "SerialNumber", "Issuer_CommonName", "SubjectAlternativeName"])
     ws.append(["lb-cert", "lb.exemplo.pt", (NOW + timedelta(days=100)).strftime("%Y-%m-%dT%H:%M:%S"), "AA", "DigiCert", "lb.exemplo.pt"])
     ws.append(["outro", "app.exemplo.pt", datetime.now() + timedelta(days=30), "BB", "Let's Encrypt R10", ""])
-    wb.save(imp / "avi_certs.xlsx")
+    import io
+    buf = io.BytesIO()
+    wb.save(buf)
+    items, info = cf.read_source("AVI", "avi_certs.xlsx", buf.getvalue(), today)
+    assert [x.cn for x in items if x.keep] == ["lb.exemplo.pt", "app.exemplo.pt"] and items[0].issuer == "DigiCert"
 
-    # CA2: Windows-1252, ponto e vírgula, cabeçalho com acentos estragados
     ca2 = "Issued Common Name:;Certificate Expiration Date:;LocalizaÃ§Ã£o\n" + f"ca2.exemplo.local;{d(90)};Lisboa\n"
-    (imp / "ca2.csv").write_bytes(ca2.encode("cp1252"))
-    (imp / "notas.csv").write_text("x;y\n1;2\n")
-
-    with session_scope() as db:
-        out = ingest_imports(db, s)
-    assert out["CA1"]["estado"] == "importado" and out["CA1"]["registos"] == 3
-    assert out["AVI"]["registos"] == 2 and out["CA2"]["registos"] == 1
-    assert out["ignorados"] == ["notas.csv"]
-
-    with session_scope() as db:
-        f = db.query(ImportFile).filter_by(source="CA1", is_current=True).one()
-        assert any("Linha 6" in p for p in f.problems)
-        assert any("não emitido" in p for p in f.problems)
-        res = reconcile(db, s)
-    by = {(r["source"], r["cn_norm"]): r for r in res["rows"]}
-    assert by[("CA1", "novo.exemplo.local")]["state"] == "novo"
-    assert by[("CA1", "igual.exemplo.local")]["state"] == "igual"
-    assert by[("CA1", "renovado.exemplo.local")]["state"] == "data_posterior"
-    assert by[("AVI", "lb.exemplo.pt")]["state"] == "data_anterior"
-    assert by[("AVI", "app.exemplo.pt")]["state"] == "novo"
-    assert by[("CA2", "ca2.exemplo.local")]["state"] == "novo"
-    assert by[("CA1", "sumiu.exemplo.local")]["state"] == "so_na_cmdb"
-    assert res["counts"]["novo"] == 3
-
-    # Os mesmos ficheiros não são reimportados
-    with session_scope() as db:
-        assert ingest_imports(db, s)["CA1"]["estado"] == "sem alterações"
+    items, info = cf.read_source("CA2", "ca2.csv", ca2.encode("cp1252"), today)
+    assert items[0].cn == "ca2.exemplo.local" and items[0].keep
 
 
 def test_old_reconcile_page_redirects_and_directory_panel(env, tmp_path, monkeypatch):
@@ -116,57 +81,6 @@ def test_old_reconcile_page_redirects_and_directory_panel(env, tmp_path, monkeyp
         assert "avi_x.csv" in page and "fonte AVI" in page and "Reconciliar agora" in page
 
 
-def test_azure_credentials_against_api_list(env, tmp_path):
-    from certwatch.collectors.ucmdb import parse_apis
-    from certwatch.jobs import ingest_apis
-    imp = tmp_path / "import"
-    imp.mkdir()
-    s = replace(env, import_dir=imp)
-    loc = "AzureAD - App Registration - Client Secret"
-    cis = [
-        {"ucmdbId": "a1", "properties": {"display_label": "CRM Testes", "application_name": "CRM",
-                                         "secret_expiration_date": "24-01-2027 13:00:00", "secret_location": loc}},
-        {"ucmdbId": "a2", "properties": {"display_label": "Radar - 0123456789abcdef0123", "application_name": "Radar",
-                                         "secret_expiration_date": d(100)[:10].replace("/", "-") + " 13:00:00",
-                                         "secret_location": loc}},
-        {"ucmdbId": "a3", "properties": {"display_label": "Removida do Azure", "application_name": "Z",
-                                         "secret_expiration_date": d(200)[:10].replace("/", "-") + " 13:00:00",
-                                         "secret_location": loc}},
-    ]
-    records, fields = parse_apis(cis, s)
-    with session_scope() as db:
-        ingest_apis(db, s, records, fields)
-
-    # Certificado de uma App Registration registado na lista de certificados (não na de APIs)
-    with session_scope() as db:
-        ingest_cmdb(db, replace(s, ucmdb_min_cis=1), [
-            {"ucmdb_id": "c1", "global_id": "c1", "common_name": "Automacao Exemplo",
-             "valid_to": "2036-06-21T22:00:00+00:00", "issuer": "Automacao Exemplo", "issuer_name": ""}])
-    csv_text = "\n".join([
-        '"EnterpriseApplication";"AppRegistration";"AppId";"CredentialType";"KeyId";"StartDate";"EndDate";"DaysRemaining";"Status"',
-        '"App_TST";"App_TST";"x";"Secret";"k1";"20/10/2024 14:59:29";"20/10/2025 14:59:29";"0";"Expired"',
-        '"Automacao Exemplo";"Novo App";"x";"Certificate";"k2";"21/06/2026 23:00:00";"21/06/2036 23:00:00";"3532";"Valid"',
-        '"Automacao Exemplo";"Automacao Exemplo";"x";"Certificate";"k5";"21/06/2026 23:00:00";"21/06/2036 23:00:00";"3532";"Valid"',
-        '"CRM";"CRM Testes";"x";"Secret";"k3";"24/01/2025 10:00:00";"24/01/2027 14:59:29";"460";"Valid"',
-        f'"Radar";"Radar";"x";"Secret";"k4";"01/01/2026 10:00:00";"{d(400)}";"400";"Valid"',
-    ])
-    (imp / "azure.csv").write_text(csv_text, encoding="utf-8")
-    with session_scope() as db:
-        out = ingest_imports(db, s)
-        assert out["AZURE"]["registos"] == 5
-        res = reconcile(db, s)
-    by = {(r["source"], r["cn"]): r for r in res["rows"]}
-    assert by[("AZURE", "App_TST")]["state"] == "expirado"
-    # "Novo App" não existe com esse nome, mas a Enterprise Application tem certificado registado na CMDB
-    assert by[("AZURE", "Novo App")]["state"] == "igual" and by[("AZURE", "Novo App")]["onde"] == ["Certificados"]
-    assert by[("AZURE", "Automacao Exemplo")]["state"] == "igual" and by[("AZURE", "Automacao Exemplo")]["issuer"] == "Certificate"
-    assert by[("AZURE", "CRM Testes")]["onde"] == ["Lista de APIs"]
-    assert by[("AZURE", "CRM Testes")]["state"] == "igual"                 # mesma data, horas diferentes
-    assert by[("AZURE", "Radar")]["state"] == "data_posterior"            # segredo novo não registado
-    assert by[("AZURE", "Removida do Azure")]["state"] == "so_na_cmdb"
-    assert all(r["azure"] for r in res["rows"])
-
-
 def test_old_env_still_reads_azure_and_directory_panel(env, tmp_path, monkeypatch):
     """Um .env da 0.3 com CERTWATCH_IMPORT_SOURCES sem AZURE continua a reconhecer azure*;
     a página mostra o que acontece a cada ficheiro da diretoria."""
@@ -182,8 +96,6 @@ def test_old_env_still_reads_azure_and_directory_panel(env, tmp_path, monkeypatc
     monkeypatch.setenv("CERTWATCH_IMPORT_SOURCES", "CA1=ca1;CA2=ca2;AVI=avi")
     config.get_settings.cache_clear()
     assert config.get_settings().import_sources["AZURE"] == "azure"
-    from certwatch.jobs import run_now
-    assert run_now("ingest_imports", "teste", config.get_settings()).summary["ingest_imports"]["AZURE"]["registos"] == 1
     with TestClient(app) as c:
         page = c.get("/cmdb-final", auth=("admin", "teste-admin-123")).text
     assert "azure.csv" in page and "fonte AZURE" in page
