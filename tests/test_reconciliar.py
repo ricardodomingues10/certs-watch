@@ -241,3 +241,83 @@ def test_azure_api_expiry_from_class_model(setup, monkeypatch):
         assert "incluído na lista de APIs" in r.text, r.text[:3000]
     props = hidden.writes()[-1][2]["cis"][0]["properties"]
     assert props["scml_fim"] == "2027-06-15T00:00:00" and "create_time" not in props
+
+
+class FakeRequired(FakeWithApis):
+    """UCMDB que exige name e SGSI para criar uma API (HTTP 400 "Not all required attributes are provided")."""
+    required = ("name", "SGSI")
+    model: list = []
+
+    def __init__(self, cis):
+        super().__init__(cis)
+        for v in self.store.values():
+            if v["type"] == "exemplo_api":
+                v["properties"].update({"SGSI": "Sim", "name": v["properties"]["display_label"]})
+
+    def handler(self, request):
+        p, m = request.url.path, request.method
+        if m == "GET" and p.endswith("/classModel/citypes/exemplo_api"):
+            return httpx.Response(200, json={"name": "exemplo_api", "attributes": self.model})
+        if m == "POST" and p.endswith("/dataModel"):
+            ci = json.loads(request.content)["cis"][0]
+            if ci["type"] == "exemplo_api" and any(not ci["properties"].get(a) for a in self.required):
+                self.calls.append((m, p, json.loads(request.content)))
+                return httpx.Response(400, json={"error": "The following error has occurred: Not all required attributes "
+                                                          "are provided. Please consult logs for more details"})
+        return super().handler(request)
+
+
+def _include_api(rid, webapp):
+    with session_scope() as s:
+        az = {x["nome"]: x for x in s.get(FinalRun, rid).vistas["azure"]}
+    with TestClient(webapp.app) as c:
+        c.get(f"/cmdb-final/{rid}", auth=AUTH)
+        token = c.cookies["cw_csrf"]
+        c.post(f"/cmdb-final/{rid}/azure", data={"csrf": token, "chave": az["Pagamentos API"]["chave"], "lista": "apis"}, auth=AUTH)
+    with session_scope() as s:
+        return s.scalars(select(UcmdbWrite).where(UcmdbWrite.parte == "azure").order_by(UcmdbWrite.id.desc())).first()
+
+
+def test_azure_api_required_attributes_retry(setup, monkeypatch):
+    """O modelo de classes não diz quais são obrigatórios: envia sempre o name; se a UCMDB recusar, tenta de novo
+    com os atributos que todas as APIs têm iguais (SGSI=Sim) e diz o que preencheu."""
+    st, rid, fake, webapp = setup
+    req = FakeRequired(list(CIS) + API_CIS)
+    monkeypatch.setattr(webapp, "UCMDB_CLIENT", req.client())
+    w = _include_api(rid, webapp)
+    assert w.estado in ("ok", "aviso"), w.detalhe
+    sent = [b["cis"][0]["properties"] for m, p, b in req.writes() if m == "POST"]
+    assert sent[0]["name"] == "Pagamentos API" and "SGSI" not in sent[0]
+    assert sent[-1]["SGSI"] == "Sim" and "SGSI=Sim" in w.detalhe
+
+
+def test_azure_api_required_without_common_value(setup, monkeypatch):
+    st, rid, fake, webapp = setup
+    req = FakeRequired(list(CIS) + API_CIS)
+    req.required = ("name", "scml_dono")
+    req.model = [{"name": "scml_dono", "displayLabel": "Dono", "type": "string", "required": True},
+                 {"name": "name", "displayLabel": "Name", "type": "string", "qualifiers": [{"name": "ID_ATTRIBUTE"}]}]
+    monkeypatch.setattr(webapp, "UCMDB_CLIENT", req.client())
+    w = _include_api(rid, webapp)
+    assert w.estado == "erro" and "scml_dono (Dono)" in w.detalhe and "CERTWATCH_APIS_CREATE_DEFAULTS" in w.detalhe
+    assert not [1 for m, p, b in req.writes() if m == "POST"]          # nem chegou a enviar
+    monkeypatch.setattr(webapp, "get_settings", lambda: replace(st, apis_create_defaults={"scml_dono": "DSTI"}))
+    w = _include_api(rid, webapp)
+    assert w.estado in ("ok", "aviso"), w.detalhe
+    assert [b for m, p, b in req.writes() if m == "POST"][-1]["cis"][0]["properties"]["scml_dono"] == "DSTI"
+
+
+def test_api_attributes_page(setup, monkeypatch):
+    st, rid, fake, webapp = setup
+    req = FakeRequired(list(CIS) + API_CIS)
+    req.model = [{"name": "scml_dono", "displayLabel": "Dono", "type": "string", "required": True},
+                 {"name": "SGSI", "displayLabel": "SGSI", "type": "string"},
+                 {"name": "secret_expiration_date", "displayLabel": "Data de expiração", "type": "date"},
+                 {"name": "client_secret", "displayLabel": "Segredo", "type": "string"}]
+    req.store["a1"]["properties"]["client_secret"] = "S3gr3do-Muito-Secreto-123456"
+    monkeypatch.setattr(webapp, "UCMDB_CLIENT", req.client())
+    with TestClient(webapp.app) as c:
+        assert "Ver atributos das APIs" in c.get("/cmdb-final/permissoes", auth=AUTH).text
+        page = c.get("/cmdb-final/permissoes/apis?ver=1", auth=AUTH).text
+    assert "scml_dono" in page and "obrigatório sem valor" in page and "Sim (3)" in page
+    assert "lido como fim da validade" in page and "S3gr3do" not in page

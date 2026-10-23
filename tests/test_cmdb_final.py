@@ -713,3 +713,13 @@ def test_reconcile_one_source(settings, monkeypatch):
         c.post("/cmdb-final/fonte/AVI/diretoria", data={"csrf": token}, auth=AUTH)
         with session_scope() as s:
             assert cf.current_inputs(s, settings)["AVI"]["origem"] == "diretoria"
+
+
+def test_data_flow_azure_only():
+    from types import SimpleNamespace
+    run = SimpleNamespace(summary={"ambito": ["AZURE"], "cmdb_linhas": 632}, columns={"tql": "T"},
+                          inputs={"AZURE": {"validas": 3, "apis_lidas": 40, "ficheiro": "azure.csv"}},
+                          vistas={"azure": [{"estado": "novo"}, {"estado": "novo"}, {"estado": "igual"}]})
+    flow = cf.data_flow(run)
+    assert flow[0]["titulo"] == "Azure" and flow[0]["n"] == 3 and flow[1]["n"] == 40
+    assert flow[2]["n"] == 3 and flow[3]["n"] == 2 and "2 não existem na CMDB" in flow[3]["det"]

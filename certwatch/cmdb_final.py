@@ -1661,6 +1661,25 @@ def data_flow(run, tql: str = "") -> list[dict]:
     srcs = [f"{k}: {v.get('validas', 0)} de {v.get('linhas', 0)}" for k, v in inp.items() if k != AZURE_SOURCE]
     az = inp.get(AZURE_SOURCE)
     azure = (run.vistas or {}).get("azure") or []
+    if (sm.get("ambito") or []) == [AZURE_SOURCE]:
+        from .azure_rec import STATE_LABELS as AZ
+        by = {k: sum(1 for x in azure if x["estado"] == k) for k in AZ}
+        return [
+            {"titulo": "Azure", "n": (az or {}).get("validas", len(azure)), "txt": "credenciais lidas",
+             "det": f"{(az or {}).get('ficheiro') or (az or {}).get('nome') or 'exportação do Azure'}",
+             "como": "Lê a exportação das App Registrations: cada segredo ou certificado, com a data de fim."},
+            {"titulo": "CMDB", "n": (az or {}).get("apis_lidas", 0), "txt": "APIs lidas",
+             "det": f"e {sm.get('cmdb_linhas', 0)} certificados (TQL {(run.columns or {}).get('tql') or tql or '(não definido)'})",
+             "como": "Lê a lista de APIs e a de certificados da CMDB pela REST API."},
+            {"titulo": "Comparação", "n": len(azure), "txt": "credenciais comparadas",
+             "det": f"{by['igual']} iguais, {by['data_posterior']} com data mais recente, {by['data_anterior']} mais antiga, "
+                    f"{by['expirado']} expiradas",
+             "como": "Procura cada credencial na lista de APIs e na de certificados pelo nome da App Registration "
+                     "(ou da Enterprise Application) e compara a data de fim ao dia."},
+            {"titulo": "Resultado", "n": by["novo"] + by["data_posterior"], "txt": "por tratar",
+             "det": f"{by['novo']} não existem na CMDB, {by['data_posterior']} para atualizar a data, {by['so_na_cmdb']} só na CMDB",
+             "como": "No separador Azure, cada uma pode ser incluída na lista de APIs ou na de certificados."},
+        ]
     return [
         {"titulo": "Fontes", "n": sm.get("fontes_validas", sum(v.get("validas", 0) for k, v in inp.items() if k != AZURE_SOURCE)),
          "txt": "linhas válidas", "det": "; ".join(srcs) or "—",

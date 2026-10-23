@@ -1740,6 +1740,19 @@ def ucmdb_permissoes_testar(request: Request, csrf: str = Form(""), escrita: str
     return render(request, "ucmdb_permissoes.html", user, settings=settings, rep=rep, write_ci=write_ci or ci, erro=erro)
 
 
+@app.get("/cmdb-final/permissoes/apis")
+def ucmdb_api_attributes(request: Request, ver: str = "", user: str = Depends(current_user)):
+    """Só leitura: atributos do tipo de CI das APIs e o que o certwatch envia ao criar uma."""
+    settings = get_settings()
+    rep, erro = None, ""
+    if ver:
+        try:
+            rep = uw.api_type_report(settings, UCMDB_CLIENT)
+        except (ua.UcmdbError, uw.WriteError) as exc:
+            erro = str(exc)
+    return render(request, "ucmdb_apis_atributos.html", user, settings=settings, rep=rep, erro=erro)
+
+
 @app.post("/cmdb-final/permissoes/criacao/preparar")
 def ucmdb_criacao_preparar(request: Request, csrf: str = Form(""), user: str = Depends(current_user)):
     """Passo 1 do teste de criação: descobre o atributo de estado (só leitura)."""

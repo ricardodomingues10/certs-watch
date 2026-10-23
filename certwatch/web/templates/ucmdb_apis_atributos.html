@@ -1,0 +1,33 @@
+{% extends "base.html" %}
+{% block title %}Atributos das APIs{% endblock %}
+{% block crumb %}Sistema · <a href="/cmdb-final/permissoes">Ligação à UCMDB</a>{% endblock %}
+{% block page_title %}Atributos das APIs na UCMDB{% endblock %}
+{% block lede %}Os atributos do tipo de CI da lista de APIs, segundo o modelo de classes da UCMDB e o que as APIs existentes têm preenchido. Serve para escolher <span class="mono">CERTWATCH_APIS_FIELD_EXPIRY</span> e <span class="mono">CERTWATCH_APIS_CREATE_DEFAULTS</span> no <span class="mono">.env</span>. Só leitura; valores de atributos sensíveis não são mostrados.{% endblock %}
+{% block actions %}<a class="button" href="/cmdb-final/permissoes/apis?ver=1">Ler de novo</a>{% endblock %}
+{% block content %}
+{% if erro and not rep %}<div class="note bad">{{ erro }}</div>{% endif %}
+{% if not rep and not erro %}<div class="empty"><b>Ainda não lido</b><a href="/cmdb-final/permissoes/apis?ver=1">Ler os atributos das APIs</a></div>{% endif %}
+{% if rep %}
+<p class="small">Tipo de CI <span class="mono">{{ rep.type or '?' }}</span> · {{ rep.n }} APIs lidas do TQL <span class="mono">{{ settings.ucmdb_tql_apis }}</span>{% if rep.model_note %} · <span class="tag tag-run">{{ rep.model_note }}</span>{% endif %}</p>
+{% if rep.erro %}<div class="note bad"><b>Ao criar uma API agora:</b> {{ rep.erro }}</div>{% endif %}
+<div class="card flush scroll">
+<table class="compact">
+  <thead><tr><th>Atributo</th><th>Nome visível</th><th>Tipo</th><th>Obrigatório</th><th class="num">Preenchido</th><th>Valor mais comum</th><th>No certwatch</th></tr></thead>
+  <tbody>
+  {% for r in rep.rows %}
+    <tr>
+      <td class="mono small">{{ r.name }}</td>
+      <td class="small">{{ r.label or '—' }}</td>
+      <td class="small">{{ r.type or '—' }}</td>
+      <td>{% if r.required %}<span class="tag tag-acc">obrigatório</span>{% else %}<span class="muted small">—</span>{% endif %}</td>
+      <td class="num small">{{ r.filled }} de {{ rep.n }}</td>
+      <td class="small">{{ r.common or '—' }}</td>
+      <td class="small">{{ r.uso or '—' }}</td>
+    </tr>
+  {% endfor %}
+  </tbody>
+</table>
+</div>
+<p class="small muted mt">Para definir: no <span class="mono">.env</span> do servidor, <span class="mono">CERTWATCH_APIS_FIELD_EXPIRY=&lt;atributo&gt;</span> (o da data de fim) e <span class="mono">CERTWATCH_APIS_CREATE_DEFAULTS=&lt;atributo&gt;=&lt;valor&gt;;&lt;outro&gt;=&lt;valor&gt;</span> (obrigatórios sem valor), e depois <span class="mono">docker compose up -d</span>.</p>
+{% endif %}
+{% endblock %}

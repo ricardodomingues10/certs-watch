@@ -329,6 +329,27 @@ _LABEL_KEYS = ("displayLabel", "displayName", "display_label", "label")
 _TYPE_KEYS = ("type", "attributeType", "typeName", "valueType", "dataType")
 
 
+def _qualifier_names(node: dict) -> list[str]:
+    out = []
+    for k, v in node.items():
+        if not re.search(r"qualifier", k, re.I):
+            continue
+        for q in (v if isinstance(v, list) else [v]):
+            if isinstance(q, str):
+                out.append(q)
+            elif isinstance(q, dict):
+                out += [str(q[x]) for x in ("name", "qualifierName", "type") if isinstance(q.get(x), str)]
+    return out
+
+
+def _is_required(node: dict) -> bool:
+    """Atributo obrigatório: indicação "required"/"mandatory" ou qualificador REQUIRED / ID_ATTRIBUTE (chave)."""
+    for k, v in node.items():
+        if re.search(r"required|mandatory", k, re.I) and (v is True or str(v).lower() == "true"):
+            return True
+    return any("REQUIRED" in q.upper() or q.upper() == "ID_ATTRIBUTE" for q in _qualifier_names(node))
+
+
 def type_attributes(data) -> list[dict]:
     """Atributos de uma definição de tipo de CI: [{"name", "label", "type"}]. Aceita várias formas do JSON."""
     out, seen = [], set()
@@ -342,7 +363,7 @@ def type_attributes(data) -> list[dict]:
             if isinstance(name, str) and typ is not None and name not in seen and depth > 0:
                 seen.add(name)
                 label = next((node[k] for k in _LABEL_KEYS if isinstance(node.get(k), str)), "")
-                out.append({"name": name, "label": label, "type": typ})
+                out.append({"name": name, "label": label, "type": typ, "required": _is_required(node)})
             for v in node.values():
                 if isinstance(v, (dict, list)):
                     walk(v, depth + 1)
@@ -370,20 +391,31 @@ def expiry_candidates(attrs: list[dict]) -> list[dict]:
     return out
 
 
-def class_expiry(session: UcmdbSession, ci_type: str) -> tuple[str | None, list[dict], str]:
-    """Pergunta à UCMDB que atributos de data tem o tipo de CI. Devolve (atributo do fim da validade ou None,
-    atributos de data, aviso)."""
+def class_attributes(session: UcmdbSession, ci_type: str) -> tuple[list[dict], str]:
+    """Atributos do tipo de CI segundo o modelo de classes da UCMDB, ou ([], motivo)."""
     if not ci_type:
-        return None, [], "tipo de CI desconhecido"
+        return [], "tipo de CI desconhecido"
     try:
-        attrs = type_attributes(session.ci_type(ci_type))
+        return type_attributes(session.ci_type(ci_type)), ""
     except UcmdbError as exc:
-        return None, [], f"modelo de classes indisponível: {exc}"
-    dates = date_attributes(attrs)
+        return [], f"modelo de classes indisponível: {exc}"
+
+
+def pick_expiry(attrs: list[dict]) -> str | None:
     cands = expiry_candidates(attrs)
     strong = [a for a in cands if EXPIRY_STRONG.search(a["name"]) or re.search(r"expira", a.get("label") or "", re.I)]
     pick = strong[0] if len(strong) == 1 else (cands[0] if len(cands) == 1 else None)
-    return (pick["name"] if pick else None), dates, ""
+    return pick["name"] if pick else None
+
+
+def class_expiry(session: UcmdbSession, ci_type: str) -> tuple[str | None, list[dict], str]:
+    """Pergunta à UCMDB que atributos de data tem o tipo de CI. Devolve (atributo do fim da validade ou None,
+    atributos de data, aviso)."""
+    attrs, note = class_attributes(session, ci_type)
+    if note:
+        return None, [], note
+    dates = date_attributes(attrs)
+    return pick_expiry(attrs), dates, ""
 
 
 def enrich_cis(session: UcmdbSession, cis: list[dict], mode: str = "auto",

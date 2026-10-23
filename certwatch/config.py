@@ -48,6 +48,17 @@ def _pattern_list(value: str | None) -> list[str]:
     return [x.strip() for x in (value or "").split(";") if x.strip()]
 
 
+def _attr_map(value: str | None) -> dict[str, str]:
+    """'SGSI=Sim;scml_status_key=1' -> {'SGSI': 'Sim', 'scml_status_key': '1'} (nomes de atributos: mantém maiúsculas)"""
+    out = {}
+    for part in (value or "").split(";"):
+        if "=" in part:
+            k, v = part.split("=", 1)
+            if k.strip():
+                out[k.strip()] = v.strip()
+    return out
+
+
 def _kv_map(value: str | None) -> dict[str, str]:
     """'CA1=Nome A;CA2=Nome B' -> {'CA1': 'Nome A', 'CA2': 'Nome B'}"""
     out = {}
@@ -156,6 +167,7 @@ class Settings:
     import_dir: Path
     import_sources: dict[str, str]
     import_issuers: dict[str, str]
+    apis_create_defaults: dict[str, str]   # atributos fixos ao criar uma API (os obrigatórios que faltem)
 
     # Classificação interno / externo
     internal_suffixes: list[str]
@@ -298,6 +310,7 @@ class Settings:
             # As fontes do .env juntam-se às de origem (um .env antigo sem AZURE continua a reconhecer azure*)
             import_sources={**_kv_map(DEFAULT_IMPORT_SOURCES), **_kv_map(_env("CERTWATCH_IMPORT_SOURCES", ""))},
             import_issuers=_kv_map(_env("CERTWATCH_IMPORT_ISSUERS", "")),
+            apis_create_defaults=_attr_map(_env("CERTWATCH_APIS_CREATE_DEFAULTS", "")),
             internal_suffixes=_str_list(_env("CERTWATCH_INTERNAL_SUFFIXES", ".local,.lan,.internal,.intranet,.corp")),
             internal_issuer_patterns=_str_list(_env("CERTWATCH_INTERNAL_ISSUER_PATTERNS", "internal,interna")),
             trust_dir=Path(_env("CERTWATCH_TRUST_DIR", "/app/trust")),

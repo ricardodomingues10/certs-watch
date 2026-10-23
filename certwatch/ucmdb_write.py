@@ -16,6 +16,7 @@ Segurança:
 from __future__ import annotations
 
 import logging
+import re
 import threading
 import uuid
 from dataclasses import dataclass, field
@@ -124,6 +125,7 @@ class Plan:
     campos: dict[str, str] = field(default_factory=dict)     # coluna -> texto novo
     esperado: dict[str, str] = field(default_factory=dict)   # coluna -> texto antes (atualizar)
     sem_atributo: list[str] = field(default_factory=list)    # colunas que mudaram mas não têm atributo
+    fixos: dict = field(default_factory=dict)                # atributo -> valor enviado tal e qual (ao criar)
 
 
 def plan_change(state: dict, change: dict, col_attr: dict[str, str], settings: Settings) -> Plan:
@@ -220,7 +222,7 @@ def execute(s: UcmdbSession, plan: Plan, col_attr: dict[str, str], settings: Set
     formats = date_formats() if has_date else ["local"]
     tried: list[str] = []
     for fmt in formats:
-        props = _props(plan.campos, col_attr, tz, fmt)
+        props = {**plan.fixos, **_props(plan.campos, col_attr, tz, fmt)}
         tried.append(fmt)
         try:
             if plan.acao == "criar":
@@ -344,6 +346,8 @@ def process(lote: str, settings: Settings, client: httpx.Client | None = None) -
                     else:
                         plan, attrs = plan_change(state, changes[chave], col_attr, settings), col_attr
                     out = execute(us, plan, attrs, settings)
+                    if parte == "azure" and lista == "apis" and plan.acao == "criar" and out.estado == "erro":
+                        out = _retry_required(us, plan, attrs, out, ctx, settings)
                     if out.estado in DONE and plan.acao == "criar":
                         ctx.used.append(out.enviado)
                 except (UcmdbError, WriteError) as exc:
@@ -399,7 +403,8 @@ def next_placeholder_serial(state: dict, used: list) -> str:
 def api_model(us: UcmdbSession, settings: Settings) -> dict:
     """Tipo de CI e atributos da lista de APIs, a partir dos CIs do TQL das APIs."""
     from collections import Counter
-    from .collectors.ucmdb import _is_date, class_expiry, detect_api_fields, enrich_cis
+    from .collectors.ucmdb import (_is_date, _internal, class_attributes, date_attributes, detect_api_fields, enrich_cis,
+                                   pick_expiry)
     if not settings.ucmdb_tql_apis:
         raise WriteError("Defina CERTWATCH_UCMDB_TQL_APIS (a lista de APIs) para incluir segredos do Azure.")
     cis = us.topology(settings.ucmdb_tql_apis)
@@ -407,7 +412,8 @@ def api_model(us: UcmdbSession, settings: Settings) -> dict:
         raise WriteError(f"O TQL {settings.ucmdb_tql_apis} não devolveu APIs: não sei que tipo de CI criar.")
     ci_type = Counter(c.get("type") for c in cis if c.get("type")).most_common(1)[0][0] if any(c.get("type") for c in cis) else ""
     # o modelo de classes da UCMDB diz que atributos de data o tipo tem (mesmo sem valor nos CIs)
-    cls_attr, cls_dates, cls_note = class_expiry(us, ci_type)
+    cls_attrs, cls_note = class_attributes(us, ci_type)
+    cls_attr, cls_dates = pick_expiry(cls_attrs), date_attributes(cls_attrs)
     fields = detect_api_fields(cis, settings)
     if not fields.get("nome") or not fields.get("validade"):
         # o layout do TQL não traz todos os atributos: vai buscá-los à REST API (como a importação das APIs)
@@ -439,7 +445,65 @@ def api_model(us: UcmdbSession, settings: Settings) -> dict:
     locs = Counter(str((c.get("properties") or {}).get(fields["localizacao"]) or "") for c in cis) if fields.get("localizacao") else Counter()
     azure_locs = [(n, l) for l, n in locs.items() if "azure" in l.lower() and "secret" in l.lower()]
     location = max(azure_locs)[1] if azure_locs else AZURE_API_LOCATION
-    return {"type": types.most_common(1)[0][0], "fields": fields, "props": props, "location": location}
+    # atributos obrigatórios do tipo (modelo de classes) e valores que todas as APIs existentes partilham
+    mapped = {v for v in fields.values() if v} | {"display_label", "description"}
+    name_attrs = [a for a in ("name",) if a != fields["nome"] and (a in props or any(x["name"] == a for x in cls_attrs))]
+    common: dict[str, tuple] = {}
+    for k in props:
+        vals = [v for c in cis if (v := (c.get("properties") or {}).get(k)) not in (None, "") and isinstance(v, (str, int, float, bool))]
+        if vals:
+            val, cnt = Counter(vals).most_common(1)[0]
+            common[k] = (val, cnt, len(vals), len(set(vals)))
+    skip = re.compile(r"name|label|descr|url|uri|global_id|ucmdb|create|modif|time|date|data|secret|password|token|key$", re.I)
+    labels = {a["name"]: a.get("label") or "" for a in cls_attrs}
+    fixed, missing = {}, []
+    for a in [x["name"] for x in cls_attrs if x.get("required")]:
+        if a in mapped or a in name_attrs or a in settings.apis_create_defaults:
+            continue
+        c = common.get(a)
+        if c and c[1] * 2 >= len(cis):           # metade ou mais das APIs têm o mesmo valor
+            fixed[a] = c[0]
+        else:
+            missing.append(a)
+    fixed.update(settings.apis_create_defaults)
+    # para tentar de novo se a UCMDB disser que falta um obrigatório (quando o modelo de classes não diz quais são):
+    # os atributos preenchidos em todas as APIs, com poucos valores diferentes
+    retry = {k: c[0] for k, c in common.items()
+             if c[2] == len(cis) and c[3] <= 5 and k not in mapped and k not in fixed and k not in name_attrs
+             and not skip.search(k) and not _internal(k)}
+    return {"type": types.most_common(1)[0][0], "fields": fields, "props": props, "location": location,
+            "name_attrs": name_attrs, "fixed": fixed, "missing": missing, "retry": retry, "labels": labels,
+            "required": [x["name"] for x in cls_attrs if x.get("required")], "cls_note": cls_note}
+
+
+def _retry_required(us: UcmdbSession, plan: Plan, attrs: dict, out: Outcome, ctx: AzureContext,
+                    settings: Settings) -> Outcome:
+    """"Not all required attributes are provided": tenta de novo com os atributos que todas as APIs têm iguais;
+    se ainda falhar, diz o que foi enviado e o que pode faltar."""
+    if "required" not in (out.detalhe or "").lower() or ctx.api is None:
+        return out
+    api = ctx.api
+    extra = {k: v for k, v in api["retry"].items() if k not in out.enviado}
+    note = ""
+    if extra:
+        plan.fixos.update(extra)
+        again = execute(us, plan, attrs, settings)
+        note = "Faltavam atributos obrigatórios: foram preenchidos como em todas as outras APIs (" + \
+               ", ".join(f"{k}={v}" for k, v in extra.items()) + "). "
+        again.detalhe = note + (again.detalhe or "")
+        if again.estado != "erro" or "required" not in again.detalhe.lower():
+            return again
+        out = again
+    lab = api["labels"]
+    req = [a for a in api["required"] if a not in out.enviado]
+    out.detalhe += (f" Enviados: {', '.join(sorted(out.enviado))}."
+                    + (f" Obrigatórios no tipo {api['type']} que não foram enviados: "
+                       + ", ".join(f"{a} ({lab[a]})" if lab.get(a) else a for a in req) + "." if req else
+                       f" O modelo de classes do tipo {api['type']} não indica quais são os obrigatórios"
+                       + (f" ({api['cls_note']})" if api.get("cls_note") else "") + ".")
+                    + " Indique os que faltam no .env (CERTWATCH_APIS_CREATE_DEFAULTS=atributo=valor;outro=valor) e reinicie."
+                    " O pormenor do erro fica nos logs do servidor UCMDB, não no certwatch.")
+    return out
 
 
 def plan_azure(us: UcmdbSession, row: dict, lista: str, acao: str, ctx: AzureContext,
@@ -469,7 +533,14 @@ def plan_azure(us: UcmdbSession, row: dict, lista: str, acao: str, ctx: AzureCon
                   "Localização": ctx.api["location"], "Display Label": nome,
                   "Description": f"{settings.final_description} - novo segredo do Azure ({row.get('tipo_credencial') or 'credencial'}"
                                  + (f", KeyId {row['key_id']}" if row.get("key_id") else "") + ")"}
-        return Plan("criar", nome, ci_type=ctx.api["type"], campos={c: v for c, v in campos.items() if c in col_attr}), col_attr
+        if ctx.api["missing"]:
+            lab = ctx.api["labels"]
+            raise WriteError("A UCMDB exige estes atributos para criar uma API e as APIs existentes não têm um valor comum: "
+                             + ", ".join(f"{a} ({lab[a]})" if lab.get(a) else a for a in ctx.api["missing"])
+                             + ". Indique o valor no .env: CERTWATCH_APIS_CREATE_DEFAULTS=atributo=valor;outro=valor e reinicie.")
+        fixos = {**ctx.api["fixed"], **{a: nome for a in ctx.api["name_attrs"]}}
+        return Plan("criar", nome, ci_type=ctx.api["type"], campos={c: v for c, v in campos.items() if c in col_attr},
+                    fixos=fixos), col_attr
     # lista de certificados
     col_attr = ctx.col_attr
     if acao == "atualizar":
@@ -675,3 +746,51 @@ def history_conditions(q: str = "", ci: str = "", por: str = "", origem: str = "
     return conds
 
 
+
+
+def api_type_report(settings: Settings, client: httpx.Client | None = None) -> dict:
+    """Só leitura: os atributos do tipo de CI das APIs (modelo de classes + o que as APIs têm) e o que o certwatch
+    envia ao criar uma API. Para escolher CERTWATCH_APIS_FIELD_EXPIRY e CERTWATCH_APIS_CREATE_DEFAULTS."""
+    from collections import Counter
+    from .collectors.ucmdb import SENSITIVE_KEY, class_attributes, enrich_cis, safe_properties
+    if not settings.ucmdb_tql_apis:
+        raise WriteError("Defina CERTWATCH_UCMDB_TQL_APIS (a lista de APIs).")
+    with UcmdbSession(settings, client) as us:
+        model, erro = None, ""
+        try:
+            model = api_model(us, settings)
+        except WriteError as exc:
+            erro = str(exc)
+        cis = us.topology(settings.ucmdb_tql_apis)
+        ci_type = model["type"] if model else (Counter(c.get("type") for c in cis if c.get("type")).most_common(1) or [("", 0)])[0][0]
+        attrs, note = class_attributes(us, ci_type)
+        cis, _, _ = enrich_cis(us, cis, "auto", [a["name"] for a in attrs if re.search(r"date|time", a["type"], re.I)][:20])
+    cis = [{**c, "properties": safe_properties(c.get("properties") or {})} for c in cis]   # nunca mostrar segredos
+    n = len(cis)
+    uses: dict[str, str] = {}
+    if model:
+        f = model["fields"]
+        for k, label in (("nome", "nome"), ("validade", "fim da validade"), ("aplicacao", "aplicação"),
+                         ("localizacao", "localização"), ("expirado", "expirado?"), ("registo", "data de registo")):
+            if f.get(k):
+                uses.setdefault(f[k], f"lido como {label}")
+        for a in model["name_attrs"]:
+            uses.setdefault(a, "enviado com o nome da API")
+        for a, v in model["fixed"].items():
+            uses[a] = f"enviado sempre com \"{v}\"" + (" (.env)" if a in settings.apis_create_defaults else " (o valor da maioria)")
+        for a, v in model["retry"].items():
+            uses.setdefault(a, f"enviado com \"{v}\" se a UCMDB disser que falta um obrigatório")
+        for a in model["missing"]:
+            uses[a] = "obrigatório sem valor: definir em CERTWATCH_APIS_CREATE_DEFAULTS"
+    names = [a["name"] for a in attrs] or sorted({k for c in cis for k in (c.get("properties") or {})})
+    by = {a["name"]: a for a in attrs}
+    rows = []
+    for k in names:
+        vals = [v for c in cis if (v := (c.get("properties") or {}).get(k)) not in (None, "")]
+        common = Counter(str(v)[:60] for v in vals if isinstance(v, (str, int, float, bool))).most_common(1)
+        rows.append({"name": k, "label": (by.get(k) or {}).get("label", ""), "type": (by.get(k) or {}).get("type", ""),
+                     "required": bool((by.get(k) or {}).get("required")), "filled": len(vals),
+                     "common": f"{common[0][0]} ({common[0][1]})" if common and not SENSITIVE_KEY.search(k) else "",
+                     "uso": uses.get(k, "")})
+    rows.sort(key=lambda r: (not r["required"], not r["uso"], r["name"]))
+    return {"type": ci_type, "n": n, "rows": rows, "model_note": note, "erro": erro}

@@ -17,6 +17,12 @@
 </section>
 
 <section class="card">
+  <h2>Atributos das APIs</h2>
+  <p class="small muted">Os atributos do tipo de CI da lista de APIs ({{ settings.ucmdb_tql_apis or 'TQL não definido' }}): quais são obrigatórios, quantas APIs os têm preenchidos e o que o certwatch envia ao criar uma. Não muda nada.</p>
+  <a class="button" href="/cmdb-final/permissoes/apis?ver=1">Ver atributos das APIs</a>
+</section>
+
+<section class="card">
   <h2>Escrita</h2>
   <p class="small muted">Reenvia para um certificado um atributo com o valor que já tem (Description, ou Display Label se a Description estiver vazia) com <span class="mono">PUT /rest-api/dataModel/ci/{id}</span>. A UCMDB verifica se a conta pode atualizar CIs, mas nenhum valor muda. Não cria nem apaga nada.</p>
   <form method="post" action="/cmdb-final/permissoes" class="stack">
