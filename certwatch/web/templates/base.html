@@ -40,6 +40,7 @@
     {{ navlink('/cmdb-final', 'Reconciliar e atualizar', p.startswith('/cmdb-final') and not p.startswith('/cmdb-final/permissoes'), nav.reconc_dif, 'warm') }}
     {{ navlink('/descoberta', 'Na internet', p.startswith('/descoberta'), nav.ct_por_triar, 'warm') }}
     {{ navlink('/ucmdb/certificado', 'Editar um certificado', p.startswith('/ucmdb/certificado')) }}
+    {{ navlink('/cmdb/historico', 'Histórico de alterações', p.startswith('/cmdb/historico')) }}
 
     <h4>Operação</h4>
     {{ navlink('/pedidos', 'Pedidos SMAX', p.startswith('/pedidos')) }}

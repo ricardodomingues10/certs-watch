@@ -572,3 +572,4 @@ table.hide-opt .opt { display: none; }
 p.why { margin: 0 0 6px; font-size: 12.5px; color: var(--ink); max-width: 70ch; }
 .az-form { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; margin: 0; }
 .az-form select { min-height: 30px; padding: 3px 8px; font-size: 12.5px; }
+.mt-s { margin-top: .35rem; }

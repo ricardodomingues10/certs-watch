@@ -41,8 +41,8 @@
 
 <section class="card" id="ucmdb">
   <div class="ucmdb-head"><h2>Alterações na UCMDB <small>({{ n_writes }})</small></h2>
-    {% if n_writes %}<a class="button" href="/jobs/ucmdb.csv">Exportar todas (CSV)</a>{% endif %}</div>
-  <p class="small muted">Cada certificado criado ou atualizado na UCMDB pelo certwatch, a partir de uma reconciliação ou editado à mão: o valor que tinha, o que foi enviado e o resultado. Mostra as 100 mais recentes; a exportação tem todas, uma linha por campo.</p>
+    {% if n_writes %}<a class="button" href="/cmdb/historico">Ver o histórico completo</a>{% endif %}</div>
+  <p class="small muted">Cada certificado criado ou atualizado na UCMDB pelo certwatch, a partir de uma reconciliação ou editado à mão: o valor que tinha, o que foi enviado e o resultado. Mostra as 10 mais recentes; o <a href="/cmdb/historico">histórico de alterações</a> tem todas, com filtros e exportação.</p>
   <div class="scroll"><table class="compact">
     <thead><tr><th>Quando</th><th>Quem</th><th>Origem</th><th>Certificado</th><th>O que mudou</th><th>Resultado</th></tr></thead>
     <tbody>
@@ -50,7 +50,7 @@
       <tr>
         <td class="nowrap small">{{ (w.feito_em or w.pedido_em)|dtt }}</td>
         <td class="small">{{ w.por }}</td>
-        <td class="small">{% if w.run_id %}<a href="/cmdb-final/{{ w.run_id }}?vista=alteracoes#alt-{{ w.chave }}">{{ r.origem }}</a>{% else %}{{ r.origem }}{% endif %}<div class="muted">{{ 'criar' if w.acao == 'criar' else 'atualizar' }}</div></td>
+        <td class="small">{% if w.run_id %}<a href="/cmdb-final/{{ w.run_id }}?vista={{ 'azure' if w.parte == 'azure' else 'novos' }}">{{ r.origem }}</a>{% else %}{{ r.origem }}{% endif %}<div class="muted">{{ 'criar' if w.acao == 'criar' else 'atualizar' }}</div></td>
         <td><span class="mono small">{{ w.cn or '—' }}</span>{% if w.ucmdb_id %}<div class="small"><a class="mono" href="/ucmdb/certificado/{{ w.ucmdb_id }}">{{ w.ucmdb_id }}</a></div>{% endif %}</td>
         <td class="small">{% for m in r.mudancas %}<div><span class="mono">{{ m.atributo }}</span>: {% if w.acao != 'criar' %}<del>{{ m.antes or '(vazio)' }}</del> → {% endif %}<ins>{{ m.depois or '(vazio)' }}</ins></div>{% else %}—{% endfor %}</td>
         <td><span class="tag {{ {'ok': 'tag-ok', 'aviso': 'tag-run', 'erro': 'tag-err', 'ignorado': 'tag-off', 'a_aplicar': 'tag-acc', 'pendente': 'tag-acc'}[w.estado] }}">{{ WRITE_STATES[w.estado] }}</span>

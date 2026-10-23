@@ -7,7 +7,7 @@ import io
 import re
 import time
 from contextlib import asynccontextmanager
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from urllib.parse import quote, urlencode
 from zoneinfo import ZoneInfo
@@ -96,6 +96,7 @@ def fmt_dt(value, with_time: bool = False) -> str:
 
 templates.env.filters["dt"] = fmt_dt
 templates.env.filters["dtt"] = lambda v: fmt_dt(v, True)
+templates.env.filters["source_name"] = lambda v: cf.source_name(v)
 templates.env.globals.update(
     FINDING_TYPES=FINDING_TYPES, FINDING_CHECK=FINDING_CHECK, SEVERITIES=SEVERITIES, version=__version__,
     TYPE_LABELS=TYPE_LABELS, TYPE_HELP=TYPE_HELP, SCOPE_LABELS=SCOPE_LABELS, SCOPE_HELP=SCOPE_HELP,
@@ -1308,7 +1309,7 @@ def jobs_page(request: Request, user: str = Depends(current_user)):
     with session_scope() as s:
         runs = list(s.scalars(select(JobRun).order_by(JobRun.id.desc()).limit(50)))
         audits = list(s.scalars(select(AuditLog).order_by(AuditLog.id.desc()).limit(50)))
-        writes = list(s.scalars(select(UcmdbWrite).order_by(UcmdbWrite.id.desc()).limit(100)))
+        writes = list(s.scalars(select(UcmdbWrite).order_by(UcmdbWrite.id.desc()).limit(10)))
         n_writes = s.scalar(select(func.count()).select_from(UcmdbWrite)) or 0
         for w in writes:
             s.expunge(w)
@@ -1319,13 +1320,58 @@ def jobs_page(request: Request, user: str = Depends(current_user)):
                   ucmdb_writes=uw.history_rows(writes), n_writes=n_writes, WRITE_STATES=uw.STATE_LABELS)
 
 
-@app.get("/jobs/ucmdb.csv")
-def jobs_ucmdb_export(user: str = Depends(current_user)):
-    """Todas as alterações feitas na UCMDB pelo certwatch, uma linha por campo alterado."""
+def _history_args(q: str, ci: str, por: str, origem: str, resultado: str, acao: str, de: str, ate: str) -> tuple[list, dict]:
+    """Converte os filtros da página do histórico em condições (datas de Lisboa, ao dia)."""
+    tz = _tz()
+
+    def day(v: str, plus: int = 0):
+        try:
+            d = datetime.strptime(v.strip(), "%Y-%m-%d").date() if v.strip() else None
+        except ValueError:
+            return None
+        return datetime.combine(d + timedelta(days=plus), datetime.min.time(), tzinfo=tz).astimezone(timezone.utc) if d else None
+    f = {"q": q[:200], "ci": ci[:64], "por": por[:128], "origem": origem if origem in uw.ORIGINS else "",
+         "resultado": resultado if resultado in uw.RESULTS else "", "acao": acao if acao in ("criar", "atualizar") else "",
+         "de": de[:10] if day(de) else "", "ate": ate[:10] if day(ate) else ""}
+    conds = uw.history_conditions(f["q"], f["ci"], f["por"], f["origem"], f["resultado"], f["acao"],
+                                  day(f["de"]), day(f["ate"], 1))
+    return conds, f
+
+
+@app.get("/cmdb/historico")
+def cmdb_history(request: Request, q: str = "", ci: str = "", por: str = "", origem: str = "", resultado: str = "",
+                 acao: str = "", de: str = "", ate: str = "", n: int = 200, user: str = Depends(current_user)):
+    """Histórico de todas as alterações feitas na UCMDB pelo certwatch, com filtros."""
+    conds, f = _history_args(q, ci, por, origem, resultado, acao, de, ate)
+    n = max(50, min(n, 5000))
+    with session_scope() as s:
+        base = select(UcmdbWrite).where(*conds)
+        total = s.scalar(select(func.count()).select_from(base.subquery())) or 0
+        by_state = dict(s.execute(select(UcmdbWrite.estado, func.count()).where(*conds).group_by(UcmdbWrite.estado)).all())
+        by_action = dict(s.execute(select(UcmdbWrite.acao, func.count()).where(*conds, UcmdbWrite.estado.in_(uw.DONE))
+                                   .group_by(UcmdbWrite.acao)).all())
+        writes = list(s.scalars(base.order_by(UcmdbWrite.id.desc()).limit(n)))
+        users = sorted(x for x in s.scalars(select(UcmdbWrite.por).distinct()) if x)
+        for w in writes:
+            s.expunge(w)
+    from urllib.parse import urlencode
+    qs = urlencode({k: v for k, v in f.items() if v})
+    counts = {"total": total, "aplicadas": sum(by_state.get(x, 0) for x in uw.DONE), "erros": by_state.get("erro", 0),
+              "criadas": by_action.get("criar", 0), "atualizadas": by_action.get("atualizar", 0),
+              "fila": sum(by_state.get(x, 0) for x in uw.BUSY)}
+    return render(request, "cmdb_historico.html", user, rows=uw.history_rows(writes), f=f, n=n, qs=qs, counts=counts,
+                  users=users, ORIGINS=uw.ORIGINS, RESULTS=uw.RESULTS, WRITE_STATES=uw.STATE_LABELS)
+
+
+@app.get("/cmdb/historico.csv")
+def cmdb_history_export(q: str = "", ci: str = "", por: str = "", origem: str = "", resultado: str = "",
+                        acao: str = "", de: str = "", ate: str = "", user: str = Depends(current_user)):
+    """O histórico filtrado em CSV, uma linha por atributo alterado."""
+    conds, _ = _history_args(q, ci, por, origem, resultado, acao, de, ate)
     out = []
     tz = _tz()
     with session_scope() as s:
-        for r in uw.history_rows(list(s.scalars(select(UcmdbWrite).order_by(UcmdbWrite.id)))):
+        for r in uw.history_rows(list(s.scalars(select(UcmdbWrite).where(*conds).order_by(UcmdbWrite.id)))):
             w = r["w"]
             when = w.feito_em or w.pedido_em
             base = [as_utc(when).astimezone(tz).strftime("%d-%m-%Y %H:%M:%S") if when else "", w.por, r["origem"], w.acao,
@@ -1333,8 +1379,13 @@ def jobs_ucmdb_export(user: str = Depends(current_user)):
             tail = ["" if w.verificado is None else ("sim" if w.verificado else "não"), w.detalhe]
             for m in r["mudancas"] or [{"atributo": "", "antes": "", "depois": ""}]:
                 out.append(base + [m["atributo"], m["antes"], m["depois"]] + tail)
-    return csv_response("alteracoes-ucmdb.csv", ["Quando", "Quem", "Origem", "Ação", "Certificado", "CI", "Resultado",
-                                                 "Atributo", "Antes", "Depois", "Verificado", "Detalhe"], out)
+    return csv_response("historico-alteracoes-cmdb.csv", ["Quando", "Quem", "Origem", "Ação", "Certificado", "CI", "Resultado",
+                                                          "Atributo", "Antes", "Depois", "Verificado", "Detalhe"], out)
+
+
+@app.get("/jobs/ucmdb.csv")
+def jobs_ucmdb_export(user: str = Depends(current_user)):
+    return RedirectResponse("/cmdb/historico.csv", status_code=301)
 
 
 @app.post("/jobs/{job}")
@@ -1451,6 +1502,7 @@ def final_page(request: Request, user: str = Depends(current_user)):
     with session_scope() as s:
         _stale_runs(s)
         inputs = cf.current_inputs(s, settings)
+        files = cf.source_files(s, settings)
         runs = list(s.scalars(select(FinalRun).order_by(FinalRun.id.desc()).limit(30)))
         for r in runs:
             s.expunge(r)
@@ -1462,26 +1514,49 @@ def final_page(request: Request, user: str = Depends(current_user)):
         renewals = len(rn.source_items(s, today))
     from ..reconcile import scan_import_dir
     latest = runs[0] if runs else None
-    return render(request, "final.html", user, inputs=inputs, runs=runs, latest=latest, cmdb_at=cmdb_at,
+    return render(request, "final.html", user, inputs=inputs, files=files, runs=runs, latest=latest, cmdb_at=cmdb_at,
                   apis_at=apis_at, settings=settings, FINAL_STATES=FINAL_STATES, ct=ct, renewals=renewals,
                   applied=applied, AZURE=cf.AZURE_SOURCE, dir_files=scan_import_dir(settings),
                   issuers={k: settings.import_issuers.get(k, "") for k in settings.final_sources})
 
 
 @app.post("/cmdb-final/gerar")
-def final_generate(request: Request, csrf: str = Form(""), user: str = Depends(current_user)):
+def final_generate(request: Request, csrf: str = Form(""), fonte: list[str] = Form([]),
+                   user: str = Depends(current_user)):
+    """Reconcilia todas as fontes ou só as indicadas em `fonte` (ex.: só CA1)."""
     check_csrf(request, csrf)
     settings = get_settings()
+    valid = cf.all_sources(settings)
+    only = [x for x in valid if x in {f.upper() for f in fonte}] or None
+    if fonte and not only:
+        raise HTTPException(400, "Fonte desconhecida")
     try:
         with session_scope() as s:
             _stale_runs(s)
-            run = cf.start_run(s, user)
+            run = cf.start_run(s, user, only)
             run_id = run.id
-            audit(s, user, "cmdb_final.gerar", f"reconciliação {run_id}")
+            audit(s, user, "cmdb_final.gerar", f"reconciliação {run_id}",
+                  **({"fontes": only} if only else {}))
     except cf.FinalError as exc:
         return _final_error(request, user, str(exc), "/cmdb-final")
-    cf.generate_in_background(run_id, settings)
+    cf.generate_in_background(run_id, settings, only)
     return RedirectResponse(f"/cmdb-final/{run_id}", status_code=303)
+
+
+@app.post("/cmdb-final/fonte/{source}/diretoria")
+def final_use_dir(request: Request, source: str, csrf: str = Form(""), user: str = Depends(current_user)):
+    """Esquece os ficheiros carregados desta fonte: volta a usar o da diretoria import/."""
+    check_csrf(request, csrf)
+    settings = get_settings()
+    source = source.upper()
+    if source not in settings.final_sources and source != cf.AZURE_SOURCE:
+        raise HTTPException(404)
+    with session_scope() as s:
+        ups = list(s.scalars(select(FinalInput).where(FinalInput.source == source)))
+        for up in ups:
+            s.delete(up)
+        audit(s, user, "cmdb_final.usar_diretoria", source, carregados_removidos=len(ups))
+    return RedirectResponse("/cmdb-final#fontes", status_code=303)
 
 
 @app.post("/cmdb-final/fonte/{source}")

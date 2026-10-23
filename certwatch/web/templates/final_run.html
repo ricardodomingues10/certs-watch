@@ -17,6 +17,7 @@
 {% if sm %}
 <section class="card" aria-label="O que foi comparado">
   <h2>O que foi comparado</h2>
+  {% if sm.get('ambito') %}<p class="small"><span class="tag tag-acc">só {{ sm.ambito|map('source_name')|join(', ') }}</span> Esta reconciliação leu só {{ 'esta fonte' if sm.ambito|length == 1 else 'estas fontes' }}; as outras não foram comparadas. A CMDB foi lida por inteiro.</p>{% endif %}
   <ol class="dataflow">
     {% for st in flow %}
     <li>

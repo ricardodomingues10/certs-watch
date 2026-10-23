@@ -620,6 +620,19 @@ def edit_signature(form: EditForm, changes: dict[str, tuple[str, str]]) -> str:
     return hashlib.sha256(data.encode("utf-8")).hexdigest()[:32]
 
 
+ORIGINS = {"reconciliacao": "Reconciliação", "azure": "Azure", "edicao": "Edição à mão"}
+RESULTS = {"aplicado": "Aplicadas", "aviso": "Com aviso", "erro": "Com erro", "ignorado": "Não aplicadas", "fila": "Na fila"}
+
+
+def origin_of(w: UcmdbWrite) -> str:
+    if not w.run_id:
+        return "edição à mão"
+    if w.parte == "azure":
+        lista = {"apis": "lista de APIs", "certificados": "lista de certificados"}.get(w.lista or "", "")
+        return f"Azure, reconciliação #{w.run_id}" + (f" ({lista})" if lista else "")
+    return f"reconciliação #{w.run_id}"
+
+
 def history_rows(writes: list[UcmdbWrite]) -> list[dict]:
     """Escritas para o histórico: o que mudou em cada certificado (atributo: antes -> enviado)."""
     out = []
@@ -628,6 +641,37 @@ def history_rows(writes: list[UcmdbWrite]) -> list[dict]:
         for attr, v in (w.enviado or {}).items():
             before = (w.antes or {}).get(attr)
             mud.append({"atributo": attr, "antes": "" if before is None else str(before), "depois": "" if v is None else str(v)})
-        out.append({"w": w, "mudancas": mud,
-                    "origem": f"reconciliação #{w.run_id}" if w.run_id else "edição à mão"})
+        out.append({"w": w, "mudancas": mud, "origem": origin_of(w)})
     return out
+
+
+def history_conditions(q: str = "", ci: str = "", por: str = "", origem: str = "", resultado: str = "",
+                       acao: str = "", de: datetime | None = None, ate: datetime | None = None) -> list:
+    """Filtros do histórico de alterações na UCMDB (para a página e para a exportação)."""
+    from sqlalchemy import func as sfunc
+    conds = []
+    if q.strip():
+        ql = f"%{q.strip().lower()}%"
+        conds.append(sfunc.lower(UcmdbWrite.cn).like(ql) | (UcmdbWrite.ucmdb_id == q.strip()))
+    if ci.strip():
+        conds.append(UcmdbWrite.ucmdb_id == ci.strip())
+    if por.strip():
+        conds.append(UcmdbWrite.por == por.strip())
+    if origem == "edicao":
+        conds.append(UcmdbWrite.run_id.is_(None))
+    elif origem == "azure":
+        conds.append(UcmdbWrite.parte == "azure")
+    elif origem == "reconciliacao":
+        conds.append(UcmdbWrite.run_id.is_not(None) & (sfunc.coalesce(UcmdbWrite.parte, "cert") != "azure"))
+    states = {"aplicado": DONE, "aviso": ("aviso",), "erro": ("erro",), "ignorado": ("ignorado",), "fila": BUSY}.get(resultado)
+    if states:
+        conds.append(UcmdbWrite.estado.in_(states))
+    if acao in ("criar", "atualizar"):
+        conds.append(UcmdbWrite.acao == acao)
+    if de is not None:
+        conds.append(UcmdbWrite.pedido_em >= de)
+    if ate is not None:
+        conds.append(UcmdbWrite.pedido_em < ate)
+    return conds
+
+

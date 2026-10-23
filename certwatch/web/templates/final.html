@@ -20,7 +20,7 @@
   </li>
   <li class="{{ {'pronto': 'is-ok', 'bloqueado': 'is-ok', 'erro': 'is-bad', 'a_gerar': 'is-run'}.get(latest.status, '') if latest else '' }}">
     <h3>Reconciliar</h3>
-    {% if latest %}<span class="st">#{{ latest.id }} {{ FINAL_STATES[latest.status]|lower }}</span>
+    {% if latest %}<span class="st">#{{ latest.id }} {{ FINAL_STATES[latest.status]|lower }}{% if lsm.get('ambito') %} (só {{ lsm.ambito|map('source_name')|join(', ') }}){% endif %}</span>
     <span class="sub"><a href="/cmdb-final/{{ latest.id }}">{{ latest.created_at|dtt }}</a> por {{ latest.created_by }}</span>
     {% else %}<span class="st">Ainda não feita</span><span class="sub">Use "Reconciliar agora".</span>{% endif %}
   </li>
@@ -38,36 +38,48 @@
   </li>
 </ol>
 
+{% macro files_cell(src, required) %}{% set f = files.get(src) %}{% set i = inputs.get(src) %}
+  {% if f and f.diretoria %}<div class="{{ 'muted' if i and i.origem != 'diretoria' }}"><span class="mono small">import/{{ f.diretoria.nome }}</span>
+    <div class="small muted">{{ f.diretoria.quando|dtt }}{% if i and i.origem == 'diretoria' %} · <b>em uso</b>{% else %} · não usado: há um carregado mais recente{% endif %}</div></div>
+  {% else %}<div class="small muted">import/: nenhum ficheiro a começar por <span class="mono">{{ settings.import_sources.get(src, src|lower) }}</span></div>{% endif %}
+  {% if f and f.carregado %}<div class="mt-s {{ 'muted' if i and i.origem != 'carregado' }}"><span class="mono small">{{ f.carregado.nome }}</span>
+    <div class="small muted">carregado por {{ f.carregado.por }}, {{ f.carregado.quando|dtt }}{% if i and i.origem == 'carregado' %} · <b>em uso</b>{% else %} · não usado: o da diretoria é mais recente{% endif %}</div></div>{% endif %}
+  {% if not i and required %}<span class="tag tag-err">em falta</span>{% endif %}
+{% endmacro %}
+{% macro actions_cell(src) %}
+  {% if src in files %}<form class="upload" method="post" action="/cmdb-final/fonte/{{ src }}" enctype="multipart/form-data">
+    <input type="hidden" name="csrf" value="{{ csrf }}">
+    <input type="file" name="ficheiro" accept=".csv,.txt,.xlsx,.xlsm" required aria-label="Ficheiro de {{ label }}">
+    <button>Carregar</button></form>
+  {% if files[src].carregado %}<form method="post" action="/cmdb-final/fonte/{{ src }}/diretoria" class="mt-s"><input type="hidden" name="csrf" value="{{ csrf }}">
+    <button class="link small" data-confirm="Esquecer o ficheiro carregado de {{ label }} e usar o da diretoria import/?">Voltar a usar a diretoria import/</button></form>{% endif %}{% endif %}
+{% endmacro %}
+{% macro only_btn(src, can, label) %}
+  <form method="post" action="/cmdb-final/gerar" class="mt-s"><input type="hidden" name="csrf" value="{{ csrf }}"><input type="hidden" name="fonte" value="{{ src }}">
+    <button class="small" {{ 'disabled' if not can or busy }} title="{{ 'A reconciliar' if busy else ('Compara só ' ~ label ~ ' com a CMDB; as outras fontes não são lidas' if can else 'Sem dados de ' ~ label) }}">Reconciliar só esta fonte</button></form>
+{% endmacro %}
 <section class="card" id="fontes">
   <h2>1. Fontes</h2>
-  <p class="small muted">É usado o ficheiro mais recente de cada fonte: o carregado aqui ou o da diretoria <span class="mono">import/</span> do servidor (nome a começar por {% for src in settings.final_sources %}<span class="mono">{{ settings.import_sources.get(src, src|lower) }}</span>, {% endfor %}<span class="mono">{{ settings.import_sources.get(AZURE, 'azure') }}</span>).</p>
+  <p class="small muted">Se não carregar nada, é lido o ficheiro mais recente da diretoria <span class="mono">import/</span> do servidor (nome a começar por {% for src in settings.final_sources %}<span class="mono">{{ settings.import_sources.get(src, src|lower) }}</span>, {% endfor %}<span class="mono">{{ settings.import_sources.get(AZURE, 'azure') }}</span>). Um ficheiro carregado aqui só é usado enquanto for mais recente do que o da diretoria. Pode reconciliar todas as fontes ("Reconciliar agora") ou uma de cada vez.</p>
   <div class="scroll"><table class="compact">
-    <thead><tr><th>Fonte</th><th>Como é usada</th><th>Em uso</th><th>Carregar outro</th></tr></thead>
-    {% for src in settings.final_sources %}{% set i = inputs.get(src) %}
+    <thead><tr><th>Fonte</th><th>Como é usada</th><th>Ficheiro</th><th>Carregar outro</th></tr></thead>
+    {% for src in settings.final_sources %}
     <tr>
-      <td><b>{{ src }}</b><div class="small muted">obrigatória</div></td>
+      <td><b>{{ src }}</b><div class="small muted">obrigatória para reconciliar tudo</div>{{ only_btn(src, inputs.get(src), src) }}</td>
       <td class="small">{% if src in ('CA1', 'CA2') %}Exportação da CA (certutil): CommonName, data de expiração, série e estado do pedido. Emissor: {% if issuers.get(src) %}{{ issuers[src] }}{% else %}<span class="tag tag-run" title="Os certificados novos desta CA ficam com o emissor Por verificar">por definir em CERTWATCH_IMPORT_ISSUERS</span>{% endif %}{% else %}Exportação com CommonName, data de fim, série, emissor e nomes alternativos.{% endif %}</td>
-      <td>{% if i %}<span class="mono small">{{ i.nome }}</span><div class="small muted">{{ 'carregado por ' ~ i.por if i.origem == 'carregado' else 'diretoria import/' }}, {{ i.quando|dtt }}</div>
-          {% else %}<span class="tag tag-err">em falta</span>{% endif %}</td>
-      <td><form class="upload" method="post" action="/cmdb-final/fonte/{{ src }}" enctype="multipart/form-data">
-        <input type="hidden" name="csrf" value="{{ csrf }}">
-        <input type="file" name="ficheiro" accept=".csv,.txt,.xlsx,.xlsm" required aria-label="Ficheiro de {{ src }}">
-        <button>Carregar</button></form></td>
+      <td>{{ files_cell(src, true) }}</td>
+      <td>{{ actions_cell(src) }}</td>
     </tr>
     {% endfor %}
-    {% set az = inputs.get(AZURE) %}
     <tr>
-      <td><b>Azure</b><div class="small muted">opcional</div></td>
+      <td><b>Azure</b><div class="small muted">opcional</div>{{ only_btn(AZURE, inputs.get(AZURE), 'Azure') }}</td>
       <td class="small">App Registrations: cada credencial (segredo ou certificado) é comparada com a lista de APIs e com a de certificados.{% if apis_at %} Lista de APIs lida em {{ apis_at|dtt }}.{% endif %}</td>
-      <td>{% if az %}<span class="mono small">{{ az.nome }}</span><div class="small muted">{{ 'carregado por ' ~ az.por if az.origem == 'carregado' else 'diretoria import/' }}, {{ az.quando|dtt }}</div>{% else %}<span class="muted small">nenhum</span>{% endif %}</td>
-      <td><form class="upload" method="post" action="/cmdb-final/fonte/{{ AZURE }}" enctype="multipart/form-data">
-        <input type="hidden" name="csrf" value="{{ csrf }}">
-        <input type="file" name="ficheiro" accept=".csv,.txt,.xlsx,.xlsm" required aria-label="Ficheiro do Azure">
-        <button>Carregar</button></form></td>
+      <td>{{ files_cell(AZURE, false) }}</td>
+      <td>{{ actions_cell(AZURE) }}</td>
     </tr>
     {% if ct is not none %}
     <tr>
-      <td><b>Internet</b><div class="small muted">automática</div></td>
+      <td><b>Internet</b><div class="small muted">automática</div>{{ only_btn('INTERNET', ct.validas, 'Internet') }}</td>
       <td class="small">Certificados encontrados nos registos públicos (Certificate Transparency): o mais recente de cada nome. Só os marcados "Adicionar à CMDB" vêm incluídos; os "Ignorar" ficam de fora.</td>
       <td>{% if ct.validas %}<b>{{ ct.validas }}</b> válido{{ 's' if ct.validas != 1 }}
           <div class="small muted">{{ ct.triagem.adicionar }} "Adicionar à CMDB", {{ ct.triagem.por_triar }} por triar, {{ ct.triagem.investigar }} a investigar</div>
@@ -76,7 +88,7 @@
     </tr>
     {% endif %}
     <tr>
-      <td><b>Renovações</b><div class="small muted">automática</div></td>
+      <td><b>Renovações</b><div class="small muted">automática</div>{{ only_btn('RENOVACAO', renewals, 'Renovações') }}</td>
       <td class="small">Renovações registadas na página de cada pedido SMAX (do servidor, do ficheiro do certificado ou à mão). Têm prioridade sobre as outras fontes.</td>
       <td>{% if renewals %}<b>{{ renewals }}</b> registada{{ 's' if renewals != 1 }}{% else %}<span class="muted small">nenhuma</span>{% endif %}</td>
       <td class="small"><a href="/pedidos">Pedidos SMAX</a></td>
@@ -100,7 +112,8 @@
     {% set newest_ready = (runs|selectattr('status', 'in', ['pronto', 'bloqueado'])|first) %}
     {% for r in runs %}{% set sm = r.summary or {} %}{% set superseded = r.status in ('pronto', 'bloqueado') and newest_ready and r.id != newest_ready.id %}
     <tr>
-      <td><a href="/cmdb-final/{{ r.id }}"><b>#{{ r.id }}</b></a> <span class="small muted">{{ r.created_at|dtt }}</span></td>
+      <td><a href="/cmdb-final/{{ r.id }}"><b>#{{ r.id }}</b></a> <span class="small muted">{{ r.created_at|dtt }}</span>
+        <div class="small muted">{% if sm.get('ambito') %}só {{ sm.ambito|map('source_name')|join(', ') }}{% else %}todas as fontes{% endif %}</div></td>
       <td class="small">{{ r.created_by }}</td>
       <td>{% if superseded %}<span class="tag tag-off" title="Há uma reconciliação mais recente; só a mais recente pode ser aplicada">substituída</span>{% else %}<span class="tag {{ {'pronto': 'tag-ok', 'bloqueado': 'tag-ok', 'erro': 'tag-err', 'a_gerar': 'tag-acc'}[r.status] }}">{{ FINAL_STATES[r.status] }}</span>{% endif %}</td>
       <td class="num">{{ sm.get('novos', '—') }}</td><td class="num">{{ sm.get('alterados', '—') }}</td>
@@ -123,7 +136,8 @@
     <li>CommonName existente: atualiza ValidTo e SerialNumber na linha com a data mais próxima. CommonName novo: certificado novo (Global Id = x no certs_update); o emissor é o configurado para CA1/CA2 e, no AVI, o Issuer_CommonName.</li>
     <li>Se a fonte tiver uma data anterior à da CMDB, decide o certificado que o servidor apresenta na porta 443 (verificação do certwatch com menos de {{ settings.final_live_max_age_h }} h, ou ligação na hora). Sem resposta, ou num wildcard, a CMDB não é alterada.</li>
     <li>A Description regista o que mudou ("{{ settings.final_description }} - Data de expiracao alterado de … para …").</li>
-    <li>Emissor que nenhuma fonte tenha: "Por verificar". Série que falte num certificado da internet ou num renovado: x1, x2… a seguir ao maior da CMDB. Duas alterações com a mesma chave IssuerName + SerialNumber ficam de fora até escolher uma.</li>
+    <li>Emissor que nenhuma fonte tenha: "Por verificar". Série que falte num certificado da internet ou num renovado: x1, x2… a seguir ao maior da CMDB. Duas alterações com a mesma chave IssuerName + SerialNumber são o mesmo certificado com vários nomes: fica uma (a de um certificado que já está na CMDB, ou a do nome mais curto) e pode trocar.</li>
+    <li>"Reconciliar só esta fonte" lê só essa fonte; as outras não são lidas nem precisam de ficheiro. A CMDB é sempre lida por inteiro.</li>
     <li>Cada alteração pode ser excluída; a escolha fica guardada para as reconciliações seguintes (mesmo CommonName e mesma data).</li>
     <li>Diferenças em relação ao workflow n8n: uma data vazia na fonte vai para Erros nas fontes; ValidTo e SerialNumber só contam como alterados se mudarem de facto.</li>
   </ul>

@@ -1,0 +1,68 @@
+{% extends "base.html" %}
+{% block title %}Histórico de alterações na CMDB{% endblock %}
+{% block crumb %}CMDB{% endblock %}
+{% block page_title %}Histórico de alterações na CMDB{% endblock %}
+{% block lede %}Tudo o que o certwatch escreveu na UCMDB: certificados e APIs criados ou atualizados a partir de uma reconciliação, do Azure ou editados à mão. Para cada um, quem, quando, o valor que tinha, o que foi enviado e se a UCMDB o confirmou.{% endblock %}
+{% block actions %}
+<a class="button" href="/cmdb/historico.csv{{ '?' ~ qs if qs }}">Exportar (CSV)</a>
+{% endblock %}
+{% block content %}
+<form class="filters" method="get" action="/cmdb/historico">
+  <input type="search" name="q" value="{{ f.q }}" placeholder="certificado (nome) ou CI" aria-label="Certificado ou CI">
+  {% if f.ci %}<input type="hidden" name="ci" value="{{ f.ci }}">{% endif %}
+  <select name="por" aria-label="Quem">
+    <option value="">Todos os utilizadores</option>
+    {% for u in users %}<option value="{{ u }}" {{ 'selected' if f.por == u }}>{{ u }}</option>{% endfor %}
+  </select>
+  <select name="origem" aria-label="Origem">
+    <option value="">Todas as origens</option>
+    {% for k, v in ORIGINS.items() %}<option value="{{ k }}" {{ 'selected' if f.origem == k }}>{{ v }}</option>{% endfor %}
+  </select>
+  <select name="acao" aria-label="Ação">
+    <option value="">Criar e atualizar</option>
+    <option value="criar" {{ 'selected' if f.acao == 'criar' }}>Só criadas</option>
+    <option value="atualizar" {{ 'selected' if f.acao == 'atualizar' }}>Só atualizadas</option>
+  </select>
+  <select name="resultado" aria-label="Resultado">
+    <option value="">Todos os resultados</option>
+    {% for k, v in RESULTS.items() %}<option value="{{ k }}" {{ 'selected' if f.resultado == k }}>{{ v }}</option>{% endfor %}
+  </select>
+  <label class="small">De <input type="date" name="de" value="{{ f.de }}"></label>
+  <label class="small">até <input type="date" name="ate" value="{{ f.ate }}"></label>
+  <button>Filtrar</button>
+  {% if qs %}<a class="small" href="/cmdb/historico">Limpar filtros</a>{% endif %}
+</form>
+
+{% if f.ci %}<p class="small">Só o CI <span class="mono">{{ f.ci }}</span>{% if rows %} ({{ rows[0].w.cn }}){% endif %}. <a href="/ucmdb/certificado/{{ f.ci }}">Abrir o certificado</a> · <a href="/cmdb/historico">ver todos</a></p>{% endif %}
+
+<p class="small"><b>{{ counts.total }}</b> registo{{ 's' if counts.total != 1 }}{{ ' com estes filtros' if qs }}:
+  {{ counts.aplicadas }} aplicado{{ 's' if counts.aplicadas != 1 }} ({{ counts.criadas }} criado{{ 's' if counts.criadas != 1 }}, {{ counts.atualizadas }} atualizado{{ 's' if counts.atualizadas != 1 }}),
+  {{ counts.erros }} com erro{% if counts.fila %}, {{ counts.fila }} na fila{% endif %}.</p>
+
+<div class="card flush scroll">
+<table class="compact">
+  <thead><tr><th>Quando</th><th>Quem</th><th>Origem</th><th>Certificado</th><th>O que mudou</th><th>Resultado</th></tr></thead>
+  <tbody>
+  {% for r in rows %}{% set w = r.w %}
+    <tr>
+      <td class="nowrap small">{{ (w.feito_em or w.pedido_em)|dtt }}</td>
+      <td class="small">{{ w.por }}</td>
+      <td class="small">{% if w.run_id %}<a href="/cmdb-final/{{ w.run_id }}?vista={{ 'azure' if w.parte == 'azure' else 'novos' }}">{{ r.origem }}</a>{% else %}{{ r.origem }}{% endif %}<div class="muted">{{ 'criado' if w.acao == 'criar' else 'atualizado' }}</div></td>
+      <td><span class="mono small">{{ w.cn or '—' }}</span>
+        {% if w.ucmdb_id %}<div class="small"><a class="mono" href="/ucmdb/certificado/{{ w.ucmdb_id }}" title="Abrir e editar na UCMDB">{{ w.ucmdb_id }}</a>
+          {% if not f.ci %} · <a href="/cmdb/historico?ci={{ w.ucmdb_id|urlencode }}" title="Todas as alterações deste certificado">histórico</a>{% endif %}</div>{% endif %}</td>
+      <td class="small">{% for m in r.mudancas %}<div><span class="mono">{{ m.atributo }}</span>: {% if w.acao != 'criar' %}<del>{{ m.antes or '(vazio)' }}</del> → {% endif %}<ins>{{ m.depois or '(vazio)' }}</ins></div>{% else %}—{% endfor %}</td>
+      <td><span class="tag {{ {'ok': 'tag-ok', 'aviso': 'tag-run', 'erro': 'tag-err', 'ignorado': 'tag-off', 'a_aplicar': 'tag-acc', 'pendente': 'tag-acc'}[w.estado] }}">{{ WRITE_STATES[w.estado] }}</span>
+        {% if w.verificado %}<div class="small muted">confirmado na UCMDB</div>{% endif %}
+        {% if w.detalhe and w.estado != 'ok' %}<div class="small muted">{{ w.detalhe }}</div>{% endif %}</td>
+    </tr>
+  {% else %}
+    <tr><td colspan="6"><div class="empty">{% if qs %}<b>Nada com estes filtros</b><a href="/cmdb/historico">Limpar os filtros</a>{% else %}<b>Ainda não foi feita nenhuma alteração na UCMDB</b>As alterações aplicadas em <a href="/cmdb-final">Reconciliar e atualizar</a> ou em <a href="/ucmdb/certificado">Editar um certificado</a> aparecem aqui.{% endif %}</div></td></tr>
+  {% endfor %}
+  </tbody>
+</table>
+</div>
+{% if counts.total > rows|length %}
+<p class="small mt">A mostrar os {{ rows|length }} mais recentes de {{ counts.total }}. <a href="/cmdb/historico?{{ qs ~ '&' if qs }}n={{ n + 200 }}">Mostrar mais 200</a> ou exporte tudo em CSV.</p>
+{% endif %}
+{% endblock %}

@@ -587,28 +587,42 @@ def ct_source(session: Session, settings: Settings, today: date) -> tuple[list[S
     return out, info
 
 
-def current_inputs(session: Session, settings: Settings) -> dict[str, dict]:
-    """Ficheiro em uso por fonte: o mais recente entre a diretoria de importação e os carregados na página."""
-    out: dict[str, dict] = {}
+def source_files(session: Session, settings: Settings) -> dict[str, dict]:
+    """Por fonte: o ficheiro mais recente da diretoria import/ e o último carregado na página (cada um ou None)."""
+    out: dict[str, dict] = {src: {"diretoria": None, "carregado": None} for src in [*settings.final_sources, AZURE_SOURCE]}
     d = settings.import_dir
     if d.is_dir():
         for p in sorted(d.iterdir()):
             if not p.is_file() or p.name.startswith(".") or p.suffix.lower() not in ALLOWED_EXT:
                 continue
             src = source_for(p.name, settings)
-            if src not in settings.final_sources and src != AZURE_SOURCE:
+            if src not in out:
                 continue
             try:
                 mtime = datetime.fromtimestamp(p.stat().st_mtime, tz=timezone.utc)
             except OSError:
                 continue
-            if src not in out or mtime > out[src]["quando"]:
-                out[src] = {"fonte": src, "origem": "diretoria", "nome": p.name, "quando": mtime, "path": str(p)}
-    for src in [*settings.final_sources, AZURE_SOURCE]:
+            cur = out[src]["diretoria"]
+            if cur is None or mtime > cur["quando"]:
+                out[src]["diretoria"] = {"fonte": src, "origem": "diretoria", "nome": p.name, "quando": mtime, "path": str(p)}
+    for src in out:
         up = session.scalar(select(FinalInput).where(FinalInput.source == src).order_by(FinalInput.id.desc()).limit(1))
-        if up is not None and (src not in out or as_utc(up.uploaded_at) >= out[src]["quando"]):
-            out[src] = {"fonte": src, "origem": "carregado", "nome": up.name, "quando": as_utc(up.uploaded_at),
-                        "id": up.id, "por": up.uploaded_by}
+        if up is not None:
+            out[src]["carregado"] = {"fonte": src, "origem": "carregado", "nome": up.name, "quando": as_utc(up.uploaded_at),
+                                     "id": up.id, "por": up.uploaded_by}
+    return out
+
+
+def current_inputs(session: Session, settings: Settings) -> dict[str, dict]:
+    """Ficheiro em uso por fonte: o da diretoria import/, a não ser que tenha sido carregado na página um mais
+    recente. Sem nada carregado, usa sempre a diretoria."""
+    out: dict[str, dict] = {}
+    for src, f in source_files(session, settings).items():
+        dir_f, up = f["diretoria"], f["carregado"]
+        if up is not None and (dir_f is None or up["quando"] >= dir_f["quando"]):
+            out[src] = up
+        elif dir_f is not None:
+            out[src] = dir_f
     return out
 
 
@@ -1397,33 +1411,56 @@ def azure_view(session: Session, table: CmdbTable, filename: str, data: bytes, t
     return compare(rows, apis, certs, today), info
 
 
-def start_run(session: Session, actor: str) -> FinalRun:
+def start_run(session: Session, actor: str, only: list[str] | None = None) -> FinalRun:
     busy = session.scalar(select(FinalRun).where(FinalRun.status == "a_gerar").limit(1))
     if busy is not None:
         if utcnow() - as_utc(busy.created_at) < STALE_AFTER:
             raise FinalError(f"A reconciliação #{busy.id} ainda está a decorrer. Aguarde que termine.")
         busy.status, busy.error, busy.finished_at = "erro", "Interrompido (o processo parou durante a reconciliação).", utcnow()
-    run = FinalRun(created_by=actor, status="a_gerar")
+    run = FinalRun(created_by=actor, status="a_gerar", summary={"ambito": list(only)} if only else {})
     session.add(run)
     session.flush()
     return run
 
 
+def all_sources(settings: Settings) -> list[str]:
+    """Todas as fontes que podem ser reconciliadas, pela ordem da página."""
+    return [*settings.final_sources, AZURE_SOURCE, *([INTERNET] if settings.final_ct else []), RENOVACAO]
+
+
+def source_name(src: str) -> str:
+    return {AZURE_SOURCE: "Azure", INTERNET: "Internet", RENOVACAO: "Renovações"}.get(src, src)
+
+
+def missing_message(settings: Settings, missing: list[str]) -> str:
+    from .reconcile import scan_import_dir
+    names = ", ".join(f"{m} (import/{settings.import_sources.get(m, m.lower())}…)" for m in missing)
+    other = [f["name"] for f in scan_import_dir(settings) if not f["ok"]][:10]
+    return (f"Falta o ficheiro de: {names}. Coloque-o na diretoria import/ do servidor com um nome a começar assim, "
+            "ou carregue-o na página." + (f" Ficheiros em import/ que não são de nenhuma fonte: {', '.join(other)}." if other else ""))
+
+
 def generate(run_id: int, settings: Settings, fetch: Callable | None = None,
-             live_factory: Callable[[Session, Settings], LiveLookup] | None = None, today: date | None = None) -> None:
-    """Gera os três ficheiros de uma execução. Nunca deixa a execução em "a_gerar"."""
+             live_factory: Callable[[Session, Settings], LiveLookup] | None = None, today: date | None = None,
+             only: list[str] | None = None) -> None:
+    """Gera os três ficheiros de uma execução. Nunca deixa a execução em "a_gerar".
+    `only`: reconcilia só estas fontes (as outras não são lidas nem obrigatórias)."""
     tz = ZoneInfo(settings.timezone)
     today = today or datetime.now(tz).date()
+    scope = {x.upper() for x in only} if only else None
+    use = lambda src: scope is None or src in scope
     try:
         table, records = (fetch or fetch_cmdb_table)(settings)
         with session_scope() as s:
             inputs = current_inputs(s, settings)
-            missing = [src for src in settings.final_sources if src not in inputs]
+            files = [src for src in settings.final_sources if use(src)]
+            missing = [src for src in files if src not in inputs]
+            if scope is not None and AZURE_SOURCE in scope and AZURE_SOURCE not in inputs:
+                missing.append(AZURE_SOURCE)
             if missing:
-                raise FinalError("Falta o ficheiro de: " + ", ".join(missing) +
-                                 ". Carregue-o na página ou coloque-o na diretoria de importação.")
+                raise FinalError(missing_message(settings, missing))
             sources, src_info = {}, {}
-            for src in settings.final_sources:
+            for src in files:
                 info = inputs[src]
                 data = _input_bytes(s, info)
                 items, rinfo = read_source(src, info["nome"], data, today)
@@ -1434,19 +1471,19 @@ def generate(run_id: int, settings: Settings, fetch: Callable | None = None,
             ren = [SourceItem(source=RENOVACAO, row_no=n, cn=x["cn"], day=x["day"], serial=x["serial"], issuer=x["issuer"],
                               san=x["san"], ref=x["ref"], auth=x["origin"] if x["origin"] in ("servidor", "ficheiro") else "",
                               raw_date=x["day"].isoformat())
-                   for n, x in enumerate(source_items(s, today), start=1)]
+                   for n, x in enumerate(source_items(s, today), start=1)] if use(RENOVACAO) else []
             if ren:
                 sources[RENOVACAO] = ren
                 src_info[RENOVACAO] = {"ficheiro": "renovações registadas nos pedidos", "linhas": len(ren),
                                        "validas": len(ren), "origem": "certwatch"}
-            if settings.final_ct:
+            if settings.final_ct and use(INTERNET):
                 ct_items, ct_info = ct_source(s, settings, today)
                 if ct_items:
                     sources[INTERNET] = ct_items
                     src_info[INTERNET] = {**ct_info, "origem": "internet"}
             res = reconcile_final(table, sources, settings, (live_factory or make_live_lookup)(s, settings), today,
                                   make_known_lookup(s, settings))
-            if AZURE_SOURCE in inputs:
+            if AZURE_SOURCE in inputs and use(AZURE_SOURCE):
                 az_info = inputs[AZURE_SOURCE]
                 az_data = _input_bytes(s, az_info)
                 try:
@@ -1466,7 +1503,8 @@ def generate(run_id: int, settings: Settings, fetch: Callable | None = None,
         with session_scope() as s:
             run = s.get(FinalRun, run_id)
             run.summary = {**res.summary, **counts, "novos_total": len(res.new_rows),
-                           "alterados_total": len([i for i in res.mods if i not in res.new_rows])}
+                           "alterados_total": len([i for i in res.mods if i not in res.new_rows]),
+                           "ambito": [x for x in all_sources(settings) if x in scope] if scope is not None else None}
             run.inputs = src_info
             run.columns = table.diag
             run.changes = res.changes
@@ -1503,8 +1541,9 @@ def _refresh_cmdb(records: list[dict], settings: Settings) -> None:
         log.exception("CMDB do certwatch não atualizada")
 
 
-def generate_in_background(run_id: int, settings: Settings) -> None:
-    threading.Thread(target=generate, args=(run_id, settings), name=f"cmdb-final-{run_id}", daemon=True).start()
+def generate_in_background(run_id: int, settings: Settings, only: list[str] | None = None) -> None:
+    threading.Thread(target=generate, args=(run_id, settings), kwargs={"only": only},
+                     name=f"cmdb-final-{run_id}", daemon=True).start()
 
 
 def _prune(session: Session, settings: Settings) -> None:
@@ -1590,7 +1629,7 @@ VIEWS = {
         "compara": "As alterações dos dois primeiros separadores que precisam de atenção.",
         "chave": "IssuerName + SerialNumber, a chave do certificado na CMDB.",
         "regra": "Está aqui quando nenhuma fonte trouxe o emissor (\"Por verificar\") ou a série (x1, x2…), ou quando outra linha tem a mesma chave IssuerName + SerialNumber.",
-        "aplicar": "Pode aplicar. As de chave repetida ficam de fora até escolher qual entra.",
+        "aplicar": "Pode aplicar. Na chave repetida (o mesmo certificado com vários nomes) fica incluída uma; para trocar, inclua a outra.",
     },
     "so_na_cmdb": {
         "label": "Só na CMDB",

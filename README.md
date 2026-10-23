@@ -132,6 +132,7 @@ A lista "API secrets" da CMDB descreve sobretudo segredos de aplicações (clien
    docker compose exec worker python -m certwatch.cli inspect-tql NOME_DO_TQL
    ```
    Se algum campo ficar errado, defina-o no `.env` (`CERTWATCH_APIS_FIELD_NAME`, `_APP`, `_EXPIRY`, `_EXPIRED`, `_LOCATION`, `_REGISTERED`, `_URL`).
+5. **Data de fim que nenhum CI devolve**: quando nem o TQL nem a leitura dos CIs trazem uma data de fim, a aplicação pergunta à UCMDB que atributos de data o tipo de CI das APIs tem (`GET /rest-api/classModel/citypes/{tipo}`, só leitura) e usa o que tiver "expira", "validade" ou "fim" no nome ou no nome visível (não usa `create_time` nem as datas de alteração). Esse atributo passa a ser pedido na consulta ad-hoc e é o usado ao incluir segredos do Azure na lista de APIs. Se houver mais de um candidato, a mensagem de erro lista-os (atributo e nome visível) para escolher em `CERTWATCH_APIS_FIELD_EXPIRY`.
 
 Atributos com nomes como *secret*, *password*, *token* ou *key* só são guardados quando o nome descreve o segredo (data, tipo, localização, estado) e o valor é uma data, um sim/não ou um texto curto legível. Segredos expirados há mais de 30 dias dão um alerta de limpeza de gravidade baixa; os que estão a expirar seguem os prazos normais.
 
@@ -162,13 +163,13 @@ SSL Shopper e SSL Labs não servem para descoberta: não procuram certificados, 
 Menu **CMDB → Reconciliar e atualizar**. Faz o mesmo que o workflow n8n "Reconciliação de Certificados", explica cada passo e aplica as alterações diretamente na UCMDB.
 
 ### 5.1 Fontes
-- **CA1, CA2 e AVI** (obrigatórias, `CERTWATCH_FINAL_SOURCES`) e **Azure** (opcional): o ficheiro mais recente de cada uma, seja o da diretoria `import/` (o início do nome indica a fonte: `ca1*`, `ca2*`, `avi*`, `azure*`, `CERTWATCH_IMPORT_SOURCES`) ou o carregado na página. A página mostra também o que acontece a cada ficheiro da diretoria.
+- **CA1, CA2 e AVI** (obrigatórias para reconciliar tudo, `CERTWATCH_FINAL_SOURCES`) e **Azure** (opcional). **Sem carregar nada, é lido o ficheiro mais recente da diretoria `import/`** (o início do nome indica a fonte: `ca1*`, `ca2*`, `avi*`, `azure*`, `CERTWATCH_IMPORT_SOURCES`). Um ficheiro carregado na página só é usado enquanto for mais recente do que o da diretoria; **Voltar a usar a diretoria import/** esquece-o. A página mostra, por fonte, o ficheiro da diretoria e o carregado, qual está em uso, e o que acontece a cada ficheiro da diretoria.
 - **Internet** (`CERTWATCH_FINAL_CT=true`): os certificados encontrados na Certificate Transparency, o mais recente de cada nome; os "Ignorar" ficam de fora e só os "Adicionar à CMDB" vêm incluídos.
 - **Renovações** registadas nos pedidos SMAX: têm prioridade sobre as outras fontes.
 - Ficheiros aceites: CSV (UTF-8, UTF-16 do certutil, Windows-1252; vírgula, ponto e vírgula ou tabulação) e Excel `.xlsx`. Colunas do certutil (`Issued Common Name`, `Certificate Expiration Date`, `Serial Number`, `Request Disposition`), do AVI (`Subject_CommonName`, `Validity_NotAfter`, `SerialNumber`, `Issuer_CommonName`, `SubjectAlternativeName`) e do Azure (`EnterpriseApplication;AppRegistration;AppId;CredentialType;KeyId;StartDate;EndDate;Status`), mesmo com acentos estragados. Datas DD/MM/AAAA (nunca trocadas por MM/DD), ISO, seriais do Excel e AAAAMMDD.
 
 ### 5.2 Reconciliar
-**Reconciliar agora** lê a CMDB pela REST API (o TQL de `CERTWATCH_UCMDB_TQL`, com todos os atributos) e compara. A página da reconciliação começa por **O que foi comparado**: os cinco passos (fontes, CMDB, comparação, servidor, resultado), cada um com os números desta execução e o que faz.
+**Reconciliar agora** lê a CMDB pela REST API (o TQL de `CERTWATCH_UCMDB_TQL`, com todos os atributos) e compara todas as fontes. **Reconciliar só esta fonte** (em cada fonte, incluindo Azure, Internet e Renovações) compara só essa: as outras não são lidas nem precisam de ficheiro; a CMDB é sempre lida por inteiro. A reconciliação fica marcada "só CA1" (por exemplo) na lista e na página. Como só a mais recente pode ser aplicada, aplique o que quiser de uma antes de reconciliar outra fonte. A página da reconciliação começa por **O que foi comparado**: os cinco passos (fontes, CMDB, comparação, servidor, resultado), cada um com os números desta execução e o que faz.
 
 ### 5.3 Diferenças
 Cada separador começa com uma caixa que diz **o que compara**, **como encontra** cada certificado, **quando aparece ali** e **o que acontece ao aplicar**; cada linha diz **porquê** (por exemplo "Na CMDB está 10-11-2026; CA1, linha 3, tem 10-11-2027 (mais recente)").
@@ -178,7 +179,7 @@ Cada separador começa com uma caixa que diz **o que compara**, **como encontra*
 | Novos | Certificados das fontes que não existem na CMDB |
 | Renovados e alterados | O nome existe, mas a data (ao dia) ou outros dados mudaram |
 | Data mais antiga | A fonte tem uma data anterior à CMDB: decide o servidor (porta 443); sem resposta ou num wildcard, a CMDB fica |
-| Por confirmar | Emissor "Por verificar", série x1, x2… ou chave IssuerName + SerialNumber repetida |
+| Por confirmar | Emissor "Por verificar", série x1, x2… ou o mesmo certificado com vários nomes (chave IssuerName + SerialNumber repetida) |
 | Só na CMDB | Certificados com o emissor de uma CA (`CERTWATCH_IMPORT_ISSUERS`) que não aparecem na exportação dessa CA; cada um tem **Editar** |
 | Azure | Cada credencial das App Registrations comparada com a lista de APIs e com a de certificados (ver 5.5) |
 | Erros nas fontes | Linhas postas de lado e avisos sobre datas da CMDB |
@@ -213,7 +214,7 @@ Cada credencial é procurada na lista de APIs e na de certificados, pelo nome da
 - Fonte com data anterior à CMDB: decide o certificado apresentado na porta 443.
 - A Description regista o que mudou, a começar por "Changed with n8n" (`CERTWATCH_FINAL_DESCRIPTION`).
 - Os CSV levam só o delta, sempre com estas 26 colunas, por esta ordem: Display Label, ValidTo, Aplicação, Localização, Responsabilidade de instalação, Certificate Status, Certificado Gerido, Ambiente, Name, CommonName, Issuer, IssuerName, SerialNumber, Certificate Type, IsSelfSigned, Global Id, Link para a Documentação, Subject Alternative Names, Organization, Version, Type, Subject, CreateOn, Hostname, Description, OrganizationUnit. Separador `|`, CRLF, UTF-8 sem BOM. Uma coluna que não exista na CMDB vai vazia, mas vai.
-- **Chave repetida**: alterações com o mesmo `IssuerName + SerialNumber` ficam de fora por omissão, marcadas "chave repetida" com o nome e o Global Id da outra linha, para se escolher qual entra; a pesquisa da lista também procura pelo SerialNumber. Se mais de uma for incluída, os CSV são recusados (como no workflow), com os nomes e Global Ids na mensagem. Nesse caso o Excel continua disponível. Linhas novas com o mesmo par por causa de `Por verificar` (mesma série, emissor desconhecido) não bloqueiam, mas são avisadas: se a UCMDB usar o par como chave, podem ficar num só CI.
+- **Chave repetida** (o mesmo certificado com vários nomes, por exemplo `x.pt` e `x.x.pt` com o mesmo emissor e série): na CMDB fica um só registo, por isso **fica incluída uma e as outras saem**, marcadas "mesmo certificado que …". Fica a de um certificado que já existe na CMDB; entre novas, a do nome mais curto. Para trocar, inclua a outra: a primeira sai sozinha, e a escolha fica para as reconciliações seguintes. A pesquisa da lista também procura pelo SerialNumber. Se mais de uma for forçada a entrar, os CSV são recusados (como no workflow), com os nomes e Global Ids na mensagem. Nesse caso o Excel continua disponível. Linhas novas com o mesmo par por causa de `Por verificar` (mesma série, emissor desconhecido) não bloqueiam, mas são avisadas: se a UCMDB usar o par como chave, podem ficar num só CI.
 - O Excel não leva as colunas Created By, Created Time e Is Candidate For Deletion. Cores: verde para linhas novas, amarelo para alteradas, vermelho para expiradas.
 
 **Diferenças em relação ao workflow**:
@@ -255,7 +256,15 @@ Cada linha da reconciliação mostra o resultado (criado / atualizado / aviso / 
 - Se a UCMDB identificar um certificado "novo" como um CI que já existia (regra de identificação), a linha fica com aviso a dizer qual.
 - Só a reconciliação mais recente pode ser aplicada.
 - Datas: ValidTo vai às 00:00 de Lisboa, primeiro como `AAAA-MM-DDThh:mm:ss` (sem fuso: a UCMDB recusa o `Z` do UTC); se a UCMDB recusar o formato, tenta com milissegundos (`.000`), depois em milissegundos desde 1970 e por fim em UTC. O formato que funcionar passa a ser o primeiro a tentar. Uma alteração com erro pode ser repetida com **Tentar de novo**.
-- Tudo fica em **Execuções e auditoria → Alterações na UCMDB**: quando, quem, origem (reconciliação ou edição à mão), certificado, CI, cada campo com o valor que tinha e o que foi enviado, o resultado e se foi confirmado na UCMDB. **Exportar todas (CSV)** dá o histórico completo, uma linha por campo. A auditoria também regista cada escrita (`ucmdb.escrever`, `ucmdb.editar`).
+- Tudo fica no **histórico de alterações** (ver 5.9). A auditoria também regista cada escrita (`ucmdb.escrever`, `ucmdb.editar`).
+
+### 5.9 Histórico de alterações na CMDB
+
+Menu **CMDB → Histórico de alterações**: tudo o que o certwatch escreveu na UCMDB, a partir de uma reconciliação, do Azure ou editado à mão. Para cada escrita: quando, quem, origem, certificado e CI, cada atributo com o valor que tinha e o que foi enviado, o resultado e se a UCMDB o confirmou.
+- Filtros: certificado (nome) ou CI, utilizador, origem (reconciliação, Azure, edição à mão), criadas ou atualizadas, resultado (aplicadas, com aviso, com erro, não aplicadas, na fila) e período.
+- **Histórico deste certificado**: na página de edição de um certificado, e em cada linha (todas as alterações daquele CI).
+- **Exportar (CSV)** exporta o que está filtrado, uma linha por atributo alterado.
+- Em **Execuções e auditoria** ficam as 10 mais recentes, com ligação para o histórico.
 
 ## 6. Renovação automática e avaliação externa
 

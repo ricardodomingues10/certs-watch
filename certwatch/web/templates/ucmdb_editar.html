@@ -39,7 +39,7 @@
 {% if form %}
 <section class="card">
   <h2 class="mono">{{ form.cn }}</h2>
-  <p class="small muted">CI <span class="mono">{{ form.ucmdb_id }}</span> · {{ form.ci_type }} · valores lidos agora da UCMDB</p>
+  <p class="small muted">CI <span class="mono">{{ form.ucmdb_id }}</span> · {{ form.ci_type }} · valores lidos agora da UCMDB · <a href="/cmdb/historico?ci={{ form.ucmdb_id|urlencode }}">Histórico deste certificado</a></p>
 
   {% if changes %}
   <div class="note mt" id="rever">

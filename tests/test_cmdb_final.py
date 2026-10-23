@@ -314,9 +314,9 @@ def test_web_flow(settings, monkeypatch):
 
     monkeypatch.setattr(webapp, "get_settings", lambda: settings)
 
-    def fake_bg(run_id, st):
+    def fake_bg(run_id, st, only=None):
         cf.generate(run_id, st, fetch=lambda s2: (cf.build_cmdb_table(copy.deepcopy(CIS), s2), []),
-                    live_factory=lambda s, s2: live, today=TODAY)
+                    live_factory=lambda s, s2: live, today=TODAY, only=only)
     monkeypatch.setattr(cf, "generate_in_background", fake_bg)
     AUTH = ("admin", "teste-admin-123")
     (settings.import_dir / "ca1.csv").write_bytes(CA1)
@@ -664,3 +664,52 @@ def test_duplicate_key_cases(settings):
         cf.flag_duplicate_keys(again, decisions)
         assert {c["cn"]: c["incluir"] for c in again if c["cn"] in ("c.exemplo.pt", "d.exemplo.pt")} == \
             {"c.exemplo.pt": False, "d.exemplo.pt": True}
+
+
+def test_reconcile_one_source(settings, monkeypatch):
+    """Reconciliar só uma fonte: as outras não são lidas nem obrigatórias. Sem nada carregado, usa a diretoria import/."""
+    import copy
+
+    from fastapi.testclient import TestClient
+
+    from certwatch.web import app as webapp
+
+    monkeypatch.setattr(webapp, "get_settings", lambda: settings)
+
+    def fake_bg(run_id, st, only=None):
+        cf.generate(run_id, st, fetch=lambda s2: (cf.build_cmdb_table(copy.deepcopy(CIS), s2), []),
+                    live_factory=lambda s, s2: live, today=TODAY, only=only)
+    monkeypatch.setattr(cf, "generate_in_background", fake_bg)
+    AUTH = ("admin", "teste-admin-123")
+    (settings.import_dir / "avi.csv").write_bytes(AVI)            # só o AVI, na diretoria
+    with TestClient(webapp.app) as c:
+        page = c.get("/cmdb-final", auth=AUTH).text
+        assert "Reconciliar só esta fonte" in page and "import/avi.csv" in page
+        token = c.cookies["cw_csrf"]
+        # tudo: falta CA1 e CA2, com a indicação do nome esperado na diretoria
+        r = c.post("/cmdb-final/gerar", data={"csrf": token}, auth=AUTH)
+        assert "Falta o ficheiro de: CA1 (import/" in r.text
+        # só o AVI
+        r = c.post("/cmdb-final/gerar", data={"csrf": token, "fonte": "AVI"}, auth=AUTH, follow_redirects=False)
+        url = r.headers["location"]
+        page = c.get(url, auth=AUTH).text
+        assert "só AVI" in page
+        assert c.post("/cmdb-final/gerar", data={"csrf": token, "fonte": "XPTO"}, auth=AUTH).status_code == 400
+    with session_scope() as s:
+        run = s.scalar(select(FinalRun).order_by(FinalRun.id.desc()))
+        assert run.status == "pronto", run.error
+        assert run.summary["ambito"] == ["AVI"] and set(run.inputs) == {"AVI"}
+        assert {c["fonte"] for c in run.changes} == {"AVI"}
+        assert run.inputs["AVI"]["origem"] == "diretoria"
+    # carregado mais recente ganha; "Voltar a usar a diretoria" esquece-o
+    with TestClient(webapp.app) as c:
+        c.get("/cmdb-final", auth=AUTH)
+        token = c.cookies["cw_csrf"]
+        c.post("/cmdb-final/fonte/AVI", data={"csrf": token}, files={"ficheiro": ("avi-novo.csv", AVI)}, auth=AUTH)
+        with session_scope() as s:
+            assert cf.current_inputs(s, settings)["AVI"]["origem"] == "carregado"
+        page = c.get("/cmdb-final", auth=AUTH).text
+        assert "Voltar a usar a diretoria import/" in page and "não usado: há um carregado mais recente" in page
+        c.post("/cmdb-final/fonte/AVI/diretoria", data={"csrf": token}, auth=AUTH)
+        with session_scope() as s:
+            assert cf.current_inputs(s, settings)["AVI"]["origem"] == "diretoria"

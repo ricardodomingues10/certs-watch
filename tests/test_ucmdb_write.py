@@ -251,3 +251,20 @@ def test_date_format_fallback_and_history(setup):
         assert "serial_number" in page and "<del>0A01</del>" in page
         csvt = c.get("/jobs/ucmdb.csv", auth=AUTH).content.decode("utf-8-sig")
         assert csvt.splitlines()[0].startswith("Quando;Quem;Origem") and "renovado.exemplo.pt" in csvt and "erro" in csvt
+        # histórico de alterações na CMDB: filtros, por certificado e exportação filtrada
+        page = c.get("/cmdb/historico", auth=AUTH).text
+        assert "Histórico de alterações na CMDB" in page and "<b>3</b> registos" in page and "1 com erro" in page
+        assert "renovado.exemplo.pt" in page and "novo-avi.exemplo.pt" in page
+        page = c.get("/cmdb/historico?resultado=erro", auth=AUTH).text
+        assert "novo-avi.exemplo.pt" in page and "renovado.exemplo.pt" not in page
+        page = c.get("/cmdb/historico?q=RENOVADO", auth=AUTH).text
+        assert "renovado.exemplo.pt" in page and "novo-avi.exemplo.pt" not in page
+        with session_scope() as s:
+            cid = s.scalar(select(UcmdbWrite).where(UcmdbWrite.chave == k)).ucmdb_id
+        page = c.get(f"/cmdb/historico?ci={cid}", auth=AUTH).text
+        assert "<b>1</b> registo com estes filtros" in page and "Abrir o certificado" in page
+        assert "Nada com estes filtros" in c.get("/cmdb/historico?origem=edicao", auth=AUTH).text
+        assert "<b>0</b>" in c.get("/cmdb/historico?de=2099-01-01", auth=AUTH).text
+        assert c.get("/cmdb/historico?de=lixo&origem=xpto&n=-5", auth=AUTH).status_code == 200
+        csvf = c.get("/cmdb/historico.csv?resultado=erro", auth=AUTH).content.decode("utf-8-sig")
+        assert "novo-avi.exemplo.pt" in csvf and "renovado.exemplo.pt" not in csvf
