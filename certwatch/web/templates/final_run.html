@@ -113,7 +113,7 @@
     <td><input type="hidden" name="k" value="{{ c.chave }}">
       <input type="checkbox" name="incluir" value="{{ c.chave }}" {{ 'checked' if inc }} {{ 'disabled' if not can_edit }} aria-label="Incluir {{ c.cn }}">
       {% if c.porque %}<div class="small muted motivo">{{ c.porque }}</div>{% endif %}
-      {% if c.chave_repetida %}<div class="small motivo"><span class="tag tag-err">chave repetida</span> com {{ c.chave_repetida }}</div>{% endif %}</td>
+      {% if c.chave_repetida %}<div class="small motivo"><span class="tag tag-acc">mesmo certificado</span> que {{ c.chave_repetida }} (mesmo emissor e número de série): só um entra na CMDB</div>{% endif %}</td>
     <td><span class="mono">{{ c.cn or '(sem CommonName)' }}</span><div class="small muted">Global Id {{ c.global_id or '—' }}</div>
         {% if c.tipo == 'novo' %}<span class="tag tag-ok">novo</span>{% else %}<span class="tag tag-run">alterado</span>{% endif %}</td>
     <td>{% if c.fonte %}<div class="small">{% if c.fonte == 'INTERNET' %}<a href="/descoberta?q={{ c.cn|urlencode }}" title="Ver em Na internet">{{ FINAL_SOURCE_LABELS[c.fonte] }}</a>{% if c.triagem %}<div class="muted">{{ TRIAGE_LABELS.get(c.triagem, c.triagem) }}</div>{% endif %}{% else %}{{ FINAL_SOURCE_LABELS.get(c.fonte, c.fonte) }}{% endif %}</div>{% endif %}

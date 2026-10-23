@@ -400,15 +400,20 @@ def api_model(us: UcmdbSession, settings: Settings) -> dict:
         # o layout do TQL não traz todos os atributos: vai buscá-los à REST API (como a importação das APIs)
         cis, _, _ = enrich_cis(us, cis, settings.apis_enrich if settings.apis_enrich in ("query", "ci") else "auto")
         fields = detect_api_fields(cis, settings)
-    seen = sorted({k for c in cis[:50] for k, v in (c.get("properties") or {}).items() if v not in (None, "")})
+    seen = sorted({k for c in cis for k, v in (c.get("properties") or {}).items() if v not in (None, "")})
+    from .collectors.ucmdb import _is_date
+    date_like = sorted({k for c in cis for k, v in (c.get("properties") or {}).items() if v not in (None, "") and _is_date(v)})
     for k in ("nome", "validade"):
         if fields.get(k) and fields[k] not in seen:
             fields[k] = None                     # definido no .env mas nenhuma API o tem
     if not fields.get("nome") or not fields.get("validade"):
         raise WriteError("Não foi possível reconhecer na lista de APIs o atributo do "
                          + " e do ".join(x for x, k in (("nome", "nome"), ("fim da validade", "validade")) if not fields.get(k))
-                         + ". Defina-o no .env (CERTWATCH_APIS_FIELD_NAME / CERTWATCH_APIS_FIELD_EXPIRY). Atributos que as "
-                         f"APIs têm: {', '.join(seen[:40]) or 'nenhum'}.")
+                         + f". Foram lidas {len(cis)} APIs pela REST API. Atributos com valor: {', '.join(seen[:60]) or 'nenhum'}. "
+                         + (f"Com datas: {', '.join(date_like)}. " if date_like else
+                            "Nenhum tem uma data de fim: a data pode estar num atributo que a REST API não devolve "
+                            "para esta conta, ou num CI ligado. ")
+                         + "Indique o atributo no .env (CERTWATCH_APIS_FIELD_EXPIRY=<atributo>) e reinicie.")
     types = Counter(c.get("type") for c in cis if c.get("type"))
     props = set()
     for c in cis[:50]:

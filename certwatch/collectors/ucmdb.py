@@ -160,7 +160,13 @@ DESCRIPTOR_KEY = re.compile(r"locali[sz]|location|local$|tipo|type|status|estado
 DATE_KEY = re.compile(r"expir|valid|validade|end_?date|data_?fim|termin|until|not_?after|renova", re.I)
 EXPIRY_STRONG = re.compile(r"expir|end_?date|data_?fim|not_?after", re.I)
 REGISTERED_KEY = re.compile(r"regist|create|criad|insert|discover", re.I)
+# Atributos técnicos da UCMDB (data_allow_auto_discovery, root_class...). "data_" também é "data" em português:
+# data_expiracao, data_de_validade... não são técnicos (ver _internal).
 INTERNAL_KEY = re.compile(r"^(data_|root_|last_|create|tenant|calculated_|global_id$|user_label$)", re.I)
+
+
+def _internal(k: str) -> bool:
+    return bool(INTERNAL_KEY.search(k)) and not (k.lower().startswith("data_") and DATE_KEY.search(k[5:]))
 URL_KEY = re.compile(r"url|uri|endpoint|host|link|address|endereco", re.I)
 NAME_KEYS = ("display_label", "name", "label", "user_label")
 APP_KEY = re.compile(r"aplica|application|^app(_|$)|sistema|servico|service", re.I)
@@ -251,9 +257,9 @@ def detect_api_fields(cis: list[dict], settings: Settings) -> dict[str, str | No
     expired = best({k for k in bools if re.search(r"expir", k, re.I)}, lambda k, v: len(v))
     registered = best({k for k in dates if REGISTERED_KEY.search(k)},
                       lambda k, v: sum(1 for x in v if _is_date(x)) + (0.5 if re.search(r"regist", k, re.I) else 0))
-    expiry = best({k for k in dates if DATE_KEY.search(k) and not INTERNAL_KEY.search(k) and k != registered},
+    expiry = best({k for k in dates if DATE_KEY.search(k) and not _internal(k) and k != registered},
                   lambda k, v: sum(1 for x in v if _is_date(x)) + (len(v) if EXPIRY_STRONG.search(k) else 0))
-    url = best({k for k in keys if URL_KEY.search(k) and not INTERNAL_KEY.search(k)},
+    url = best({k for k in keys if URL_KEY.search(k) and not _internal(k)},
                lambda k, v: sum(1 for x in v if isinstance(x, str) and _URLISH.match(x.strip())))
     name = next((k for k in NAME_KEYS if k in keys), None)
     taken = {name, url, expiry, expired, registered}
@@ -292,13 +298,16 @@ def parse_api_url(value: str | None) -> tuple[str, str, int | None]:
 
 
 MAX_CI_LOOKUPS = 5000
+PROBE_CIS = 15                 # CIs lidos para saber que atributos existem
 # Atributos técnicos da UCMDB que não interessam (mas create_time interessa: é a data de registo)
 _SKIP_LAYOUT = re.compile(r"^(root_|data_|calculated_|tenant|global_id$|last_|track_|monitored_by|ucmdb_id$)", re.I)
 
 
 def _layout_from(props: dict) -> list[str]:
     """Atributos a pedir na consulta ad-hoc: os não sensíveis, sem os técnicos da UCMDB."""
-    keys = [k for k in safe_properties(props) if not _SKIP_LAYOUT.search(k) or REGISTERED_KEY.search(k)]
+    keys = [k for k in safe_properties(props)
+            if not _SKIP_LAYOUT.search(k) or REGISTERED_KEY.search(k)
+            or (k.lower().startswith("data_") and DATE_KEY.search(k[5:]))]
     return sorted(set(keys) | {"display_label"})
 
 
@@ -323,8 +332,20 @@ def enrich_cis(session: UcmdbSession, cis: list[dict], mode: str = "auto") -> tu
     ids = [str(c.get("ucmdbId")) for c in cis if c.get("ucmdbId")]
     if mode in ("auto", "query"):
         try:
-            probe = session.ci(ids[0])
-            layout = _layout_from(probe.get("properties") or {})
+            # os atributos sem valor não vêm no CI: junta os de vários CIs para não perder nenhum
+            probe, seen_props = None, {}
+            for uid in ids[:PROBE_CIS]:
+                try:
+                    one = session.ci(uid)
+                except UcmdbError:
+                    continue
+                probe = probe or one
+                for k, v in (one.get("properties") or {}).items():
+                    if v not in (None, "") or k not in seen_props:
+                        seen_props[k] = v
+            if probe is None:
+                raise UcmdbError("Não foi possível ler nenhum CI")
+            layout = _layout_from(seen_props)
             ci_type = str(cis[0].get("type") or probe.get("type") or "")
             got = session.topology_query(ci_type, layout, ids)
             extra = {str(c.get("ucmdbId")): safe_properties(c.get("properties") or {}) for c in got}
@@ -388,7 +409,7 @@ def parse_apis(cis: list[dict], settings: Settings) -> tuple[list[dict], dict]:
             "port": port,
             "expiry": _parse_date(get(props, "validade"), tz),
             "extra": {k: v for k, v in props.items()
-                      if EXTRA_KEY.search(k) and not INTERNAL_KEY.search(k) and isinstance(v, (str, int, bool))
+                      if EXTRA_KEY.search(k) and not _internal(k) and isinstance(v, (str, int, bool))
                       and k not in fields.values()},
         })
     return out, fields

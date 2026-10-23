@@ -192,7 +192,7 @@ def test_enrich_with_topology_query(env):
     c, calls = rest_client()
     records, fields = fetch_apis(settings, c)
     assert fields["metodo"] == "topologyQuery" and fields["validade"] == "secret_expiration_date"
-    assert sum(1 for m, p in calls if "/dataModel/ci/" in p) == 1          # só um CI para conhecer os atributos
+    assert sum(1 for m, p in calls if "/dataModel/ci/" in p) <= 15         # alguns CIs para conhecer os atributos
     assert records[1]["application"] == "CRM" and records[1]["expiry"] is not None
     assert "Xy7~Qk2" not in json.dumps(records, default=str)
 
@@ -244,3 +244,12 @@ def test_api_file_fallback(env, tmp_path):
     # O ficheiro da lista de APIs é reconhecido na diretoria (não aparece como ignorado)
     from certwatch.reconcile import scan_import_dir
     assert all(f["ok"] for f in scan_import_dir(s) if f["name"].lower().startswith(s.apis_file))
+
+
+def test_portuguese_data_attributes_are_not_internal(env):
+    from certwatch.collectors.ucmdb import detect_api_fields, _layout_from
+    cis = [{"ucmdbId": "a1", "properties": {"display_label": "X", "data_allow_auto_discovery": True,
+                                            "data_expiracao": "24-01-2027 13:00:00", "scml_expirado": False}}]
+    assert detect_api_fields(cis, env)["validade"] == "data_expiracao"
+    layout = _layout_from(cis[0]["properties"])
+    assert "data_expiracao" in layout

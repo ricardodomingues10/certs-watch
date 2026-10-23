@@ -1120,24 +1120,35 @@ def validate_delta(rows: list[dict[str, str]]) -> list[str]:
     return problems
 
 
-def flag_duplicate_keys(changes: list[dict], decisions: dict) -> None:
-    """Alterações com a mesma chave IssuerName + SerialNumber: ficam de fora por omissão (a não ser que alguém já
-    tenha escolhido), com a indicação de com quem colidem, para se escolher qual entra."""
+def duplicate_groups(changes: list[dict]) -> list[list[dict]]:
+    """Alterações com a mesma chave IssuerName + SerialNumber (o mesmo certificado com vários nomes)."""
     groups: dict[tuple[str, str], list[dict]] = {}
     for c in changes:
         iss, ser = (c.get("issuer_name") or "").strip().lower(), (c.get("serial") or "").strip().lower()
         if iss and ser and iss != MISSING_ISSUER.lower():
             groups.setdefault((iss, ser), []).append(c)
-    for g in groups.values():
-        if len(g) < 2:
+    return [g for g in groups.values() if len(g) > 1]
+
+
+def _keep_one(g: list[dict], prefer: dict | None = None) -> None:
+    """Fica uma alteração incluída por chave: a escolhida, a de um CI que já existe, ou a do nome mais curto."""
+    keeper = prefer or min(g, key=lambda c: (c["tipo"] == "novo", len(c.get("cn") or ""), c.get("cn") or ""))
+    for c in g:
+        others = ", ".join(f"{o['cn'] or '(sem CommonName)'} (Global Id {o['global_id'] or '—'})" for o in g if o is not c)
+        c["chave_repetida"] = others
+        if c is keeper:
             continue
-        for c in g:
-            others = ", ".join(f"{o['cn'] or '(sem CommonName)'} (Global Id {o['global_id'] or '—'})" for o in g if o is not c)
-            c["chave_repetida"] = others
-            if decisions.get(decision_key(c)) is not None:
-                continue
+        if c.get("incluir", True):
             c["incluir"] = False
-            c["porque"] = f"mesma chave IssuerName + SerialNumber que {others}: escolha qual entra"
+            c["porque"] = (f"mesmo certificado que {keeper['cn']} (mesmo emissor e número de série): é um certificado "
+                           "com vários nomes e na CMDB fica um só registo. Para trocar, inclua este; o outro sai.")
+
+
+def flag_duplicate_keys(changes: list[dict], decisions: dict) -> None:
+    """Na mesma chave IssuerName + SerialNumber só fica uma alteração incluída (a UCMDB juntaria as duas)."""
+    for g in duplicate_groups(changes):
+        chosen = [c for c in g if (d := decisions.get(decision_key(c))) is not None and d.include]
+        _keep_one(g, chosen[0] if chosen else None)
 
 
 def _placeholder_clashes(rows: list[dict[str, str]]) -> int:
@@ -1271,6 +1282,7 @@ def apply_selection(session: Session, run: FinalRun, shown: list[int], chosen: s
     changes = [dict(c) for c in (run.changes or [])]
     by_key = {c["chave"]: c for c in changes}
     changed = 0
+    just_in: set[int] = set()          # as que passaram agora a incluídas (ganham numa chave repetida)
     for k in shown:
         c = by_key.get(k)
         if c is None:
@@ -1278,6 +1290,8 @@ def apply_selection(session: Session, run: FinalRun, shown: list[int], chosen: s
         inc = k in chosen
         if c.get("incluir", True) == inc:
             continue
+        if inc:
+            just_in.add(k)
         c["incluir"] = inc
         c["porque"] = f"{'incluída' if inc else 'excluída'} por {actor} em {utcnow():%d-%m-%Y}"
         changed += 1
@@ -1289,6 +1303,16 @@ def apply_selection(session: Session, run: FinalRun, shown: list[int], chosen: s
         d.include, d.by, d.at = inc, actor, utcnow()
     if not changed:
         return 0
+    # Chave repetida: ao incluir uma, a outra sai (só pode ficar uma)
+    for g in duplicate_groups(changes):
+        if sum(1 for c in g if c.get("incluir", True)) > 1:
+            pick = next((c for c in g if c["chave"] in just_in and c.get("incluir", True)), None)
+            _keep_one(g, pick)
+            for c in g:
+                if not c.get("incluir", True):
+                    d = session.scalar(select(FinalDecision).where(FinalDecision.key == decision_key(c)))
+                    if d is not None:
+                        d.include, d.by, d.at = False, actor, utcnow()
     xlsx, csv, csv_sem, problems, counts = build_outputs(unpack_state(run.state), changes)
     run.changes = changes
     run.xlsx, run.csv, run.csv_sem = xlsx, csv, csv_sem

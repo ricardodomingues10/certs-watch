@@ -10,7 +10,7 @@ from zoneinfo import ZoneInfo
 
 from certwatch import cmdb_final as cf
 from certwatch.db import session_scope
-from certwatch.models import CmdbRecord, FinalInput, FinalRun
+from certwatch.models import CmdbRecord, FinalDecision, FinalInput, FinalRun
 
 TZ = ZoneInfo("Europe/Lisbon")
 TODAY = date(2026, 10, 21)
@@ -635,8 +635,9 @@ def test_duplicate_key_cases(settings):
     for c in res.changes:
         c["incluir"], c["porque"] = cf.default_include(c, {})
     cf.flag_duplicate_keys(res.changes, {})
-    assert not by["c.exemplo.pt"]["incluir"] and "d.exemplo.pt" in by["c.exemplo.pt"]["chave_repetida"]
-    assert not by["d.exemplo.pt"]["incluir"] and "escolha qual entra" in by["d.exemplo.pt"]["porque"]
+    # fica uma (a de um CI que já existe / nome mais curto); a outra sai, a dizer com quem colide
+    assert by["c.exemplo.pt"]["incluir"] and "d.exemplo.pt" in by["c.exemplo.pt"]["chave_repetida"]
+    assert not by["d.exemplo.pt"]["incluir"] and "mesmo certificado que c.exemplo.pt" in by["d.exemplo.pt"]["porque"]
     assert by["a.exemplo.pt"]["incluir"] and "chave_repetida" not in by["a.exemplo.pt"]
     xlsx, csv, csv_sem, problems, counts = cf.build_outputs(cf.unpack_state(cf.pack_state(res)), res.changes)
     assert not problems and csv
@@ -644,3 +645,22 @@ def test_duplicate_key_cases(settings):
     by["c.exemplo.pt"]["incluir"] = by["d.exemplo.pt"]["incluir"] = True
     problems = cf.build_outputs(cf.unpack_state(cf.pack_state(res)), res.changes)[3]
     assert problems and "c.exemplo.pt" in problems[0] and "d.exemplo.pt" in problems[0] and "Corp CA01 + EF" in problems[0]
+
+    # na página: incluir a d troca (a c sai), e a escolha fica para a próxima reconciliação
+    by["d.exemplo.pt"]["incluir"] = False
+    with session_scope() as s:
+        run = FinalRun(created_by="admin", status="pronto", state=cf.pack_state(res), changes=res.changes)
+        s.add(run)
+        s.flush()
+        k = {c["cn"]: c["chave"] for c in run.changes}
+        assert cf.apply_selection(s, run, [k["c.exemplo.pt"], k["d.exemplo.pt"]], {k["c.exemplo.pt"], k["d.exemplo.pt"]}, "ana")
+        ch = {c["cn"]: c for c in run.changes}
+        assert ch["d.exemplo.pt"]["incluir"] and not ch["c.exemplo.pt"]["incluir"] and run.status == "pronto"
+        assert "mesmo certificado que d.exemplo.pt" in ch["c.exemplo.pt"]["porque"]
+        decisions = {d.key: d for d in s.scalars(select(FinalDecision))}
+        again = [dict(c) for c in res.changes]
+        for c in again:
+            c["incluir"], c["porque"] = cf.default_include(c, decisions)
+        cf.flag_duplicate_keys(again, decisions)
+        assert {c["cn"]: c["incluir"] for c in again if c["cn"] in ("c.exemplo.pt", "d.exemplo.pt")} == \
+            {"c.exemplo.pt": False, "d.exemplo.pt": True}
