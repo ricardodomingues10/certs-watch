@@ -150,7 +150,7 @@ def test_filters(env):
 def _setup_pipeline(env, tmp_path):
     imp = tmp_path / "import"
     imp.mkdir()
-    st = replace(settings(env), import_dir=imp, publish_dir=tmp_path, ucmdb_min_cis=1, final_sources=[], final_ct=False)
+    st = replace(settings(env), import_dir=imp, ucmdb_min_cis=1, final_sources=[], final_ct=False)
     with session_scope() as db:
         ingest_cmdb(db, st, [{"ucmdb_id": "u2", "global_id": "g2", "common_name": "renovado.exemplo.pt",
                               "valid_to": OLD.isoformat(), "issuer": "Corp CA01", "issuer_name": "Corp CA01"}])
@@ -199,7 +199,14 @@ def test_pipeline_manual_renewal_to_cmdb(env, tmp_path):
         assert ch["cn"] == "renovado.exemplo.pt" and ch["fonte"] == "RENOVACAO" and ch["incluir"]
         assert "10-11-2027" in run.csv.decode() and '"0A02"' in run.csv.decode()
         p = rn.pipeline(db.get(SmaxTicket, "2001"), st, rn.load_context(db))
-        assert p["steps"][3]["run"]["id"] == run_id and "por publicar" in p["steps"][3]["detail"]
+        assert p["steps"][3]["run"]["id"] == run_id and "por aplicar na UCMDB" in p["steps"][3]["detail"]
+        # aplicada na UCMDB -> passo feito
+        from certwatch.models import UcmdbWrite
+        db.add(UcmdbWrite(run_id=run_id, chave=ch["chave"], acao="atualizar", cn=ch["cn"], estado="ok", por="admin"))
+        db.flush()
+        p = rn.pipeline(db.get(SmaxTicket, "2001"), st, rn.load_context(db))
+        assert p["steps"][3]["done"] and "Aplicada na UCMDB" in p["steps"][3]["detail"]
+        db.delete(db.scalar(select(UcmdbWrite)))
         # depois de a UCMDB importar: a CMDB lida mostra a nova data
         ingest_cmdb(db, st, [{"ucmdb_id": "u2", "global_id": "g2", "common_name": "renovado.exemplo.pt",
                               "valid_to": "2027-11-10T12:00:00+00:00", "issuer": "Corp CA01", "issuer_name": "Corp CA01"}])

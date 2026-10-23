@@ -91,7 +91,7 @@ def _reset_date_format():
 def setup(env, tmp_path, monkeypatch):
     imp = tmp_path / "import"
     imp.mkdir()
-    st = replace(env, import_dir=imp, publish_dir=tmp_path, ucmdb_min_cis=1, final_ct=False,
+    st = replace(env, import_dir=imp, ucmdb_min_cis=1, final_ct=False,
                  import_issuers={"CA1": "Corp CA01", "CA2": "Corp CA02"},
                  ucmdb_url="https://cmdb.test", ucmdb_user="svc", ucmdb_password="pw", ucmdb_write=True)
     (imp / "ca1.csv").write_bytes(CA1)

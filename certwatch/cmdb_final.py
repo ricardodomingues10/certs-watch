@@ -33,7 +33,6 @@ import hashlib
 import io
 import json
 import logging
-import os
 import re
 import threading
 import unicodedata
@@ -48,7 +47,7 @@ from sqlalchemy.orm import Session
 
 from .config import Settings
 from .db import as_utc, session_scope, utcnow
-from .models import (Certificate, CmdbRecord, CtCert, Endpoint, FinalDecision, FinalInput, FinalPublish, FinalPublishFile,
+from .models import (Certificate, CmdbRecord, CtCert, Endpoint, FinalDecision, FinalInput,
                      FinalRun, ScanResult)
 from .normalize import norm_host, norm_serial
 from .reconcile import ALLOWED_EXT, _fix_mojibake, map_columns, norm_header, read_table_bytes, source_for
@@ -1241,8 +1240,6 @@ def apply_selection(session: Session, run: FinalRun, shown: list[int], chosen: s
     run.validation = problems
     run.status = "bloqueado" if problems else "pronto"
     run.summary = {**(run.summary or {}), **counts}
-    if run.published_at is not None:          # os ficheiros mudaram depois de publicados
-        run.published_at, run.published_by = None, ""
     return changed
 
 
@@ -1412,126 +1409,6 @@ def _prune(session: Session, settings: Settings) -> None:
 
 def run_file(run: FinalRun, key: str) -> bytes | None:
     return {"xlsx": run.xlsx, "csv": run.csv, "csv_sem": run.csv_sem}.get(key)
-
-
-def latest_publishable(session: Session) -> FinalRun | None:
-    return session.scalar(select(FinalRun).where(FinalRun.status.in_(("pronto", "bloqueado", "erro")))
-                          .order_by(FinalRun.id.desc()).limit(1))
-
-
-# ------------------------------------------------------------------ pasta de rede (local ou SFTP noutro servidor)
-def folder_status(settings: Settings) -> dict:
-    """Estado do destino para a página. Em SFTP não se liga (use "Testar ligação")."""
-    from . import publish_target as pt
-    desc = pt.describe(settings)
-    if desc["modo"] == "sftp":
-        ok = not desc["problemas"]
-        return {"modo": "sftp", "pasta": desc["destino"], "existe": ok, "gravavel": ok, "pede_password": desc["pede_password"],
-                "autenticacao": desc["autenticacao"], "hostkeys": settings.publish_ssh_hostkeys,
-                "ficheiros": [{"chave": k, "nome": n, "tamanho": None, "alterado": None, "desconhecido": True} for k, n in FILES.items()],
-                "detalhe": ("Destino SFTP incompleto: " + "; ".join(desc["problemas"]) + ".") if desc["problemas"] else ""}
-    d = settings.publish_dir
-    out = {"modo": "local", "pasta": str(d), "existe": d.is_dir(), "gravavel": False, "ficheiros": [], "detalhe": "",
-           "pede_password": False}
-    if not out["existe"]:
-        out["detalhe"] = (f"A pasta {d} não existe no container: a montagem não está configurada "
-                          "(CERTWATCH_PUBLISH_HOST_DIR no .env) ou não está montada no servidor. Se a pasta de rede só "
-                          "estiver montada noutro servidor, use a publicação por SFTP (README 5.1).")
-        return out
-    out["gravavel"] = os.access(d, os.W_OK)
-    try:
-        st = d.stat()
-        out["dono"] = f"uid {st.st_uid}, gid {st.st_gid}, permissões {oct(st.st_mode & 0o777)}"
-    except OSError:
-        pass
-    for key, name in FILES.items():
-        p = d / name
-        try:
-            stp = p.stat()
-            out["ficheiros"].append({"chave": key, "nome": name, "tamanho": stp.st_size,
-                                     "alterado": datetime.fromtimestamp(stp.st_mtime, tz=timezone.utc)})
-        except FileNotFoundError:
-            out["ficheiros"].append({"chave": key, "nome": name, "tamanho": None, "alterado": None})
-        except OSError as exc:
-            out["ficheiros"].append({"chave": key, "nome": name, "tamanho": None, "alterado": None, "erro": str(exc)})
-    if not out["gravavel"]:
-        out["detalhe"] = (f"O certwatch (uid {os.getuid()}) não tem permissão de escrita na pasta "
-                          f"({out.get('dono', '')}). Se a pasta de rede só estiver montada noutro servidor, "
-                          "use a publicação por SFTP (README 5.1).")
-    return out
-
-
-def test_write(settings: Settings, password: str | None = None, transport_factory=None) -> tuple[bool, str]:
-    from . import publish_target as pt
-    return pt.test(settings, password, transport_factory)
-
-
-def read_published(settings: Settings, name: str) -> bytes:
-    """Ficheiro que está agora no destino (sem password escrita: só local ou SFTP com segredo)."""
-    from . import publish_target as pt
-    try:
-        with pt.open_target(settings) as t:
-            return t.read(name)
-    except pt.TargetError as exc:
-        raise FinalError(str(exc)) from None
-    except OSError as exc:
-        raise FinalError(f"Não foi possível ler o ficheiro: {exc}") from None
-
-
-def publish(session: Session, settings: Settings, run: FinalRun, keys: list[str], actor: str,
-            password: str | None = None, transport_factory=None) -> FinalPublish:
-    from . import publish_target as pt
-    if run.status != "pronto":
-        raise FinalError("Só se publica uma geração pronta (sem erros nem bloqueios).")
-    newest = session.scalar(select(FinalRun.id).where(FinalRun.status.in_(("pronto", "bloqueado")))
-                            .order_by(FinalRun.id.desc()).limit(1))
-    if newest != run.id:
-        raise FinalError(f"Existe uma geração mais recente (#{newest}). Publique essa ou gere de novo.")
-    keys = [k for k in FILES if k in keys]
-    if not keys:
-        raise FinalError("Escolha pelo menos um ficheiro.")
-    try:
-        target = pt.open_target(settings, password, transport_factory).__enter__()
-    except pt.TargetError as exc:
-        raise FinalError(str(exc)) from None
-    try:
-        pub = FinalPublish(run_id=run.id, by=actor, folder=target.label[:512])
-        session.add(pub)
-        session.flush()
-        all_ok = True
-        for k in keys:
-            data = run_file(run, k)
-            name = FILES[k]
-            f = FinalPublishFile(publish_id=pub.id, name=name)
-            if data is None:
-                f.error, all_ok = "Ficheiro não disponível nesta geração.", False
-                session.add(f)
-                continue
-            f.sha256, f.size = hashlib.sha256(data).hexdigest(), len(data)
-            try:
-                info = target.info(name)
-                if info is not None:
-                    f.previous_mtime = info.mtime
-                    if info.size <= MAX_BACKUP:
-                        prev = target.read(name)
-                        f.previous, f.previous_sha256 = prev, hashlib.sha256(prev).hexdigest()
-                target.write(name, data)
-                f.ok = hashlib.sha256(target.read(name)).hexdigest() == f.sha256
-                if not f.ok:
-                    f.error = "O ficheiro na pasta não corresponde ao que foi escrito."
-            except Exception as exc:     # erro de escrita/ligação num ficheiro: regista e continua
-                f.error = f"{type(exc).__name__}: {exc}"[:500]
-            all_ok = all_ok and f.ok
-            session.add(f)
-    finally:
-        target.__exit__(None, None, None)
-    session.flush()
-    pub.ok = all_ok
-    pub.result = [{"nome": f.name, "ok": f.ok, "erro": f.error, "tamanho": f.size}
-                  for f in session.scalars(select(FinalPublishFile).where(FinalPublishFile.publish_id == pub.id))]
-    if all_ok:
-        run.published_at, run.published_by = utcnow(), actor
-    return pub
 
 
 # ------------------------------------------------------------------ comparação com a CMDB atual

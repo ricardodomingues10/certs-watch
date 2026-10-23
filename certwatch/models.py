@@ -443,7 +443,7 @@ class FinalDecision(Base):
 
 
 class FinalPublish(Base):
-    """Publicação de ficheiros de uma geração na pasta de rede, com cópia do que lá estava antes."""
+    """Histórico: publicações antigas na pasta de rede (já não usado; a tabela fica para não perder registos)."""
 
     __tablename__ = "final_publishes"
 

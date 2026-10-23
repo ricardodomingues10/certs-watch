@@ -10,7 +10,7 @@ from zoneinfo import ZoneInfo
 
 from certwatch import cmdb_final as cf
 from certwatch.db import session_scope
-from certwatch.models import CmdbRecord, FinalInput, FinalPublishFile, FinalRun
+from certwatch.models import CmdbRecord, FinalInput, FinalRun
 
 TZ = ZoneInfo("Europe/Lisbon")
 TODAY = date(2026, 10, 21)
@@ -86,9 +86,7 @@ AVI = (
 def settings(env, tmp_path):
     imp = tmp_path / "import"
     imp.mkdir()
-    pub = tmp_path / "publicar"
-    pub.mkdir()
-    return replace(env, import_dir=imp, publish_dir=pub, ucmdb_min_cis=1,
+    return replace(env, import_dir=imp, ucmdb_min_cis=1,
                    import_issuers={"CA1": "Corp CA01", "CA2": "Corp CA02"})
 
 
@@ -248,7 +246,7 @@ def test_empty_cmdb_stops(settings):
         cf.reconcile_final(t, {}, settings, live, TODAY)
 
 
-def test_generate_publish_and_compare(settings, monkeypatch):
+def test_generate_and_compare(settings, monkeypatch):
     (settings.import_dir / "ca1_export.csv").write_bytes(CA1)
     (settings.import_dir / "avi_export.csv").write_bytes(AVI)
     with session_scope() as s:
@@ -276,17 +274,6 @@ def test_generate_publish_and_compare(settings, monkeypatch):
         assert run.inputs["CA2"]["origem"] == "carregado"
         assert s.scalar(select(CmdbRecord).where(CmdbRecord.common_name == "renovado.exemplo.pt")) is not None
 
-        # publicação: escreve os três ficheiros e guarda o que lá estava
-        (settings.publish_dir / "certs_update.csv").write_bytes(b"anterior")
-        pub = cf.publish(s, settings, run, ["xlsx", "csv", "csv_sem"], "admin")
-        assert pub.ok, pub.result
-        assert (settings.publish_dir / "certs_update.csv").read_bytes() == run.csv
-        assert (settings.publish_dir / "CMDB_Final.xlsx").read_bytes() == run.xlsx
-        prev = s.scalar(select(FinalPublishFile).where(FinalPublishFile.name == "certs_update.csv"))
-        assert prev.previous == b"anterior"
-        assert not [p for p in settings.publish_dir.iterdir() if p.name.startswith(".")]   # sem temporários
-        assert cf.test_write(settings)[0]
-
         # comparação: o ficheiro final contra a CMDB atual (que ainda não recebeu as alterações)
         recs = list(s.scalars(select(CmdbRecord).where(CmdbRecord.active.is_(True))))
         rows, counts = cf.compare_with_cmdb(cf.read_final_xlsx(run.xlsx), recs, TZ)
@@ -306,12 +293,6 @@ def test_generate_publish_and_compare(settings, monkeypatch):
         rows, _ = cf.compare_with_cmdb(cf.read_final_xlsx(run.xlsx), list(s.scalars(select(CmdbRecord))), TZ)
         assert {r["cn"]: r for r in rows}["renovado.exemplo.pt"]["estado"] == "igual"
 
-        # uma geração mais recente impede publicar a anterior
-        run2 = cf.start_run(s, "admin")
-        run2.status = "pronto"
-        s.flush()
-        with pytest.raises(cf.FinalError):
-            cf.publish(s, settings, run, ["csv"], "admin")
 
 
 def test_generate_blocked_and_error(settings):
@@ -341,13 +322,6 @@ def test_generate_blocked_and_error(settings):
         assert run.summary["por_verificar"] >= 1
         line = next(x for x in run.csv.decode().splitlines() if "novo-ca2.exemplo.pt" in x)
         assert '"Por verificar"' in line
-
-
-def test_folder_status_missing(settings, tmp_path):
-    st = replace(settings, publish_dir=tmp_path / "nao-montada")
-    info = cf.folder_status(st)
-    assert not info["existe"] and "não existe" in info["detalhe"]
-    assert not cf.test_write(st)[0]
 
 
 def test_web_flow(settings, monkeypatch):
@@ -382,7 +356,7 @@ def test_web_flow(settings, monkeypatch):
         assert r.status_code == 303
         url = r.headers["location"]
         r = c.get(url, auth=AUTH)
-        assert "Pronto a publicar" in r.text and "8 alterações" in r.text and "Publicar na pasta de rede" in r.text
+        assert "Pronta" in r.text and "8 alterações" in r.text and "Aplicar na UCMDB" in r.text
         for v in ("servidor", "erros", "colunas"):
             assert c.get(f"{url}?vista={v}", auth=AUTH).status_code == 200
         assert "MANTER" not in c.get(f"{url}?vista=servidor", auth=AUTH).text   # texto legível, não o código
@@ -399,22 +373,14 @@ def test_web_flow(settings, monkeypatch):
         r = c.post(f"{url}/selecao", data={"csrf": token, "k": ["1"], "incluir": ["1"]}, auth=AUTH)
         assert "8 alterações" in r.text
         assert c.post(f"{url}/selecao", data={"csrf": token, "k": ["x"]}, auth=AUTH).status_code == 400
-        # publicar: sem confirmação é recusado; com confirmação escreve na pasta
-        assert c.post(f"{url}/publicar", data={"csrf": token, "ficheiro": ["csv"]}, auth=AUTH).status_code == 400
-        r = c.post(f"{url}/publicar", data={"csrf": token, "ficheiro": ["xlsx", "csv", "csv_sem"], "confirmo": "1"}, auth=AUTH)
-        assert r.status_code == 200 and "nada a substituir" in r.text
-        assert sorted(p.name for p in settings.publish_dir.iterdir()) == sorted(cf.FILES.values())
-        # comparar: geração, pasta e ficheiro carregado
+        # comparar: geração e ficheiro carregado
         r = c.get("/cmdb-final/comparar", auth=AUTH)
         assert r.status_code == 200 and f"geracao:{rid}" in r.text
-        r = c.get("/cmdb-final/comparar?origem=pasta&vista=todos", auth=AUTH)
-        assert "na pasta de rede" in r.text and "novo-avi.exemplo.pt" in r.text
         r = c.post("/cmdb-final/comparar/carregar", data={"csrf": token},
-                   files={"ficheiro": ("final.xlsx", (settings.publish_dir / "CMDB_Final.xlsx").read_bytes())}, auth=AUTH)
+                   files={"ficheiro": ("final.xlsx", c.get(f"{url}/ficheiro/xlsx", auth=AUTH).content)}, auth=AUTH)
         assert r.status_code == 200 and "final.xlsx (carregado)" in r.text
         r = c.get(f"/cmdb-final/comparar/exportar?origem=geracao:{rid}&vista=todos", auth=AUTH)
         assert "novo-avi.exemplo.pt" in r.content.decode("utf-8-sig")
-        assert c.post("/cmdb-final/testar-pasta", data={"csrf": token}, auth=AUTH).status_code == 200
 
 
 def _ucmdb(topology_query_status=200):

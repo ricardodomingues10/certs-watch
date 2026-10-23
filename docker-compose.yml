@@ -8,17 +8,14 @@ name: certwatch
 
 x-app: &app
   build: .
-  image: certwatch:0.15.1
+  image: certwatch:0.16.0
   network_mode: host
   restart: unless-stopped
   env_file: .env
-  secrets: [db_password, ucmdb_user, ucmdb_password, admin_password, smax_user, smax_password, smtp_password, publish_ssh]
+  secrets: [db_password, ucmdb_user, ucmdb_password, admin_password, smax_user, smax_password, smtp_password]
   volumes:
     - ./trust:/app/trust:ro
     - ./import:/app/import:ro
-    # Pasta de rede da UCMDB (montada no servidor). Sem CERTWATCH_PUBLISH_HOST_DIR usa ./publicar
-    - ${CERTWATCH_PUBLISH_HOST_DIR:-./publicar}:/app/publicar
-  group_add: ["${CERTWATCH_PUBLISH_GID:-10001}"]
   read_only: true
   tmpfs: [/tmp]
   security_opt: ["no-new-privileges:true"]
@@ -79,10 +76,6 @@ secrets:
   # (touch secrets/smtp_password)
   smtp_password:
     file: ./secrets/smtp_password
-  # Publicação por SFTP noutro servidor (opcional): chave privada SSH dedicada (recomendado) ou password.
-  # Vazio = a password é pedida na página em cada publicação e nunca guardada. (touch secrets/publish_ssh)
-  publish_ssh:
-    file: ./secrets/publish_ssh
 
 volumes:
   pgdata:

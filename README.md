@@ -16,7 +16,7 @@ Aplicação autónoma de gestão de certificados X.509 de uma organização. Nã
 11. Lê (opcional) os pedidos de certificados do SMAX e mostra, para cada certificado, o número do pedido com link para o SMAX.
 12. Cria (opcional) pedidos de renovação no SMAX para um certificado, para os selecionados ou para todos os de uma vista filtrada, com revisão e confirmação.
 13. Distingue o **site** (onde está instalado) do **certificado** (o que se renova): um wildcard ou um certificado com vários nomes pode servir muitos sites, e os pedidos são sempre feitos para o certificado.
-14. **Atualiza a CMDB** com a lógica do workflow n8n de reconciliação: lê a CMDB pela API e as exportações CA1, CA2 e AVI, gera o `CMDB_Final.xlsx`, o `certs_update.csv` e o `certs_update_sem_cabecalho.csv`, publica-os na pasta de rede lida pela UCMDB e compara um CMDB_Final com a CMDB atual (data, Issuer e IssuerName).
+14. **Atualiza a CMDB** com a lógica do workflow n8n de reconciliação: lê a CMDB pela API e as exportações CA1, CA2 e AVI, mostra as diferenças, aplica as escolhidas diretamente na UCMDB pela REST API e deixa descarregar o `CMDB_Final.xlsx`, o `certs_update.csv` e o `certs_update_sem_cabecalho.csv`.
 15. **Acompanha cada pedido SMAX até ao fim**: comentários com imagens e anexos, percurso da renovação (pedido → renovado → instalado → CMDB atualizada → fechado), registo da renovação, fechar e reabrir o pedido no SMAX.
 16. **Envia o relatório por email**: alertas e reconciliação com o Excel, com intervalo, prazo de alerta e destinatários à escolha.
 
@@ -184,8 +184,8 @@ Página **Atualizar a CMDB**. Faz o mesmo que o workflow n8n "Reconciliação de
    - A escolha fica guardada para as gerações seguintes (mesmo CommonName e mesma nova data).
    - Por omissão, as alterações vindas da internet só vêm incluídas se o certificado estiver marcado "Adicionar à CMDB" na página **Na internet**.
 3a. **Na comparação com a CMDB** de uma geração, as linhas novas ou alteradas também têm a caixa **Incluir**. Desmarcar e guardar refaz os ficheiros dessa geração.
-4. **Publicar na pasta de rede**: escreve os três ficheiros na pasta, depois de confirmação. O que lá estava fica guardado no certwatch e pode ser descarregado. Só a geração mais recente pode ser publicada, e só se não estiver bloqueada.
-5. **Comparar com a CMDB**: compara um CMDB_Final (de uma geração, o que está na pasta de rede ou um carregado, incluindo o do n8n) com a CMDB atual, linha a linha, pelo Global Id ou, nas linhas novas, pelo CommonName. Mostra as diferenças de data de validade (ao dia), Issuer e IssuerName. Antes de publicar, mostra o que vai mudar. Depois de a UCMDB importar o `certs_update`, mostra o que ficou por aplicar.
+4. **Aplicar na UCMDB**: cria e atualiza os certificados pela REST API (ver "Escrever diretamente na UCMDB"). Os ficheiros continuam disponíveis para descarregar.
+5. **Comparar com a CMDB**: compara um CMDB_Final (de uma geração ou um carregado, incluindo o do n8n) com a CMDB atual, linha a linha, pelo Global Id ou, nas linhas novas, pelo CommonName. Mostra as diferenças de data de validade (ao dia), Issuer e IssuerName. Antes de aplicar, mostra o que vai mudar; depois, o que ficou por aplicar.
 
 **Regras**: são as do workflow.
 - Datas ao dia, sem trocar dia e mês.
@@ -217,57 +217,6 @@ Com os mesmos dados (e todos os emissores e séries presentes), os ficheiros ger
 
 **Colunas**: os atributos da UCMDB passam a colunas com os cabeçalhos do export (`[Digital Certificate] : CommonName`). Se o layout do TQL só tiver alguns atributos, os restantes são pedidos à REST API (`CERTWATCH_FINAL_ENRICH=auto`). A correspondência atributo → coluna é automática (`issuer_name` → IssuerName, `responsabilidade_instalacao` → Responsabilidade de instalação). Para corrigir: na geração, separador **Colunas**, descarregue o modelo `cmdb-colunas.csv`, ajuste-o e coloque-o em `import/`. Em cada linha fica `atributo;coluna`; a coluna vazia exclui o atributo e a ordem das linhas é a ordem das colunas.
 
-### Pasta de rede
-
-Há duas formas de publicar:
-- **`local`**: a pasta está montada neste servidor.
-- **`sftp`**: a pasta de rede só está montada noutro servidor, a que se chega por SSH.
-
-#### Pasta noutro servidor (SFTP)
-
-O certwatch envia os ficheiros por SFTP para a pasta montada nesse servidor. As credenciais nunca vão para a base de dados, para os logs nem para a página.
-
-1. **Chave dedicada** (recomendado). No servidor do certwatch:
-   ```
-   ssh-keygen -t ed25519 -N "" -C certwatch-publicacao -f secrets/publish_ssh
-   sudo chown 10001 secrets/publish_ssh && chmod 400 secrets/publish_ssh
-   ```
-2. **No outro servidor**, ponha o conteúdo de `secrets/publish_ssh.pub` no `~/.ssh/authorized_keys` da conta que escreve na pasta, limitado ao IP do servidor do certwatch:
-   ```
-   restrict,from="<IP do servidor do certwatch>" ssh-ed25519 AAAA… certwatch-publicacao
-   ```
-   Se a conta for só para isto, limite-a a SFTP no `sshd_config`: `Match User <conta>` e `ForceCommand internal-sftp`.
-3. **Impressão digital do servidor SSH**: no outro servidor, `ssh-keygen -lf /etc/ssh/ssh_host_ed25519_key.pub`. O botão "Ver a impressão digital do servidor SSH" da página mostra a que o certwatch recebe, e as duas têm de coincidir. Se não coincidir, a ligação é cortada antes de enviar credenciais.
-4. **`.env`**:
-   ```
-   CERTWATCH_PUBLISH_MODE=sftp
-   CERTWATCH_PUBLISH_SSH_HOST=<servidor>
-   CERTWATCH_PUBLISH_SSH_USER=<conta>
-   CERTWATCH_PUBLISH_SSH_PATH=<caminho da pasta montada nesse servidor>
-   CERTWATCH_PUBLISH_SSH_HOSTKEY=SHA256:…
-   ```
-5. `docker compose build && docker compose up -d`, e na página: **Testar ligação e escrita**.
-
-**Sem chave: password pedida em cada publicação.** Deixe `secrets/publish_ssh` vazio (`touch secrets/publish_ssh`). A página pede a password da conta SSH ao testar e ao publicar. A password é usada só nessa ligação: não é guardada, não vai para a auditoria e não aparece nos logs. O segredo também aceita uma password em vez de uma chave, mas a chave é preferível, porque pode ficar limitada ao IP e a SFTP.
-
-Nos dois casos, os ficheiros são escritos com um nome temporário e renomeados. Numa pasta CIFS sem rename com substituição, são escritos diretamente. No fim, são lidos de volta para confirmar o conteúdo. O que lá estava antes fica guardado no certwatch.
-
-#### Pasta montada neste servidor (local)
-
-A pasta é montada no servidor e passada ao container em `/app/publicar`. No `.env`:
-
-```
-CERTWATCH_PUBLISH_HOST_DIR=/caminho/da/montagem/no/servidor
-CERTWATCH_PUBLISH_GID=          # opcional: grupo com escrita na montagem
-```
-
-O certwatch corre com o uid 10001 e precisa de **escrita** na pasta. Para ver como está montada: `stat -c '%u %g %a' /caminho/da/montagem`. Há duas formas de dar escrita:
-- **Montagem própria para o certwatch** (recomendado). Por exemplo, no `/etc/fstab`, com as credenciais num ficheiro só legível pelo root:
-  `//servidor/partilha/caminho /mnt/certwatch-usc cifs credentials=/root/.smb-certwatch,uid=10001,gid=10001,file_mode=0640,dir_mode=0750,vers=3.0,_netdev 0 0`
-- **Reutilizar a montagem existente**: tem de ter escrita para um grupo (`dir_mode=0775,file_mode=0664,gid=<g>`); nesse caso defina `CERTWATCH_PUBLISH_GID=<g>`.
-
-Depois de `docker compose up -d`, use **Testar escrita** na página: cria e apaga um ficheiro temporário. Os ficheiros são escritos com um nome temporário e depois renomeados, e a escrita é verificada pelo SHA-256.
-
 ### Permissões da conta na UCMDB
 
 Em **Atualizar a CMDB → Permissões na UCMDB** verifica-se o que a conta configurada (segredo `ucmdb_user`) consegue fazer pela REST API:
@@ -280,9 +229,9 @@ Em **Atualizar a CMDB → Permissões na UCMDB** verifica-se o que a conta confi
 
 Cada verificação fica na auditoria (`ucmdb.permissoes`, `ucmdb.teste_criacao`), sem credenciais.
 
-### Escrever diretamente na UCMDB (sem a pasta de rede)
+### Escrever diretamente na UCMDB
 
-Com `CERTWATCH_UCMDB_WRITE=true` no `.env`, a aplicação cria e atualiza os certificados na UCMDB pela REST API, com a mesma conta da leitura. A pasta de rede continua disponível.
+Com `CERTWATCH_UCMDB_WRITE=true` no `.env`, a aplicação cria e atualiza os certificados na UCMDB pela REST API, com a mesma conta da leitura.
 
 **A partir de uma geração** (Atualizar a CMDB → geração → Alterações → **Aplicar na UCMDB**):
 1. **Um certificado:** botão **Aplicar** na linha. Linha nova → `POST /rest-api/dataModel` (cria). Linha alterada → `PUT /rest-api/dataModel/ci/{id}` só com os campos que mudaram (ValidTo, SerialNumber, Issuer, IssuerName, Description…).
@@ -390,7 +339,7 @@ Em **Pedidos SMAX**, o número do pedido abre a página do pedido. O link "SMAX 
    - carregar o ficheiro do certificado (`.cer`, `.crt`, `.pem`, `.der`);
    - indicar à mão a nova data (por exemplo, a partir do print num comentário).
 3. **Instalado no servidor.** Fica feito quando todos os servidores verificados apresentam o certificado novo. Use **Verificar agora** para os verificar logo. Para servidores que o certwatch não vê, a instalação pode ser confirmada à mão, com uma nota.
-4. **CMDB atualizada.** A renovação registada entra como fonte `RENOVACAO` na próxima geração de **Atualizar a CMDB**. Se veio do servidor ou do ficheiro, atualiza também o emissor. O passo fica feito quando a CMDB lida pelo certwatch mostra a nova data. Até lá, a página diz em que geração está e se já foi publicada.
+4. **CMDB atualizada.** A renovação registada entra como fonte `RENOVACAO` na próxima geração de **Atualizar a CMDB**. Se veio do servidor ou do ficheiro, atualiza também o emissor. O passo fica feito quando a alteração é aplicada na UCMDB ou quando a CMDB lida pelo certwatch mostra a nova data. Até lá, a página diz em que reconciliação está e se já foi aplicada.
 5. **Pedido fechado.** O botão **Fechar no SMAX** faz um `bulk UPDATE` com `CERTWATCH_SMAX_CLOSE_FIELDS` (por omissão `{"PhaseId": "Close"}`):
    - pode escrever um comentário no pedido, antes de fechar;
    - depois o pedido é lido de novo para confirmar a fase;
@@ -423,7 +372,7 @@ Depois pré-visualiza-se e envia-se:
 
 **Texto por omissão (modelo).** Em **Texto por omissão dos emails** muda-se o texto base que a aplicação gera para todos os relatórios: assuntos, saudação, parágrafos, fecho e assinatura, com variáveis entre chavetas (`{n_alerta}`, `{alerta}`, `{janela}`, `{desde}`, `{ate}`, `{n_internos}`, `{n_externos}`, `{n_renovados}`, `{n_internet}`, `{periodo}`, `{data}`, `{saudacao}`, `{assinatura}`). Guarda-se só para o relatório ou como modelo para os próximos.
 
-Configuração no `.env`: `CERTWATCH_SMTP_HOST`, `_PORT`, `_SECURITY` (starttls/ssl/none), `_FROM` e `_USER`. A password vai no segredo `secrets/smtp_password`. Este ficheiro tem de existir, nem que seja vazio (`touch secrets/smtp_password`), tal como `secrets/publish_ssh`. `CERTWATCH_REPORT_ALLOWED_DOMAINS` limita os destinatários aos domínios da organização. Os envios ficam registados no relatório e na auditoria.
+Configuração no `.env`: `CERTWATCH_SMTP_HOST`, `_PORT`, `_SECURITY` (starttls/ssl/none), `_FROM` e `_USER`. A password vai no segredo `secrets/smtp_password`. Este ficheiro tem de existir, nem que seja vazio (`touch secrets/smtp_password`). `CERTWATCH_REPORT_ALLOWED_DOMAINS` limita os destinatários aos domínios da organização. Os envios ficam registados no relatório e na auditoria.
 
 ## 8. Classificação
 

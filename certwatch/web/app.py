@@ -31,8 +31,8 @@ from ..insights import STATE_LABELS, ancestry, build_inventory, check_matrix, ch
 from ..jobs import apis_configured, JOBS, enqueue
 from ..collectors.ct import SOURCE_LABELS
 from ..discovery import CT_STATE_HELP, CT_STATES, CT_TABS, TRIAGE_LABELS, classify_ct
-from ..models import (ApiRecord, AuditLog, Certificate, CmdbRecord, CtCert, Endpoint, FinalInput, FinalPublish,
-                      EmailReport, EmailTemplate, FinalPublishFile, FinalRun, Finding, ImportFile, JobRun, Renewal, ScanResult, SmaxComment, SmaxFile,
+from ..models import (ApiRecord, AuditLog, Certificate, CmdbRecord, CtCert, Endpoint, FinalInput,
+                      EmailReport, EmailTemplate, FinalRun, Finding, ImportFile, JobRun, Renewal, ScanResult, SmaxComment, SmaxFile,
                       SslLabsResult, TicketBatch, SmaxTicket, UcmdbWrite)
 from .. import ticket_create as tc
 from .. import cmdb_final as cf
@@ -232,12 +232,9 @@ def setup_checklist(s, settings, stats) -> list[dict]:
     items.append({"ok": True if files else None, "title": "Ficheiros de reconciliação",
                   "hint": (", ".join(f"{f.source}: {f.name}" for f in files) if files else
                            "Opcional: colocar exportações CA1*, CA2*, AVI* e Azure* na diretoria import/.")})
-    folder = cf.folder_status(settings)
-    items.append({"ok": True if folder["existe"] and folder["gravavel"] else (False if folder["existe"] else None),
-                  "title": "Pasta de rede para atualizar a CMDB",
-                  "hint": ("Montada, com escrita." if folder["existe"] and folder["gravavel"] else
-                           folder["detalhe"] if folder["existe"] else
-                           "Opcional: definir CERTWATCH_PUBLISH_HOST_DIR no .env (ver README 5.1).")})
+    items.append({"ok": True if settings.ucmdb_write else None, "title": "Escrita na UCMDB",
+                  "hint": ("Ligada: a reconciliação aplica as alterações diretamente na UCMDB." if settings.ucmdb_write else
+                           "Opcional: definir CERTWATCH_UCMDB_WRITE=true no .env para aplicar as alterações na UCMDB.")})
     last = s.scalar(select(JobRun).where(JobRun.job == "pipeline", JobRun.requested_by == "agendador",
                                          JobRun.status.in_(("ok", "error"))).order_by(JobRun.id.desc()).limit(1))
     recent = last is not None and last.finished_at and as_utc(last.finished_at) > utcnow() - timedelta(hours=26)
@@ -1464,8 +1461,8 @@ def reconciliacao_exportar(estado: str = "diferencas", user: str = Depends(curre
                           r["san"], " e ".join(r.get("onde") or []), r["file"], r["row_no"] or ""] for r in rows])
 
 
-# ------------------------------------------------------------------ CMDB final (CMDB_Final.xlsx, certs_update) e pasta de rede
-FINAL_STATES = {"a_gerar": "A gerar", "pronto": "Pronto a publicar", "bloqueado": "CSV bloqueados", "erro": "Com erro"}
+# ------------------------------------------------------------------ CMDB final (CMDB_Final.xlsx, certs_update)
+FINAL_STATES = {"a_gerar": "A reconciliar", "pronto": "Pronta", "bloqueado": "CSV bloqueados", "erro": "Com erro"}
 FINAL_VIEWS = {"alteracoes": "Alterações", "servidor": "Verificação no servidor", "erros": "Relatório de erros",
                "colunas": "Colunas"}
 
@@ -1496,15 +1493,10 @@ def final_page(request: Request, user: str = Depends(current_user)):
         runs = list(s.scalars(select(FinalRun).order_by(FinalRun.id.desc()).limit(30)))
         for r in runs:
             s.expunge(r)
-        last_pub = s.scalar(select(FinalPublish).order_by(FinalPublish.id.desc()).limit(1))
-        if last_pub is not None:
-            s.expunge(last_pub)
         cmdb_at = s.scalar(select(CmdbRecord.last_seen).order_by(CmdbRecord.last_seen.desc()).limit(1))
         ct = cf.ct_source(s, settings, utcnow().astimezone(_tz()).date())[1] if settings.final_ct else None
-    folder = cf.folder_status(settings)
     latest = runs[0] if runs else None
-    return render(request, "final.html", user, inputs=inputs, runs=runs, latest=latest, folder=folder,
-                  last_pub=last_pub, cmdb_at=cmdb_at, settings=settings, FINAL_STATES=FINAL_STATES, ct=ct,
+    return render(request, "final.html", user, inputs=inputs, runs=runs, latest=latest, cmdb_at=cmdb_at, settings=settings, FINAL_STATES=FINAL_STATES, ct=ct,
                   issuers={k: settings.import_issuers.get(k, "") for k in settings.final_sources})
 
 
@@ -1552,36 +1544,6 @@ async def final_upload(request: Request, source: str, csrf: str = Form(""), fich
     return RedirectResponse("/cmdb-final", status_code=303)
 
 
-@app.post("/cmdb-final/testar-pasta")
-async def final_test_folder(request: Request, user: str = Depends(current_user)):
-    form = await request.form()
-    check_csrf(request, form.get("csrf"))
-    settings = get_settings()
-    # A password (se escrita) só é usada nesta ligação: não é guardada nem registada
-    ok, msg = cf.test_write(settings, str(form.get("ssh_password") or "") or None, SFTP_FACTORY)
-    with session_scope() as s:
-        audit(s, user, "cmdb_final.testar_pasta", cf.folder_status(settings)["pasta"], ok=ok, detalhe=msg)
-    return RedirectResponse(f"/cmdb-final?teste={'ok' if ok else 'falhou'}&msg={quote(msg)}#pasta", status_code=303)
-
-
-@app.post("/cmdb-final/impressao-digital")
-def final_fingerprint(request: Request, csrf: str = Form(""), user: str = Depends(current_user)):
-    """Mostra a impressão digital da chave do servidor SSH (sem autenticar), para a confirmar e pôr no .env."""
-    check_csrf(request, csrf)
-    from .. import publish_target as pt
-    settings = get_settings()
-    try:
-        info = pt.server_fingerprint(settings)
-        msg = (f"O servidor {settings.publish_ssh_host} apresenta uma chave {info['tipo']} com a impressão digital "
-               f"{info['impressao']}. Confirme-a no próprio servidor (ssh-keygen -lf /etc/ssh/ssh_host_*_key.pub) "
-               "antes de a pôr em CERTWATCH_PUBLISH_SSH_HOSTKEY.")
-        ok = True
-    except Exception as exc:
-        msg, ok = f"Não foi possível ler a chave do servidor: {type(exc).__name__}: {exc}"[:400], False
-    return RedirectResponse(f"/cmdb-final?teste={'info' if ok else 'falhou'}&msg={quote(msg)}#pasta", status_code=303)
-
-
-SFTP_FACTORY = None    # nos testes: substitui a ligação SSH
 
 
 @app.post("/cmdb-final/{run_id}/ucmdb")
@@ -1819,17 +1781,13 @@ def final_compare(request: Request, origem: str = "", vista: str = "diferencas",
 
 
 def _compare_source(origem: str, settings) -> tuple[str, str, bytes | None, list[tuple[str, str]]]:
-    """Ficheiro CMDB_Final a comparar: uma geração, o que está na pasta de rede ou um carregado."""
+    """Ficheiro CMDB_Final a comparar: uma geração ou um carregado."""
     with session_scope() as s:
         runs = list(s.execute(select(FinalRun.id, FinalRun.created_at).where(FinalRun.xlsx.is_not(None))
                               .order_by(FinalRun.id.desc()).limit(15)))
         ups = list(s.execute(select(FinalInput.id, FinalInput.name, FinalInput.uploaded_at)
                              .where(FinalInput.source == "CMDB_FINAL").order_by(FinalInput.id.desc()).limit(5)))
         choices = [(f"geracao:{r.id}", f"Geração #{r.id} de {fmt_dt(r.created_at, True)}") for r in runs]
-        folder = cf.folder_status(settings)
-        if (folder["modo"] == "sftp" and folder["existe"] and not folder["pede_password"]) or \
-                (folder["modo"] == "local" and (settings.publish_dir / cf.FILES["xlsx"]).is_file()):
-            choices.append(("pasta", f"{cf.FILES['xlsx']} na pasta de rede"))
         choices += [(f"carregado:{u.id}", f"Carregado: {u.name} ({fmt_dt(u.uploaded_at, True)})") for u in ups]
         if not origem:
             origem = choices[0][0] if choices else ""
@@ -1841,8 +1799,6 @@ def _compare_source(origem: str, settings) -> tuple[str, str, bytes | None, list
             if run is None or run.xlsx is None:
                 raise cf.FinalError("Essa geração já não tem o ficheiro (só se guardam as mais recentes).")
             return f"CMDB_Final.xlsx da geração #{run.id}", origem, run.xlsx, choices
-        if kind == "pasta":
-            return f"{cf.FILES['xlsx']} na pasta de rede", origem, cf.read_published(settings, cf.FILES["xlsx"]), choices
         if kind == "carregado" and ident.isdigit():
             up = s.get(FinalInput, int(ident))
             if up is None or up.source != "CMDB_FINAL" or up.data is None:
@@ -1908,11 +1864,6 @@ def final_run(request: Request, run_id: int, vista: str = "alteracoes", tipo: st
         run = _run_or_404(s, run_id)
         newest = s.scalar(select(FinalRun.id).where(FinalRun.status.in_(("pronto", "bloqueado")))
                           .order_by(FinalRun.id.desc()).limit(1))
-        pubs = list(s.scalars(select(FinalPublish).where(FinalPublish.run_id == run_id).order_by(FinalPublish.id.desc())))
-        pub_files = {p.id: list(s.execute(select(FinalPublishFile.id, FinalPublishFile.name, FinalPublishFile.ok,
-                                                 FinalPublishFile.error, FinalPublishFile.previous_sha256,
-                                                 FinalPublishFile.previous_mtime)
-                                          .where(FinalPublishFile.publish_id == p.id))) for p in pubs}
         sizes = {k: len(v) if v else 0 for k, v in (("xlsx", run.xlsx), ("csv", run.csv), ("csv_sem", run.csv_sem))}
         can_edit = cf.editable(s, run)
         uw.recover_stale(s)
@@ -1920,8 +1871,6 @@ def final_run(request: Request, run_id: int, vista: str = "alteracoes", tipo: st
         for w in writes.values():
             s.expunge(w)
         s.expunge(run)
-        for p in pubs:
-            s.expunge(p)
     changes = run.changes or []
     all_changes = changes
     if tipo in ("novo", "alterado"):
@@ -1935,10 +1884,9 @@ def final_run(request: Request, run_id: int, vista: str = "alteracoes", tipo: st
     if q:
         ql = q.lower()
         changes = [c for c in changes if any(ql in (c.get(k) or "").lower() for k in ("cn", "global_id", "serial", "issuer_name"))]
-    folder = cf.folder_status(settings) if run.status == "pronto" else None
     return render(request, "final_run.html", user, run=run, vista=vista, views=FINAL_VIEWS, changes=changes[:3000],
-                  n_changes=len(changes), tipo=tipo, q=q, newest=newest, pubs=pubs, pub_files=pub_files, sizes=sizes,
-                  folder=folder, FINAL_STATES=FINAL_STATES, settings=settings, fonte=fonte, incluida=incluida,
+                  n_changes=len(changes), tipo=tipo, q=q, newest=newest, sizes=sizes,
+                  FINAL_STATES=FINAL_STATES, settings=settings, fonte=fonte, incluida=incluida,
                   pendente=bool(pendente), can_edit=can_edit, writes=writes, WRITE_STATES=uw.STATE_LABELS,
                   write_problem=uw.enabled_problem(settings),
                   write_busy=any(w.estado in uw.BUSY for w in writes.values()),
@@ -2019,40 +1967,6 @@ async def final_selection(request: Request, run_id: int, user: str = Depends(cur
     return RedirectResponse(back, status_code=303)
 
 
-@app.post("/cmdb-final/{run_id}/publicar")
-async def final_publish(request: Request, run_id: int, user: str = Depends(current_user)):
-    form = await request.form()
-    check_csrf(request, form.get("csrf"))
-    keys = [str(k) for k in form.getlist("ficheiro")]
-    if form.get("confirmo") != "1":
-        raise HTTPException(400, "Confirmação em falta.")
-    settings = get_settings()
-    try:
-        with session_scope() as s:
-            run = _run_or_404(s, run_id)
-            # A password (se escrita) só é usada nesta ligação: não é guardada nem registada
-            pub = cf.publish(s, settings, run, keys, user, str(form.get("ssh_password") or "") or None, SFTP_FACTORY)
-            audit(s, user, "cmdb_final.publicar", f"geração {run_id}", pasta=pub.folder,
-                  ficheiros=[r["nome"] for r in pub.result], ok=pub.ok)
-    except cf.FinalError as exc:
-        return _final_error(request, user, str(exc), f"/cmdb-final/{run_id}")
-    return RedirectResponse(f"/cmdb-final/{run_id}#publicacoes", status_code=303)
-
-
-@app.get("/cmdb-final/publicacao/{file_id}/anterior")
-def final_previous(file_id: int, user: str = Depends(current_user)):
-    with session_scope() as s:
-        f = s.get(FinalPublishFile, file_id)
-        if f is None or f.previous is None:
-            raise HTTPException(404)
-        data, name = f.previous, f.name
-        audit(s, user, "cmdb_final.descarregar_anterior", name, publicacao=f.publish_id)
-    stem, dot, ext = name.rpartition(".")
-    media = ("application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" if ext == "xlsx" else "text/csv; charset=utf-8")
-    return Response(data, media_type=media, headers={"Content-Disposition": f'attachment; filename="{stem}_anterior.{ext}"'})
-
-
-# ------------------------------------------------------------------ API (só leitura)
 def _jsonable(v):
     if isinstance(v, datetime):
         return v.isoformat()

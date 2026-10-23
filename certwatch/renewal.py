@@ -22,7 +22,7 @@ from sqlalchemy.orm import Session
 from .config import Settings
 from .db import as_utc, utcnow
 from .evaluator import Snapshot, load_snapshot
-from .models import CtCert, FinalRun, Renewal, SmaxTicket, TicketStep
+from .models import CtCert, FinalRun, Renewal, SmaxTicket, TicketStep, UcmdbWrite
 from .normalize import norm_host
 
 STEPS = [
@@ -129,6 +129,7 @@ class Context:
     ct: dict[str, list[CtCert]] = field(default_factory=dict)
     steps: dict[str, dict[str, TicketStep]] = field(default_factory=dict)
     runs: list[FinalRun] = field(default_factory=list)
+    writes: dict[tuple[int, int], UcmdbWrite] = field(default_factory=dict)   # (reconciliação, alteração) -> escrita
 
 
 def load_context(session: Session) -> Context:
@@ -148,6 +149,10 @@ def load_context(session: Session) -> Context:
     ctx.steps = st
     ctx.runs = list(session.scalars(select(FinalRun).where(FinalRun.status.in_(("pronto", "bloqueado")))
                                     .order_by(FinalRun.id.desc()).limit(3)))
+    ids = [r.id for r in ctx.runs]
+    if ids:
+        for w in session.scalars(select(UcmdbWrite).where(UcmdbWrite.run_id.in_(ids)).order_by(UcmdbWrite.id)):
+            ctx.writes[(w.run_id, w.chave)] = w
     return ctx
 
 
@@ -231,13 +236,17 @@ def pipeline(t: SmaxTicket, settings: Settings, ctx: Context) -> dict:
             from .cmdb_final import parse_day
             if parse_day(ch.get("validto")).day and abs((parse_day(ch.get("validto")).day - target).days) <= 1:
                 inc = ch.get("incluir", True)
-                s4["run"] = {"id": run.id, "incluida": inc, "publicada": bool(run.published_at)}
-                s4["detail"] = (f"Na geração #{run.id}, " + ("incluída" if inc else "excluída") +
-                                (", publicada: falta a UCMDB importar e o certwatch voltar a ler a CMDB"
-                                 if run.published_at and inc else ", por publicar" if inc else ""))
+                w = ctx.writes.get((run.id, ch.get("chave")))
+                applied = w is not None and w.estado in ("ok", "aviso")
+                s4["run"] = {"id": run.id, "incluida": inc, "aplicada": applied, "chave": ch.get("chave")}
+                if applied:
+                    s4.update(done=True, detail=f"Aplicada na UCMDB na reconciliação #{run.id} "
+                                                f"({as_utc(w.feito_em or w.pedido_em).astimezone(tz):%d-%m-%Y})")
+                else:
+                    s4["detail"] = (f"Na reconciliação #{run.id}, " + ("incluída, por aplicar na UCMDB" if inc else "excluída"))
                 break
         else:
-            s4["detail"] = ("Ainda não está numa geração dos ficheiros. Gere os ficheiros em Atualizar a CMDB"
+            s4["detail"] = ("Ainda não está numa reconciliação. Reconcilie em CMDB → Reconciliar e atualizar"
                             + (" (a renovação registada entra automaticamente)." if registered else
                                "; registe a renovação para garantir que entra."))
     else:
