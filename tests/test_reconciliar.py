@@ -321,3 +321,51 @@ def test_api_attributes_page(setup, monkeypatch):
         page = c.get("/cmdb-final/permissoes/apis?ver=1", auth=AUTH).text
     assert "scml_dono" in page and "obrigatório sem valor" in page and "Sim (3)" in page
     assert "lido como fim da validade" in page and "S3gr3do" not in page
+
+
+class FakeScml(FakeThinTql):
+    """Como a UCMDB da SCML: o TQL só traz o display_label; as APIs têm aplicacao e localizacao (obrigatórios,
+    valores diferentes em cada uma) e o modelo de classes marca-os como obrigatórios."""
+    def __init__(self, cis):
+        super().__init__(cis)
+        for k, v in self.store.items():
+            if v["type"] == "exemplo_api":
+                p = v["properties"]
+                p.update({"name": p["display_label"], "aplicacao": p.pop("application_name"), "localizacao": p.pop("secret_location"),
+                          "scml_fim": p.pop("secret_expiration_date"), "scml_expirado": False})
+
+    def handler(self, request):
+        p, m = request.url.path, request.method
+        if m == "GET" and p.endswith("/classModel/citypes/exemplo_api"):
+            return httpx.Response(200, json={"name": "exemplo_api", "attributes": [
+                {"name": "name", "displayLabel": "Name", "type": "string", "qualifiers": [{"name": "ID_ATTRIBUTE"}]},
+                {"name": "display_label", "displayLabel": "Display Label", "type": "string"},
+                {"name": "aplicacao", "displayLabel": "Aplicação", "type": "string", "required": True},
+                {"name": "localizacao", "displayLabel": "Localização", "type": "string", "required": True},
+                {"name": "scml_fim", "displayLabel": "Data de expiração", "type": "date"},
+                {"name": "create_time", "displayLabel": "Create Time", "type": "date"}]})
+        if m == "POST" and p.endswith("/dataModel"):
+            ci = json.loads(request.content)["cis"][0]
+            if ci["type"] == "exemplo_api" and any(not ci["properties"].get(a) for a in ("name", "aplicacao", "localizacao")):
+                self.calls.append((m, p, json.loads(request.content)))
+                return httpx.Response(400, json={"error": "Not all required attributes are provided"})
+        return super().handler(request)
+
+
+def test_azure_api_scml_case(setup, monkeypatch):
+    st, rid, fake, webapp = setup
+    scml = FakeScml(list(CIS) + API_CIS)
+    monkeypatch.setattr(webapp, "UCMDB_CLIENT", scml.client())
+    # o .env com os exemplos à letra: o erro diz quais as linhas erradas
+    bad = replace(st, apis_field_expiry="TESTE_API_API", apis_create_defaults={"atributo": "TESTE_API", "outro": "TESTE_API2"})
+    monkeypatch.setattr(webapp, "get_settings", lambda: bad)
+    w = _include_api(rid, webapp)
+    assert w.estado == "erro" and "CERTWATCH_APIS_FIELD_EXPIRY=TESTE_API_API" in w.detalhe and "atributo" in w.detalhe
+    assert not [1 for m, p, b in scml.writes() if m == "POST"]
+    # sem nada no .env: reconhece aplicacao, localizacao e a data, e cria
+    monkeypatch.setattr(webapp, "get_settings", lambda: st)
+    w = _include_api(rid, webapp)
+    assert w.estado in ("ok", "aviso"), w.detalhe
+    props = [b for m, p, b in scml.writes() if m == "POST"][-1]["cis"][0]["properties"]
+    assert props["name"] == "Pagamentos API" and props["aplicacao"] == "Pagamentos" and props["localizacao"] == LOC
+    assert props["scml_fim"] == "2027-06-15T00:00:00"

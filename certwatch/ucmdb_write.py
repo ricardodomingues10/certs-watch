@@ -400,11 +400,15 @@ def next_placeholder_serial(state: dict, used: list) -> str:
     return f"x{n + 1}"
 
 
+def labels_of(attrs: list[dict]) -> dict[str, str]:
+    return {a["name"]: a.get("label") or "" for a in attrs}
+
+
 def api_model(us: UcmdbSession, settings: Settings) -> dict:
     """Tipo de CI e atributos da lista de APIs, a partir dos CIs do TQL das APIs."""
     from collections import Counter
-    from .collectors.ucmdb import (_is_date, _internal, class_attributes, date_attributes, detect_api_fields, enrich_cis,
-                                   pick_expiry)
+    from .collectors.ucmdb import (APP_KEY, LOCATION_KEY, _is_date, _internal, class_attributes, date_attributes,
+                                   detect_api_fields, enrich_cis, pick_expiry)
     if not settings.ucmdb_tql_apis:
         raise WriteError("Defina CERTWATCH_UCMDB_TQL_APIS (a lista de APIs) para incluir segredos do Azure.")
     cis = us.topology(settings.ucmdb_tql_apis)
@@ -415,12 +419,23 @@ def api_model(us: UcmdbSession, settings: Settings) -> dict:
     cls_attrs, cls_note = class_attributes(us, ci_type)
     cls_attr, cls_dates = pick_expiry(cls_attrs), date_attributes(cls_attrs)
     fields = detect_api_fields(cis, settings)
-    if not fields.get("nome") or not fields.get("validade"):
+    have = {k for c in cis for k, v in (c.get("properties") or {}).items() if v not in (None, "")}
+    if any(not fields.get(k) or fields[k] not in have for k in ("nome", "validade", "aplicacao", "localizacao")):
         # o layout do TQL não traz todos os atributos: vai buscá-los à REST API (como a importação das APIs)
         cis, _, _ = enrich_cis(us, cis, settings.apis_enrich if settings.apis_enrich in ("query", "ci") else "auto",
                                [a for a in (settings.apis_field_expiry, cls_attr) if a])
         fields = detect_api_fields(cis, settings)
     seen = sorted({k for c in cis for k, v in (c.get("properties") or {}).items() if v not in (None, "")})
+    # nomes do .env que não são atributos deste tipo: dizer logo, em vez de os ignorar ou enviar
+    known = {a["name"] for a in cls_attrs} | {k for c in cis for k in (c.get("properties") or {})}
+    env_fields = {"CERTWATCH_APIS_FIELD_NAME": settings.apis_field_name, "CERTWATCH_APIS_FIELD_EXPIRY": settings.apis_field_expiry,
+                  "CERTWATCH_APIS_FIELD_APP": settings.apis_field_app, "CERTWATCH_APIS_FIELD_LOCATION": settings.apis_field_location}
+    wrong = [f"{var}={val}" for var, val in env_fields.items() if val and val not in known]
+    wrong += [f"CERTWATCH_APIS_CREATE_DEFAULTS: {k}" for k in settings.apis_create_defaults if k not in known]
+    if wrong and cls_attrs:
+        raise WriteError("O .env tem nomes que não são atributos do tipo " + ci_type + ": " + "; ".join(wrong)
+                         + ". Retire essas linhas (ou corrija o nome) e reinicie. Os nomes certos estão em Sistema > "
+                           "Ligação à UCMDB > Ver atributos das APIs.")
     in_type = {a["name"] for a in cls_dates}
     date_like = sorted({k for c in cis for k, v in (c.get("properties") or {}).items() if v not in (None, "") and _is_date(v)})
     if fields.get("nome") and fields["nome"] not in seen:
@@ -438,6 +453,13 @@ def api_model(us: UcmdbSession, settings: Settings) -> dict:
                          + (f"Atributos de data do tipo {ci_type} na UCMDB: {listed}. " if listed else
                             f"Não consegui ler os atributos do tipo {ci_type} ({cls_note or 'sem atributos de data'}). ")
                          + "Indique o atributo no .env (CERTWATCH_APIS_FIELD_EXPIRY=<atributo>) e reinicie.")
+    # obrigatórios que são a aplicação ou a localização: são esses os campos (o certwatch preenche-os)
+    required = [x["name"] for x in cls_attrs if x.get("required")]
+    for key, rx in (("aplicacao", APP_KEY), ("localizacao", LOCATION_KEY)):
+        if not fields.get(key):
+            cand = [a for a in required if rx.search(a) or rx.search(labels_of(cls_attrs).get(a, ""))]
+            if cand:
+                fields[key] = cand[0]
     types = Counter(c.get("type") for c in cis if c.get("type"))
     props = set()
     for c in cis[:50]:
