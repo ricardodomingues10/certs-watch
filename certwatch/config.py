@@ -210,6 +210,8 @@ class Settings:
     avi_verify_tls: bool = True
     avi_version: str = ""
     avi_page_size: int = 100
+    dash_expiry_days: int = 20          # painel: "expiram sem pedido" nos próximos N dias
+    dash_stale_days: int = 10           # painel: pedido aberto sem movimento há N dias = parado
     avi_source: str = "ficheiro"        # ficheiro | api | auto (API, e o ficheiro se a API falhar)
     expiry_thresholds: dict[str, int] = field(default_factory=dict)
     lifetime_warn_pct: float = 0.2
@@ -347,6 +349,8 @@ class Settings:
             avi_version=_env("CERTWATCH_AVI_VERSION", ""),
             avi_page_size=int(_env("CERTWATCH_AVI_PAGE_SIZE", "100")),
             avi_source=(_env("CERTWATCH_AVI_SOURCE", "ficheiro") or "ficheiro").lower(),
+            dash_expiry_days=int(_env("CERTWATCH_DASH_EXPIRY_DAYS", "20")),
+            dash_stale_days=int(_env("CERTWATCH_DASH_STALE_DAYS", "10")),
             internal_suffixes=_str_list(_env("CERTWATCH_INTERNAL_SUFFIXES", ".local,.lan,.internal,.intranet,.corp")),
             internal_issuer_patterns=_str_list(_env("CERTWATCH_INTERNAL_ISSUER_PATTERNS", "internal,interna")),
             trust_dir=Path(_env("CERTWATCH_TRUST_DIR", "/app/trust")),

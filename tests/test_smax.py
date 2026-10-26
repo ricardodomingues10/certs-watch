@@ -100,7 +100,7 @@ def test_links_pages_filter_and_export(env, monkeypatch):
                 ("www.exemplo.pt", SOON), ("api.exemplo.pt", SOON), ("velho.exemplo.pt", SOON),
                 ("novo.exemplo.pt", NOW + timedelta(days=10)), ("longe.exemplo.pt", NOW + timedelta(days=300))])])
         out = ingest_smax(db, s, smax.fetch_tickets(s, transport([])))
-    assert out == {"tickets": 5, "com_endpoint": 4, "abertos": 3}
+    assert out == {"tickets": 5, "mudancas": 0, "com_endpoint": 4, "abertos": 3}
 
     with session_scope() as db:
         inv = {r["cn"]: r["smax"] for r in build_inventory(db, s, utcnow())}
@@ -128,7 +128,8 @@ def test_links_pages_filter_and_export(env, monkeypatch):
         det = c.get("/certificados/detalhe", params={"cn": "www.exemplo.pt"}, auth=auth).text
         assert "Pedidos no SMAX" in det and "0900" in det and "Sistemas" in det and "Pedido em curso" in det
         dash = c.get("/", auth=auth).text
-        assert "sem pedido em curso" in dash and "Pedidos do SMAX" in dash
+        assert "expiram em ≤ 20 dias sem pedido" in dash and "novo.exemplo.pt" in dash
+        assert "Movimento nos pedidos" in dash and "Pedidos parados" in dash
         csv_text = c.get("/certificados/exportar", auth=auth).content.decode("utf-8")
         head = csv_text.splitlines()[0]
         assert "Pedido SMAX" in head and "Link do pedido" in head

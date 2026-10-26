@@ -1,0 +1,102 @@
+"""Painel orientado à ação: expiram sem pedido, movimento nos pedidos, pedidos parados e indicadores NIS2."""
+from dataclasses import replace
+from datetime import timedelta
+
+from fastapi.testclient import TestClient
+from sqlalchemy import select
+
+from certwatch import config
+from certwatch import dashboard as dash
+from certwatch.db import session_scope, utcnow
+from certwatch.evaluator import load_snapshot
+from certwatch.insights import build_inventory
+from certwatch.jobs import ingest_cmdb
+from certwatch.models import ApiRecord, SmaxComment, SmaxEvent
+from certwatch.tickets import ingest_smax
+
+NOW = utcnow().replace(microsecond=0)
+AUTH = ("admin", "teste-admin-123")
+
+
+def tk(tid, endpoint, expiry, phase, updated_days_ago=1, created_days_ago=None):
+    return {"id": tid, "display_label": f"Renovar {endpoint}", "endpoint": endpoint, "environment": "PRD",
+            "cert_expiry": expiry, "cert_type": "Externo", "phase": phase, "priority": "", "owner_group": "Sistemas",
+            "owner_person": "Ana", "last_update": NOW - timedelta(days=updated_days_ago), "scheduled_end": None,
+            "service_component": "",
+            "created": NOW - timedelta(days=created_days_ago) if created_days_ago is not None else None}
+
+
+def setup(env):
+    s = replace(env, smax_url="https://smax.test", smax_tenant="1", ucmdb_min_cis=1)
+    certs = [("semped.exemplo.pt", NOW + timedelta(days=5)),      # expira em 5 dias, sem pedido
+             ("comped.exemplo.pt", NOW + timedelta(days=12)),     # tem pedido em curso
+             ("parado.exemplo.pt", NOW + timedelta(days=15)),     # pedido em curso mas parado
+             ("expirou.exemplo.pt", NOW - timedelta(days=3)),     # expirou há 3 dias, sem pedido
+             ("longe.exemplo.pt", NOW + timedelta(days=200))]     # fora do prazo
+    with session_scope() as db:
+        ingest_cmdb(db, s, [{"ucmdb_id": str(i), "global_id": str(i), "common_name": cn, "valid_to": d.isoformat(),
+                             "issuer": "DigiCert", "issuer_name": ""} for i, (cn, d) in enumerate(certs)])
+        db.add(ApiRecord(ucmdb_id="a1", name="Pagamentos API - 0123456789abcdef0123", host="", scheme="", url="",
+                         expiry=NOW + timedelta(days=8), application="Pagamentos", location="AzureAD", active=True))
+        # 1.ª leitura do SMAX: sem histórico, nada conta como mudança
+        out = ingest_smax(db, s, [tk("2001", "comped.exemplo.pt", NOW + timedelta(days=12), "Plan", created_days_ago=40),
+                                  tk("2002", "parado.exemplo.pt", NOW + timedelta(days=15), "Execute",
+                                     updated_days_ago=14, created_days_ago=30)])
+        assert out["mudancas"] == 0
+    with session_scope() as db:
+        # 2.ª leitura: 2001 muda de fase, 2003 é novo
+        out = ingest_smax(db, s, [tk("2001", "comped.exemplo.pt", NOW + timedelta(days=12), "Execute", updated_days_ago=0,
+                                     created_days_ago=40),
+                                  tk("2002", "parado.exemplo.pt", NOW + timedelta(days=15), "Execute",
+                                     updated_days_ago=14, created_days_ago=30),
+                                  tk("2003", "outro.exemplo.pt", NOW + timedelta(days=60), "Plan", updated_days_ago=0,
+                                     created_days_ago=0)])
+        assert out["mudancas"] == 2
+        db.add(SmaxComment(id="c1", ticket_id="2001", created_at=NOW - timedelta(hours=2), author="Rui",
+                           body="CSR enviado à CA"))
+    return s
+
+
+def test_dashboard_lists(env):
+    s = setup(env)
+    with session_scope() as db:
+        ev = {e.ticket_id: e for e in db.scalars(select(SmaxEvent))}
+        assert ev["2001"].kind == "fase" and (ev["2001"].de, ev["2001"].para) == ("Plan", "Execute")
+        assert ev["2003"].kind == "novo"
+        snap = load_snapshot(db)
+        inv = build_inventory(db, s, NOW, snap)
+        items = dash.expiring_without_ticket(inv, snap, db, s, NOW)
+        names = [x["nome"] for x in items]
+        assert names == ["expirou.exemplo.pt", "semped.exemplo.pt", "Pagamentos API"]     # por dias, sem os que têm pedido
+        api = items[-1]
+        assert api["tipo"] == "API" and api["criar"] is None and api["emissor"] == "Pagamentos"
+        act = dash.ticket_activity(db, s, NOW, 24)
+        kinds = {(a["pedido"], a["tipo"]) for a in act}
+        assert {("2001", "fase"), ("2001", "comentario"), ("2003", "novo")} <= kinds
+        stale = dash.stale_tickets(db, s, NOW)
+        assert [t["pedido"] for t in stale] == ["2002"] and stale[0]["parado"] == 14 and stale[0]["urgente"]
+        nis = dash.nis2(inv, snap, db, s, NOW, [])
+        assert nis["cobertura"]["total"] == 4 and nis["cobertura"]["com_pedido"] == 2       # 2 certificados + 1 API + 1 sem
+        assert nis["antecedencia"] is not None and nis["n_pedidos"] == 3
+
+
+def test_dashboard_page_and_evidence(env, monkeypatch):
+    setup(env)
+    for k, v in {"CERTWATCH_SMAX_URL": "https://smax.test", "CERTWATCH_SMAX_TENANT": "1",
+                 "CERTWATCH_SMAX_USER": "svc", "CERTWATCH_SMAX_PASSWORD": "x"}.items():
+        monkeypatch.setenv(k, v)
+    config.get_settings.cache_clear()
+    from certwatch.web.app import app
+    with TestClient(app) as c:
+        page = c.get("/", auth=AUTH).text
+        assert "Expiram sem pedido" in page and "semped.exemplo.pt" in page and "comped.exemplo.pt" not in page.split("Movimento nos pedidos")[0]
+        assert "mudou de fase" in page and "CSR enviado à CA" in page and "pedido novo" in page
+        assert "Pedidos parados" in page and "2002" in page and "14 dias" in page
+        assert "Conformidade e evidência" in page and "Gestão de ativos" in page
+        assert 'name="cn" value="semped.exemplo.pt"' not in page or "Criar pedidos para os selecionados" in page
+        week = c.get("/?janela=168", auth=AUTH).text
+        assert "7 dias" in week
+        csv = c.get("/painel/evidencia.csv", auth=AUTH)
+        text = csv.content.decode("utf-8-sig")
+        assert csv.status_code == 200 and text.splitlines()[0].startswith("Tipo;Nome;Expira")
+        assert "semped.exemplo.pt" in text and "Pagamentos API" in text

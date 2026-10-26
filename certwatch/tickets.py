@@ -5,7 +5,7 @@ Um ticket refere-se a um certificado pelo endpoint (nome) e pela data de expira�
 from __future__ import annotations
 
 from collections import defaultdict
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 from sqlalchemy import delete, select
 from sqlalchemy.orm import Session
@@ -13,7 +13,9 @@ from sqlalchemy.orm import Session
 from .collectors.smax import discussions_url, fetch_comments, fetch_tickets, ticket_url
 from .config import Settings
 from .db import as_utc, utcnow
-from .models import SmaxComment, SmaxFile, SmaxTicket
+from .models import SmaxComment, SmaxEvent, SmaxFile, SmaxTicket
+
+EVENT_KEEP_DAYS = 400
 
 _EPOCH = datetime(1970, 1, 1, tzinfo=timezone.utc)
 
@@ -38,16 +40,29 @@ def ingest_smax(session: Session, settings: Settings, tickets: list[dict] | None
         tickets = fetch_tickets(settings)
         comments = settings.smax_comments if comments is None else comments
     now = utcnow()
+    before = {tid: (phase or "") for tid, phase in session.execute(select(SmaxTicket.id, SmaxTicket.phase))}
     session.execute(delete(SmaxTicket))
     seen = set()
+    events = 0
     for t in tickets:
         if t["id"] in seen:
             continue
         seen.add(t["id"])
         session.add(SmaxTicket(**t, fetched_at=now))
+        # o histórico de fases não vem do SMAX: guarda-se o que mudou entre duas leituras
+        # (na primeira leitura não há "antes", por isso nada é contado como novo)
+        if before and t["id"] not in before:
+            session.add(SmaxEvent(ticket_id=t["id"], at=t.get("created") or t.get("last_update") or now, kind="novo",
+                                  para=t.get("phase") or "", endpoint=t.get("endpoint") or "", label=t.get("display_label") or ""))
+            events += 1
+        elif t["id"] in before and before[t["id"]] != (t.get("phase") or ""):
+            session.add(SmaxEvent(ticket_id=t["id"], at=t.get("last_update") or now, kind="fase", de=before[t["id"]],
+                                  para=t.get("phase") or "", endpoint=t.get("endpoint") or "", label=t.get("display_label") or ""))
+            events += 1
+    session.execute(delete(SmaxEvent).where(SmaxEvent.at < now - timedelta(days=EVENT_KEEP_DAYS)))
     session.flush()
     closed = set(settings.smax_closed_phases)
-    out = {"tickets": len(seen), "com_endpoint": sum(1 for t in tickets if t["endpoint"]),
+    out = {"tickets": len(seen), "mudancas": events, "com_endpoint": sum(1 for t in tickets if t["endpoint"]),
            "abertos": sum(1 for t in tickets if t["phase"].lower() not in closed)}
     if comments:
         # Comentários dos pedidos abertos (os mais recentes primeiro)

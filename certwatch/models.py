@@ -261,7 +261,24 @@ class SmaxTicket(Base):
     last_update: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     scheduled_end: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     service_component: Mapped[str] = mapped_column(String(64), default="")    # AffectsServiceComponent (Application ID)
+    created: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)   # EmsCreationTime
     fetched_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+class SmaxEvent(Base):
+    """Mudança vista num pedido do SMAX entre duas leituras: pedido novo ou mudança de fase (o SMAX só dá a fase
+    atual; o histórico guarda-se aqui, para o painel mostrar o que se moveu)."""
+
+    __tablename__ = "smax_events"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    ticket_id: Mapped[str] = mapped_column(String(64), index=True)
+    at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, index=True)
+    kind: Mapped[str] = mapped_column(String(16))              # novo | fase
+    de: Mapped[str] = mapped_column(String(64), default="")
+    para: Mapped[str] = mapped_column(String(64), default="")
+    endpoint: Mapped[str] = mapped_column(String(253), default="")
+    label: Mapped[str] = mapped_column(String(512), default="")
 
 
 class TicketBatch(Base):

@@ -97,6 +97,23 @@ def fmt_dt(value, with_time: bool = False) -> str:
 templates.env.filters["dt"] = fmt_dt
 templates.env.filters["dtt"] = lambda v: fmt_dt(v, True)
 templates.env.filters["source_name"] = lambda v: cf.source_name(v)
+
+
+def fmt_ago(value) -> str:
+    """"há 5 min", "há 3 h", "há 2 dias" (ou "nunca")."""
+    if not value:
+        return "nunca"
+    secs = (utcnow() - as_utc(value)).total_seconds()
+    if secs < 90:
+        return "agora"
+    if secs < 3600:
+        return f"há {round(secs / 60)} min"
+    if secs < 86400 * 2:
+        return f"há {round(secs / 3600)} h"
+    return f"há {round(secs / 86400)} dias"
+
+
+templates.env.filters["ago"] = fmt_ago
 templates.env.globals.update(
     FINDING_TYPES=FINDING_TYPES, FINDING_CHECK=FINDING_CHECK, SEVERITIES=SEVERITIES, version=__version__,
     TYPE_LABELS=TYPE_LABELS, TYPE_HELP=TYPE_HELP, SCOPE_LABELS=SCOPE_LABELS, SCOPE_HELP=SCOPE_HELP,
@@ -247,35 +264,59 @@ def setup_checklist(s, settings, stats) -> list[dict]:
     return items
 
 
+SOURCE_JOBS = [("ingest_cmdb", "CMDB"), ("ingest_apis", "APIs"), ("ingest_smax", "SMAX"), ("scan", "Servidores"),
+               ("ingest_ct", "Internet (CT)")]
+
+
+def _freshness(s) -> list[dict]:
+    """Quando cada fonte foi lida pela última vez com sucesso."""
+    out = []
+    for job, label in SOURCE_JOBS:
+        j = s.scalar(select(JobRun).where(JobRun.job.in_([job, "pipeline"]), JobRun.status == "ok")
+                     .order_by(JobRun.finished_at.desc()).limit(1))
+        q = as_utc(j.finished_at) if j and j.finished_at else None
+        out.append({"fonte": label, "quando": q, "velho": q is None or utcnow() - q > timedelta(hours=48)})
+    return out
+
+
 @app.get("/")
-def dashboard(request: Request, user: str = Depends(current_user)):
+def dashboard(request: Request, janela: int = 24, user: str = Depends(current_user)):
+    """Painel orientado à ação: o que expira sem pedido, o que se moveu, o que está parado, a conformidade."""
+    import certwatch.dashboard as db_
+    now, settings = utcnow(), get_settings()
+    janela = 168 if janela >= 168 else 24
+    with session_scope() as s:
+        snap = load_snapshot(s)
+        inv = build_inventory(s, settings, now, snap)
+        stats = dashboard_stats(inv, check_matrix(s, settings, now, snap), now)
+        open_findings = list(s.scalars(select(Finding).where(Finding.status == "aberto")))
+        items = db_.expiring_without_ticket(inv, snap, s, settings, now)
+        activity = db_.ticket_activity(s, settings, now, janela)
+        stale = db_.stale_tickets(s, settings, now)
+        nis = db_.nis2(inv, snap, s, settings, now, open_findings)
+        fresh = _freshness(s)
+        setup = setup_checklist(s, settings, stats)
+        _, tcounts = ticket_list(s, settings, "atrasados")
+    k = db_.kpis(items, stale, activity, nis, open_findings)
+    k["atrasados"] = tcounts["atrasados"]
+    sev_counts = {sv: sum(1 for f in open_findings if f.severity == sv) for sv in SEVERITIES}
+    return render(request, "dashboard.html", user, s=stats, items=items, activity=activity, stale=stale, nis=nis, k=k,
+                  janela=janela, fresh=fresh, sev_counts=sev_counts, setup=setup, smax_on=smax_configured(settings),
+                  can_create=tc.can_create(settings), limit=settings.dash_expiry_days, stale_days=settings.dash_stale_days,
+                  now=now)
+
+
+@app.get("/painel/evidencia.csv")
+def dashboard_evidence(user: str = Depends(current_user)):
+    """Relatório de evidência (NIS2): cada certificado e API com a data, o pedido e os alertas, à data de hoje."""
+    import certwatch.dashboard as db_
     now, settings = utcnow(), get_settings()
     with session_scope() as s:
         snap = load_snapshot(s)
         inv = build_inventory(s, settings, now, snap)
-        matrix = check_matrix(s, settings, now, snap)
-        stats = dashboard_stats(inv, matrix, now)
-        open_findings = list(s.scalars(select(Finding).where(Finding.status == "aberto")))
-        last_jobs = list(s.scalars(select(JobRun).order_by(JobRun.id.desc()).limit(5)))
-        n_apis = len(snap.apis)
-        setup = setup_checklist(s, settings, stats)
-    sev_counts = {sv: sum(1 for f in open_findings if f.severity == sv) for sv in SEVERITIES}
-    urgent = [r for r in inv if r["state"] == "falha"][:12]
-    soon30 = sum(1 for r in inv if r["dias"] is not None and 0 <= r["dias"] <= 30)
-    soon30_sem_pedido = sum(1 for r in inv if r["dias"] is not None and 0 <= r["dias"] <= 30
-                            and r["smax"]["state"] != "em_curso")
-    with session_scope() as s:
-        _, tcounts = ticket_list(s, settings, "atrasados")
-    # Renovações: certificados ativos (não expirados) e a situação do pedido no SMAX
-    active = [r for r in inv if r["dias"] is not None and r["dias"] >= 0]
-    renew = {"ativos": len(active),
-             "em_curso": sum(1 for r in active if r["smax"]["state"] == "em_curso"),
-             "outra_data": sum(1 for r in active if r["smax"]["state"] == "outra_data"),
-             "sem": sum(1 for r in active if r["smax"]["state"] in ("fechado", "sem_pedido")),
-             "sem_30": soon30_sem_pedido, "atrasados": tcounts["atrasados"]}
-    return render(request, "dashboard.html", user, s=stats, sev_counts=sev_counts, urgent=urgent, setup=setup,
-                  last_jobs=last_jobs, n_apis=n_apis, n_open=len(open_findings), soon30=soon30,
-                  soon30_sem_pedido=soon30_sem_pedido, smax_on=smax_configured(settings), renew=renew)
+        rows = db_.evidence_rows(inv, snap, s, settings, now)
+        audit(s, user, "painel.evidencia", f"{len(rows)} linhas")
+    return csv_response(f"evidencia-certificados-{now.astimezone(_tz()):%Y-%m-%d}.csv", db_.EVIDENCE_HEADER, rows)
 
 
 @app.get("/pesquisa")

@@ -31,7 +31,7 @@ log = logging.getLogger(__name__)
 PAGE_SIZE = 500
 LAYOUT = ("Id,DisplayLabel,PhaseId,Priority,UserOptions,LastUpdateTime,ScheduledStartTime,ScheduledEndTime,"
           "OwnedByGroup,OwnedByGroup.Name,OwnedByPerson,OwnedByPerson.Name")
-LAYOUT_EXTRA = ",AffectsServiceComponent"      # Application ID dos pedidos (para sugerir valores ao criar)
+LAYOUT_EXTRA = ",AffectsServiceComponent,EmsCreationTime"   # Application ID (sugestões ao criar) e data de criação
 _ENV_CODES = {"NAME1_C": "DEV", "NAME2_C": "TST", "NAME3_C": "SIT", "NAME4_C": "UAT", "NAME5_C": "PRE", "NAME6_C": "PRD"}
 
 
@@ -344,6 +344,7 @@ def parse_entity(e: dict, settings: Settings) -> dict | None:
         "last_update": _ms(p.get("LastUpdateTime")),
         "scheduled_end": _ms(p.get("ScheduledEndTime")),
         "service_component": str(p.get("AffectsServiceComponent") or "")[:64],
+        "created": _ms(p.get("EmsCreationTime")),
     }
 
 

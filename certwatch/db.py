@@ -104,6 +104,7 @@ _ADDED_COLUMNS = [
     ("final_runs", "vistas", "JSON"),
     ("ucmdb_writes", "parte", "VARCHAR(16) NOT NULL DEFAULT 'cert'"),
     ("ucmdb_writes", "lista", "VARCHAR(16) NOT NULL DEFAULT 'certificados'"),
+    ("smax_tickets", "created", "TIMESTAMP WITH TIME ZONE"),
 ]
 
 
