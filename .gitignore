@@ -8,3 +8,4 @@ trust/*
 !trust/README.md
 import/*
 !import/README.md
+branding/logo.*

@@ -110,10 +110,31 @@ def test_navigation_and_theme(env):
     assert nav_tree("/cert/abc", {})[1]["on"] and nav_tree("/", {})[0]["on"]
     with TestClient(app) as c:
         page = c.get("/certificados", auth=AUTH).text
-        assert 'data-palette="consola"' in page and 'aria-current="page">Certificados' in page
+        assert 'data-palette="consola"' in page and 'aria-current="page"><span>Certificados</span>' in page
         token = c.cookies["cw_csrf"]
         r = c.post("/tema", data={"csrf": token, "tema": "relatorio", "next": "/certificados"}, auth=AUTH, follow_redirects=False)
         assert r.status_code == 303 and r.headers["location"] == "/certificados"
         assert 'data-palette="relatorio"' in c.get("/certificados", auth=AUTH).text
         assert c.post("/tema", data={"csrf": token, "tema": "neon"}, auth=AUTH).status_code == 400
         assert c.post("/tema", data={"csrf": "x", "tema": "consola"}, auth=AUTH).status_code == 403
+
+
+
+def test_client_branding(env, tmp_path, monkeypatch):
+    from dataclasses import replace
+    from certwatch.web import app as webapp
+    brand = tmp_path / "branding"
+    brand.mkdir()
+    st = replace(config.get_settings(), branding_dir=brand, client_name="Santa Casa da Misericórdia de Lisboa")
+    monkeypatch.setattr(webapp, "get_settings", lambda: st)
+    with TestClient(webapp.app) as c:
+        page = c.get("/", auth=AUTH).text
+        assert "Santa Casa da Misericórdia de Lisboa" in page and "/marca/logo" not in page     # sem logo: só o nome
+        assert c.get("/marca/logo", auth=AUTH).status_code == 404
+        (brand / "logo.svg").write_text('<svg xmlns="http://www.w3.org/2000/svg"><script>alert(1)</script></svg>')
+        page = c.get("/", auth=AUTH).text
+        assert 'src="/marca/logo"' in page
+        r = c.get("/marca/logo", auth=AUTH)
+        assert r.status_code == 200 and r.headers["content-type"].startswith("image/svg+xml")
+        assert "sandbox" in r.headers["content-security-policy"]                                # o SVG não corre scripts
+        assert c.get("/marca/logo").status_code == 401                                          # só com sessão

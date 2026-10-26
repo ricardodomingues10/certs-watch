@@ -94,7 +94,9 @@ ssh -L 8088:127.0.0.1:8088 utilizador@servidor
 
 Abrir `http://localhost:8088`. O utilizador é `admin` e a palavra-passe é o conteúdo de `secrets/admin_password`.
 
-A interface ocupa a largura toda do ecrã e adapta-se a qualquer tamanho. No topo estão as **áreas, por tarefa**: **Hoje** (painel e alertas), **Inventário** (certificados, APIs e segredos, servidores, testes, na internet), **Renovar** (pedidos SMAX, relatório por email), **CMDB** (atualizar a CMDB, editar um certificado, histórico) e **Sistema** (execuções e auditoria, ligação à UCMDB, AVI pela API, como funciona). As páginas da área aparecem como separadores por baixo; no telemóvel ficam no menu do canto. A caixa no topo procura em tudo. Cada tabela ajusta-se ao espaço que tem: escondem-se primeiro as colunas secundárias e, se ainda não couber, cada linha passa a cartão.
+A interface ocupa a largura toda do ecrã e adapta-se a qualquer tamanho. A navegação fica na coluna à esquerda, agrupada por tarefa: **Hoje** (painel e alertas), **Inventário** (certificados, APIs e segredos, servidores, testes, na internet), **Renovar** (pedidos SMAX, relatório por email), **CMDB** (atualizar a CMDB, editar um certificado, histórico) e **Sistema** (execuções e auditoria, ligação à UCMDB, AVI pela API, como funciona). No telemóvel fica no menu do canto. A caixa no topo procura em tudo. Cada tabela ajusta-se ao espaço que tem: escondem-se primeiro as colunas secundárias e, se ainda não couber, cada linha passa a cartão.
+
+**Cliente**: o nome em `CERTWATCH_CLIENT_NAME` e o logo em `branding/logo.svg` (ou `logo.png`, `logo.webp`; fundo transparente, até 2 MB) aparecem no topo da coluna, no título das páginas e no rodapé. O logo fica numa placa clara, para se ver em todos os temas. Os ficheiros de logo não vão para o repositório: cada instalação tem o seu.
 
 **Temas**: Consola (escuro, ciano; por omissão), Assinatura (escuro, violeta) e Relatório (claro, cobalto). Vermelho, âmbar e verde ficam reservados para estados. O tema por omissão define-se em `CERTWATCH_UI_PALETTE=consola|assinatura|relatorio`; cada pessoa pode escolher outro no rodapé (fica guardado só no seu browser).
 

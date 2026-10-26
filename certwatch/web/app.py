@@ -196,6 +196,34 @@ def nav_tree(path: str, counts: dict) -> list[dict]:
     return out
 
 
+LOGO_FILES = (("logo.svg", "image/svg+xml"), ("logo.png", "image/png"), ("logo.webp", "image/webp"))
+
+
+def client_logo() -> tuple[Path, str] | None:
+    """O logo do cliente na pasta de marca (nomes fixos: nada vem do pedido)."""
+    d = get_settings().branding_dir
+    for name, mime in LOGO_FILES:
+        p = d / name
+        try:
+            if p.is_file() and p.stat().st_size <= 2_000_000:
+                return p, mime
+        except OSError:
+            continue
+    return None
+
+
+@app.get("/marca/logo")
+def brand_logo(user: str = Depends(current_user)):
+    found = client_logo()
+    if found is None:
+        raise HTTPException(404)
+    path, mime = found
+    # um SVG aberto diretamente não corre scripts nem carrega nada de fora
+    return Response(path.read_bytes(), media_type=mime,
+                    headers={"Cache-Control": "private, max-age=3600",
+                             "Content-Security-Policy": "default-src 'none'; style-src 'unsafe-inline'; sandbox"})
+
+
 def palette_of(request: Request) -> str:
     p = request.cookies.get("cw_tema", "")
     return p if p in PALETTES else (get_settings().ui_palette if get_settings().ui_palette in PALETTES else "consola")
@@ -205,7 +233,9 @@ def render(request: Request, name: str, user: str, **ctx):
     counts = nav_counts()
     return templates.TemplateResponse(request, name, {"user": user, "csrf": request.state.csrf, "nav": counts,
                                                       "navtree": nav_tree(request.url.path, counts),
-                                                      "palette": palette_of(request), "PALETTES": PALETTES, **ctx})
+                                                      "palette": palette_of(request), "PALETTES": PALETTES,
+                                                      "client": {"name": get_settings().client_name,
+                                                                 "logo": client_logo() is not None}, **ctx})
 
 
 @app.post("/tema")

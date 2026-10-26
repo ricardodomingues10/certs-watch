@@ -8,7 +8,7 @@ name: certwatch
 
 x-app: &app
   build: .
-  image: certwatch:0.20.1
+  image: certwatch:0.20.2
   network_mode: host
   restart: unless-stopped
   env_file: .env
@@ -16,6 +16,7 @@ x-app: &app
   volumes:
     - ./trust:/app/trust:ro
     - ./import:/app/import:ro
+    - ./branding:/app/branding:ro
   read_only: true
   tmpfs: [/tmp]
   security_opt: ["no-new-privileges:true"]
