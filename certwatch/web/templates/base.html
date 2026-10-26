@@ -3,8 +3,8 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>{% block title %}certwatch{% endblock %} · certwatch{% if client and client.name %} · {{ client.name }}{% endif %}</title>
-  <link rel="icon" href="/static/logo.svg" type="image/svg+xml">
+  <title>{% block title %}Painel{% endblock %} · Atalaia Cert{% if client and client.name %} · {{ client.name }}{% endif %}</title>
+  <link rel="icon" href="/static/atalaia-icone.svg" type="image/svg+xml">
   <link rel="preload" href="/static/fonts/public-sans-latin-wght-normal.woff2" as="font" type="font/woff2" crossorigin>
   <link rel="preload" href="/static/fonts/ibm-plex-mono-latin-500-normal.woff2" as="font" type="font/woff2" crossorigin>
   <link rel="stylesheet" href="/static/style.css">
@@ -16,12 +16,15 @@
 <div class="shell">
   <input type="checkbox" id="menu-toggle" class="menu-toggle" aria-label="Menu">
   <header class="mobilebar">
-    <a class="brand" href="/" aria-label="certwatch, painel"><img src="/static/logo.svg" alt="" width="24" height="24"><span class="word"><b>cert</b>watch</span></a>
+    <a class="brand" href="/" aria-label="Atalaia Cert, painel"><img src="/static/atalaia-icone.svg" alt="" width="30" height="30"><span class="word">Atalaia <b>Cert</b></span></a>
     {% if client and client.logo %}<span class="client-logo logo-{{ client.style }} client-mini"><img src="/marca/logo" alt="{{ client.name or 'Cliente' }}" height="24"></span>{% endif %}
     <label for="menu-toggle" class="menu-btn" aria-label="Abrir ou fechar o menu"><span></span><span></span><span></span></label>
   </header>
   <nav class="rail" aria-label="Navegação principal">
-    <a class="brand" href="/" aria-label="certwatch, painel"><img src="/static/logo.svg" alt="" width="28" height="28"><span class="word"><b>cert</b>watch</span></a>
+    <a class="brand brand-tower" href="/" aria-label="Atalaia Cert, painel">
+      <img class="tower" src="/static/atalaia.svg" alt="" width="78" height="137">
+      <span class="wordmark"><span class="name">Atalaia</span><span class="kind">Cert</span></span>
+    </a>
     {% if client and (client.logo or client.name) %}
     <div class="client" title="{{ client.name }}">
       {% if client.logo %}<span class="client-logo logo-{{ client.style }}"><img src="/marca/logo" alt="{{ client.name or 'Cliente' }}"></span>{% endif %}
@@ -55,7 +58,7 @@
       {% block content %}{% endblock %}
     </main>
     <footer>
-      <span>certwatch {{ version }}{% if client and client.name %} · {{ client.name }}{% endif %} · datas em hora de Lisboa</span>
+      <span>Atalaia Cert {{ version }}{% if client and client.name %} · {{ client.name }}{% endif %} · datas em hora de Lisboa</span>
       <form method="post" action="/tema" class="theme">
         <input type="hidden" name="csrf" value="{{ csrf }}"><input type="hidden" name="next" value="{{ request.url.path }}{{ '?' ~ request.url.query if request.url.query }}">
         <label>Tema <select name="tema" aria-label="Tema">{% for k, v in PALETTES.items() %}<option value="{{ k }}" {{ 'selected' if palette == k }}>{{ v }}</option>{% endfor %}</select></label>

@@ -1,4 +1,4 @@
-"""CMDB final: a lógica do workflow n8n "Reconciliação de Certificados", dentro do certwatch.
+"""CMDB final: a lógica do workflow n8n "Reconciliação de Certificados", dentro do Atalaia Cert.
 
 1. A CMDB vem da REST API da UCMDB (TQL dos certificados), com todos os atributos: se o layout do TQL só tiver
    alguns, os restantes são pedidos à REST API. Os atributos passam a colunas com os cabeçalhos do export da
@@ -19,8 +19,8 @@ Diferenças deliberadas em relação ao workflow (para não estragar a CMDB):
   caía na verificação no servidor por "regressão");
 - ValidTo e SerialNumber só contam como alterados se mudarem de facto (mesmo dia / mesmo número de série
   escrito de outra forma não é alteração);
-- a verificação no servidor usa o scan do certwatch (ou uma ligação TLS na hora) em vez do OpenSSL;
-- emissor ou série em falta: procurados nas outras fontes e nos certificados já vistos pelo certwatch; um
+- a verificação no servidor usa o scan do Atalaia Cert (ou uma ligação TLS na hora) em vez do OpenSSL;
+- emissor ou série em falta: procurados nas outras fontes e nos certificados já vistos pelo Atalaia Cert; um
   certificado novo sem emissor fica com Issuer/IssuerName "Por verificar" e, se vier da internet sem série, com
   SerialNumber x1, x2... (regra da equipa, numerado para a chave não se repetir), em vez de bloquear os CSV; dos ficheiros sem série, fica fora dos CSV por
   omissão (IssuerName + SerialNumber é a chave primária na CMDB);
@@ -320,7 +320,7 @@ def plan_columns(attrs: list[str], from_tql: set[str], overrides: dict[str, str 
             mapping.append({"atributo": a, "coluna": "", "como": "excluído no ficheiro de colunas"})
             continue
         if norm_header(col) in EXCLUDED_COLUMNS or norm_header(col) == "globalid":
-            mapping.append({"atributo": a, "coluna": col, "como": "não incluído (coluna gerida pelo certwatch)"
+            mapping.append({"atributo": a, "coluna": col, "como": "não incluído (coluna gerida pelo Atalaia Cert)"
                             if norm_header(col) == "globalid" else "não incluído (excluído como no workflow)"})
             continue
         if col in chosen:
@@ -421,7 +421,7 @@ def build_cmdb_table(cis: list[dict], settings: Settings, tql_attrs: set[str] | 
 
 def fetch_cmdb_table(settings: Settings, client=None) -> tuple[CmdbTable, list[dict]]:
     """Lê o TQL dos certificados e, se faltarem atributos ao layout, completa-os pela REST API.
-    Devolve a tabela e os registos no formato da ingestão (para atualizar também a CMDB do certwatch)."""
+    Devolve a tabela e os registos no formato da ingestão (para atualizar também a CMDB do Atalaia Cert)."""
     from .collectors.ucmdb import UcmdbError, UcmdbSession
     if not settings.ucmdb_tql:
         raise FinalError("Defina CERTWATCH_UCMDB_TQL no ficheiro .env")
@@ -850,7 +850,7 @@ def reconcile_final(table: CmdbTable, sources: dict[str, list[SourceItem]], sett
 
     def complete(it: dict) -> tuple[str, str]:
         """Emissor e série do certificado: a própria linha, outra fonte com o mesmo certificado ou um certificado
-        já visto pelo certwatch (servidores ou internet) com o mesmo nome e a mesma data de fim."""
+        já visto pelo Atalaia Cert (servidores ou internet) com o mesmo nome e a mesma data de fim."""
         cn_ = it["cn"].lower().strip()
         iss, ser = resolve_issuer(it), (it["serial"] or "").strip()
         if not iss or not ser:
@@ -1338,7 +1338,7 @@ def apply_selection(session: Session, run: FinalRun, shown: list[int], chosen: s
 
 # ------------------------------------------------------------------ verificação no servidor
 def make_live_lookup(session: Session, settings: Settings) -> LiveLookup:
-    """Certificado apresentado em host:443: usa o scan do certwatch se for recente, senão liga-se na hora."""
+    """Certificado apresentado em host:443: usa o scan do Atalaia Cert se for recente, senão liga-se na hora."""
     from .scanner import scan_endpoint, summarize
     from .trust import build_bundle
     max_age = timedelta(hours=settings.final_live_max_age_h)
@@ -1362,7 +1362,7 @@ def make_live_lookup(session: Session, settings: Settings) -> LiveLookup:
 
 
 def make_known_lookup(session: Session, settings: Settings) -> KnownLookup:
-    """Certificados já vistos pelo certwatch (nos servidores ou na internet), por nome e data de fim (±1 dia)."""
+    """Certificados já vistos pelo Atalaia Cert (nos servidores ou na internet), por nome e data de fim (±1 dia)."""
     tz = ZoneInfo(settings.timezone)
     index: dict[str, list[tuple[date, str, str, int]]] = {}
 
@@ -1395,7 +1395,7 @@ def make_known_lookup(session: Session, settings: Settings) -> KnownLookup:
 
 # ------------------------------------------------------------------ execução
 def azure_view(session: Session, table: CmdbTable, filename: str, data: bytes, today: date) -> tuple[list[dict], dict]:
-    """Compara a exportação do Azure com a lista de APIs (cópia do certwatch) e com os certificados da CMDB lida agora."""
+    """Compara a exportação do Azure com a lista de APIs (cópia do Atalaia Cert) e com os certificados da CMDB lida agora."""
     from .azure_rec import compare, read_azure
     rows, info = read_azure(data, filename, today)
     apis = [{"ucmdb_id": a.ucmdb_id, "nome": a.name, "aplicacao": a.application, "localizacao": a.location,
@@ -1543,7 +1543,7 @@ def generate(run_id: int, settings: Settings, fetch: Callable | None = None,
             if ren:
                 sources[RENOVACAO] = ren
                 src_info[RENOVACAO] = {"ficheiro": "renovações registadas nos pedidos", "linhas": len(ren),
-                                       "validas": len(ren), "origem": "certwatch"}
+                                       "validas": len(ren), "origem": "Atalaia Cert"}
             if settings.final_ct and use(INTERNET):
                 ct_items, ct_info = ct_source(s, settings, today)
                 if ct_items:
@@ -1598,7 +1598,7 @@ def generate(run_id: int, settings: Settings, fetch: Callable | None = None,
 
 
 def _refresh_cmdb(records: list[dict], settings: Settings) -> None:
-    """A mesma leitura serve para atualizar a CMDB do certwatch (usada na comparação)."""
+    """A mesma leitura serve para atualizar a CMDB do Atalaia Cert (usada na comparação)."""
     if not records:
         return
     from .jobs import IngestAborted, ingest_cmdb
@@ -1606,9 +1606,9 @@ def _refresh_cmdb(records: list[dict], settings: Settings) -> None:
         with session_scope() as s:
             ingest_cmdb(s, settings, records)
     except IngestAborted as exc:
-        log.warning("CMDB do certwatch não atualizada: %s", exc)
+        log.warning("CMDB do Atalaia Cert não atualizada: %s", exc)
     except Exception:
-        log.exception("CMDB do certwatch não atualizada")
+        log.exception("CMDB do Atalaia Cert não atualizada")
 
 
 def generate_in_background(run_id: int, settings: Settings, only: list[str] | None = None) -> None:
@@ -1629,7 +1629,7 @@ def run_file(run: FinalRun, key: str) -> bytes | None:
 
 
 def read_final_xlsx(data: bytes) -> list[dict]:
-    """Lê um CMDB_Final.xlsx (deste certwatch ou do n8n): identificação, ValidTo, Issuer, IssuerName e a cor."""
+    """Lê um CMDB_Final.xlsx (deste Atalaia Cert ou do n8n): identificação, ValidTo, Issuer, IssuerName e a cor."""
     from openpyxl import load_workbook
     wb = load_workbook(io.BytesIO(data), data_only=True)
     try:
@@ -1691,7 +1691,7 @@ VIEWS = {
         "label": "Data mais antiga",
         "compara": "A data da fonte com a da CMDB, quando a da fonte é anterior.",
         "chave": "O nome do certificado como servidor, na porta 443.",
-        "regra": "Para não andar para trás por engano, usa-se o certificado que o servidor apresenta (verificação do certwatch recente ou ligação na hora). Sem resposta, num wildcard ou num nome que não é servidor, a CMDB fica como está.",
+        "regra": "Para não andar para trás por engano, usa-se o certificado que o servidor apresenta (verificação do Atalaia Cert recente ou ligação na hora). Sem resposta, num wildcard ou num nome que não é servidor, a CMDB fica como está.",
         "aplicar": "Os que o servidor confirma passam para Renovados e alterados, com os dados do servidor.",
     },
     "confirmar": {

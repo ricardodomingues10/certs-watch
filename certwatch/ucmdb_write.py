@@ -36,7 +36,7 @@ from .models import AuditLog, FinalRun, UcmdbWrite
 
 log = logging.getLogger(__name__)
 
-# Campos que o certwatch pode escrever (nomes das colunas do certs_update)
+# Campos que o Atalaia Cert pode escrever (nomes das colunas do certs_update)
 WRITABLE = ["Display Label", "Name", "CommonName", "ValidTo", "Localização", "Certificate Status", "SerialNumber",
             "Issuer", "IssuerName", "Subject Alternative Names", "Certificate Type", "Description"]
 DATE_COLUMNS = {"ValidTo"}
@@ -384,7 +384,7 @@ class AzureContext:
 
 
 def next_placeholder_serial(state: dict, used: list) -> str:
-    """SerialNumber x<n> seguinte: depois do maior da CMDB lida e dos já enviados pelo certwatch."""
+    """SerialNumber x<n> seguinte: depois do maior da CMDB lida e dos já enviados pelo Atalaia Cert."""
     import re as _re
     rx = _re.compile(r"^x(\d+)$", _re.I)
     n = 0
@@ -454,7 +454,7 @@ def api_model(us: UcmdbSession, settings: Settings) -> dict:
                          + (f"Atributos de data do tipo {ci_type} na UCMDB: {listed}. " if listed else
                             f"Não consegui ler os atributos do tipo {ci_type} ({cls_note or 'sem atributos de data'}). ")
                          + "Indique o atributo no .env (CERTWATCH_APIS_FIELD_EXPIRY=<atributo>) e reinicie.")
-    # obrigatórios que são a aplicação ou a localização: são esses os campos (o certwatch preenche-os)
+    # obrigatórios que são a aplicação ou a localização: são esses os campos (o Atalaia Cert preenche-os)
     required = [x["name"] for x in cls_attrs if x.get("required")]
     for key, rx in (("aplicacao", APP_KEY), ("localizacao", LOCATION_KEY)):
         if not fields.get(key):
@@ -525,7 +525,7 @@ def _retry_required(us: UcmdbSession, plan: Plan, attrs: dict, out: Outcome, ctx
                        f" O modelo de classes do tipo {api['type']} não indica quais são os obrigatórios"
                        + (f" ({api['cls_note']})" if api.get("cls_note") else "") + ".")
                     + " Indique os que faltam no .env (CERTWATCH_APIS_CREATE_DEFAULTS=atributo=valor;outro=valor) e reinicie."
-                    " O pormenor do erro fica nos logs do servidor UCMDB, não no certwatch.")
+                    " O pormenor do erro fica nos logs do servidor UCMDB, não no Atalaia Cert.")
     return out
 
 
@@ -608,7 +608,7 @@ NOT_IN_TQL = "não aparece no TQL"
 
 
 def check_created_in_tql(us: UcmdbSession, settings: Settings, write_ids: list[int]) -> None:
-    """Um certificado criado tem de aparecer no TQL dos certificados ativos (a leitura da CMDB do certwatch e da
+    """Um certificado criado tem de aparecer no TQL dos certificados ativos (a leitura da CMDB do Atalaia Cert e da
     reconciliação). Se não aparecer, a escrita fica com aviso: foi criado, mas ninguém o vai ver."""
     if not settings.ucmdb_tql:
         return
@@ -835,7 +835,7 @@ def history_conditions(q: str = "", ci: str = "", por: str = "", origem: str = "
 
 
 def api_type_report(settings: Settings, client: httpx.Client | None = None) -> dict:
-    """Só leitura: os atributos do tipo de CI das APIs (modelo de classes + o que as APIs têm) e o que o certwatch
+    """Só leitura: os atributos do tipo de CI das APIs (modelo de classes + o que as APIs têm) e o que o Atalaia Cert
     envia ao criar uma API. Para escolher CERTWATCH_APIS_FIELD_EXPIRY e CERTWATCH_APIS_CREATE_DEFAULTS."""
     from collections import Counter
     from .collectors.ucmdb import SENSITIVE_KEY, class_attributes, enrich_cis, safe_properties

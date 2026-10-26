@@ -111,7 +111,7 @@
     <li>Cada certificado das fontes é procurado na CMDB pelo CommonName. Se o CommonName da CMDB estiver vazio, usa-se Name, Display Label ou Hostname, e o CommonName é preenchido nessa mesma linha.</li>
     <li>São postos de lado (Erros nas fontes): sem CommonName, data vazia ou ilegível, pedidos não emitidos, certificados já expirados e nomes sem domínio.</li>
     <li>CommonName existente: atualiza ValidTo e SerialNumber na linha com a data mais próxima. CommonName novo: certificado novo (Global Id = x no certs_update); o emissor é o configurado para CA1/CA2 e, no AVI, o Issuer_CommonName.</li>
-    <li>Se a fonte tiver uma data anterior à da CMDB, decide o certificado que o servidor apresenta na porta 443 (verificação do certwatch com menos de {{ settings.final_live_max_age_h }} h, ou ligação na hora). Sem resposta, ou num wildcard, a CMDB não é alterada.</li>
+    <li>Se a fonte tiver uma data anterior à da CMDB, decide o certificado que o servidor apresenta na porta 443 (verificação do Atalaia Cert com menos de {{ settings.final_live_max_age_h }} h, ou ligação na hora). Sem resposta, ou num wildcard, a CMDB não é alterada.</li>
     <li>A Description regista o que mudou ("{{ settings.final_description }} - Data de expiracao alterado de … para …").</li>
     <li>Emissor que nenhuma fonte tenha: "Por verificar". Série que falte num certificado da internet ou num renovado: x1, x2… a seguir ao maior da CMDB. Duas alterações com a mesma chave IssuerName + SerialNumber são o mesmo certificado com vários nomes: fica uma (a de um certificado que já está na CMDB, ou a do nome mais curto) e pode trocar.</li>
     <li>"Comparar só esta fonte" lê só essa fonte; as outras não são lidas nem precisam de ficheiro. A CMDB é sempre lida por inteiro.</li>

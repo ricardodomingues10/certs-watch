@@ -1,4 +1,6 @@
-# certwatch
+# Atalaia Cert
+
+> O nome técnico continua a ser `certwatch`: o pacote Python (`python -m certwatch.cli`), as variáveis `CERTWATCH_*`, a pasta `/opt/certwatch` e os serviços do Docker Compose. Só o nome visível mudou.
 
 Aplicação autónoma de gestão de certificados X.509 de uma organização. Não depende do n8n.
 
@@ -95,6 +97,8 @@ ssh -L 8088:127.0.0.1:8088 utilizador@servidor
 Abrir `http://localhost:8088`. O utilizador é `admin` e a palavra-passe é o conteúdo de `secrets/admin_password`.
 
 A interface ocupa a largura toda do ecrã e adapta-se a qualquer tamanho. A navegação fica na coluna à esquerda, agrupada por tarefa: **Hoje** (painel e alertas), **Inventário** (certificados, APIs e segredos, servidores, testes, na internet), **Renovar** (pedidos SMAX, relatório por email), **CMDB** (atualizar a CMDB, editar um certificado, histórico) e **Sistema** (execuções e auditoria, ligação à UCMDB, AVI pela API, como funciona). No telemóvel fica no menu do canto. A caixa no topo procura em tudo. Cada tabela ajusta-se ao espaço que tem: escondem-se primeiro as colunas secundárias e, se ainda não couber, cada linha passa a cartão.
+
+**Logótipo**: o vigia no alto da atalaia, no topo da coluna, olha para a direita e para a esquerda, com a mão sobre os olhos (fica parado quando o sistema pede menos movimento). O topo da torre é um recorte da fotografia; para o gerar de novo: `python tools/logo/gerar_svg.py` (escreve `certwatch/web/static/atalaia.svg` e o ícone parado `atalaia-icone.svg`). Com outra fotografia, primeiro `python tools/logo/recortar.py foto.jpg` (as linhas de corte são dessa fotografia e têm de ser ajustadas). O SVG é servido com uma CSP própria: a animação e a fotografia estão dentro do ficheiro e não corre nenhum script.
 
 **Cliente**: o nome em `CERTWATCH_CLIENT_NAME` e o logo em `branding/logo.svg` (ou `logo.png`, `logo.webp`; fundo transparente, até 2 MB) aparecem no topo da coluna, no título das páginas e no rodapé. O logo aparece como é, com o fundo transparente, centrado sobre a coluna. Se for escuro e se perder na coluna escura, use `CERTWATCH_LOGO_STYLE=claro` (o logo passa a branco) ou `placa` (sobre uma placa clara). Os ficheiros de logo não vão para o repositório: cada instalação tem o seu.
 

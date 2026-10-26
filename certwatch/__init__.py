@@ -1,3 +1,3 @@
-"""certwatch — gestão e verificação de certificados X.509 de uma organização."""
+"""Atalaia Cert (pacote certwatch) — gestão e verificação de certificados X.509 de uma organização."""
 
-__version__ = "0.20.3"
+__version__ = "0.21.0"

@@ -117,7 +117,7 @@
     <form method="post" action="/pedidos/smax/{{ t.id }}/instalado" class="stack mt"><input type="hidden" name="csrf" value="{{ csrf }}">
       <input type="text" name="nota" placeholder="Onde foi instalado / como foi confirmado" required aria-label="Nota">
       <button>Confirmar que está instalado</button></form>
-    <p class="small muted">Para servidores que o certwatch não consegue verificar (rede, porta, aplicação sem TLS direto).</p>
+    <p class="small muted">Para servidores que o Atalaia Cert não consegue verificar (rede, porta, aplicação sem TLS direto).</p>
   </details>
   {% endif %}
 </section>
@@ -141,7 +141,7 @@
   <form method="post" action="/pedidos/smax/{{ t.id }}/fase" class="stack">
     <input type="hidden" name="csrf" value="{{ csrf }}"><input type="hidden" name="acao" value="{{ 'reabrir' if perc.closed else 'fechar' }}">
     <label class="small">Comentário a registar no pedido (opcional)
-      <textarea name="comentario" rows="3">{% if not perc.closed %}Certificado renovado{{ ' (válido até ' ~ perc.target.strftime('%d-%m-%Y') ~ ')' if perc.target }}{{ ' e CMDB atualizada' if perc.steps[3].done }}. Pedido fechado no certwatch.{% endif %}</textarea></label>
+      <textarea name="comentario" rows="3">{% if not perc.closed %}Certificado renovado{{ ' (válido até ' ~ perc.target.strftime('%d-%m-%Y') ~ ')' if perc.target }}{{ ' e CMDB atualizada' if perc.steps[3].done }}. Pedido fechado no Atalaia Cert.{% endif %}</textarea></label>
     <p class="small muted">Campos enviados: <span class="mono">{{ (settings.smax_reopen_fields if perc.closed else settings.smax_close_fields)|tojson }}</span>. A fase é confirmada no SMAX depois do pedido.</p>
     <label><input type="checkbox" name="confirmo" value="1" required> Confirmo que quero {{ 'reabrir' if perc.closed else 'fechar' }} o pedido {{ t.id }} no SMAX.</label>
     <button class="primary">{{ 'Reabrir no SMAX' if perc.closed else 'Fechar no SMAX' }}</button>

@@ -31,7 +31,7 @@
 {% if diag %}
 <section class="card">
   <h2>Diagnóstico da ligação</h2>
-  <p class="small muted">Do servidor do certwatch até ao AVI, sem proxy. Para no primeiro passo que falha.</p>
+  <p class="small muted">Do servidor do Atalaia Cert até ao AVI, sem proxy. Para no primeiro passo que falha.</p>
   <table class="compact"><thead><tr><th>Passo</th><th>Resultado</th><th>O que fazer</th></tr></thead>
   {% for x in diag %}<tr><td><b>{{ x.passo }}</b></td>
     <td class="small"><span class="tag {{ 'tag-ok' if x.ok else 'tag-err' }}">{{ 'ok' if x.ok else 'falhou' }}</span> {{ x.detalhe }}</td>

@@ -18,7 +18,7 @@
 :root, [data-palette="consola"] {
   --bg: #0b1016; --panel: #10171f; --panel-2: #151e28; --ink: #dce3ea; --muted: #8b98a6; --faint: #5d6a78;
   --line: #1d2731; --line-2: #2b3744;
-  --head: #070b10; --head-2: #0f161e; --head-line: #1a232d; --head-ink: #e8eef4; --head-muted: #7f8c9a;
+  --head: #070b10; --head-2: #0f161e; --head-line: #1a232d; --head-ink: #e8eef4; --head-muted: #7f8c9a; --head-accent: #4cc9f0;
   --accent: #4cc9f0; --accent-2: #8ad9f4; --accent-ink: #03141c; --accent-soft: #0f2a36; --accent-ring: #4cc9f0;
   --ok: #3fb950; --ok-soft: #10261a; --warn: #d29922; --warn-soft: #2a2110; --bad: #f85149; --bad-soft: #2d1416;
   --info: #8b98a6; --info-soft: #18212b; --na: #4b5866;
@@ -29,7 +29,7 @@
 [data-palette="assinatura"] {
   --bg: #0e0d15; --panel: #14131e; --panel-2: #1a1926; --ink: #e6e3f2; --muted: #9a95b3; --faint: #6b6684;
   --line: #24213a; --line-2: #34304f;
-  --head: #09080f; --head-2: #13121c; --head-line: #211e33; --head-ink: #efecf8; --head-muted: #8d88a6;
+  --head: #09080f; --head-2: #13121c; --head-line: #211e33; --head-ink: #efecf8; --head-muted: #8d88a6; --head-accent: #b197fc;
   --accent: #b197fc; --accent-2: #cbb8ff; --accent-ink: #160b33; --accent-soft: #241c3d; --accent-ring: #b197fc;
   --ok: #4cc38a; --ok-soft: #10261d; --warn: #e0a53a; --warn-soft: #2b2212; --bad: #f2706a; --bad-soft: #301619;
   --info: #9a95b3; --info-soft: #1d1b2b; --na: #57527a;
@@ -40,7 +40,7 @@
 [data-palette="relatorio"] {
   --bg: #edf0f3; --panel: #ffffff; --panel-2: #f5f7f9; --ink: #101820; --muted: #4e5b68; --faint: #7d8996;
   --line: #dce2e8; --line-2: #c3ccd5;
-  --head: #0f1720; --head-2: #19232e; --head-line: #26313d; --head-ink: #eef2f6; --head-muted: #9aa7b4;
+  --head: #0f1720; --head-2: #19232e; --head-line: #26313d; --head-ink: #eef2f6; --head-muted: #9aa7b4; --head-accent: #8fb0ff;
   --accent: #1f4fd1; --accent-2: #183fa8; --accent-ink: #ffffff; --accent-soft: #e6ecfb; --accent-ring: #6f93f0;
   --ok: #137a3a; --ok-soft: #e1f2e7; --warn: #9a5b00; --warn-soft: #fbf0dc; --bad: #c2261b; --bad-soft: #fde7e5;
   --info: #4e5b68; --info-soft: #edf0f4; --na: #a4adb8;
@@ -70,9 +70,15 @@ a:focus-visible, button:focus-visible, input:focus-visible, select:focus-visible
         overflow-y: auto; padding: 16px 12px 28px; }
 .brand { display: flex; align-items: center; gap: 9px; color: var(--head-ink); }
 .brand:hover { text-decoration: none; }
-.brand .word { font: 500 18px/1 var(--mono); letter-spacing: -.2px; }
-.brand .word b { font-weight: 700; color: var(--accent); }
-.rail > a.brand { padding: 2px 8px 14px; }
+.brand .word { font: 650 17px/1 var(--font); letter-spacing: -.2px; }
+.brand .word b { font: 600 13px/1 var(--mono); color: var(--head-accent); letter-spacing: .02em; }
+/* a atalaia com o vigia (animado) ao lado do nome; a base da torre esbate-se na coluna */
+.rail > a.brand { padding: 0 8px 12px; }
+.brand-tower { align-items: flex-end; gap: 12px; }
+.brand-tower .tower { display: block; width: 78px; height: auto; flex: none; }
+.brand-tower .wordmark { display: flex; flex-direction: column; gap: 7px; padding-bottom: 22px; }
+.brand-tower .name { font: 700 25px/1 var(--font); letter-spacing: -.4px; color: var(--head-ink); }
+.brand-tower .kind { font: 600 13px/1 var(--mono); letter-spacing: .14em; color: var(--head-accent); }
 .client { display: flex; flex-direction: column; align-items: center; gap: 8px; margin: 0 0 6px; padding: 14px 8px 16px;
           border-top: 1px solid var(--head-line); border-bottom: 1px solid var(--head-line); text-align: center; }
 /* logo do cliente: transparente sobre a coluna (original), em branco (claro) ou numa placa clara (placa) */

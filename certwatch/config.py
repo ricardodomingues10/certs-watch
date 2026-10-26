@@ -251,7 +251,7 @@ class Settings:
     smtp_password: str | None = None
     report_to: list[str] = field(default_factory=list)
     report_allowed_domains: list[str] = field(default_factory=list)
-    report_signature: str = "certwatch"
+    report_signature: str = "Atalaia Cert"
     report_window_days: int = 90
     report_alert_days: int = 20
 
@@ -398,7 +398,7 @@ class Settings:
             smtp_password=_secret("smtp_password", "CERTWATCH_SMTP_PASSWORD"),
             report_to=_str_list(_env("CERTWATCH_REPORT_TO", "")),
             report_allowed_domains=_str_list(_env("CERTWATCH_REPORT_ALLOWED_DOMAINS", "")),
-            report_signature=_env("CERTWATCH_REPORT_SIGNATURE", "certwatch"),
+            report_signature=_env("CERTWATCH_REPORT_SIGNATURE", "Atalaia Cert"),
             report_window_days=int(_env("CERTWATCH_REPORT_WINDOW_DAYS", "90")),
             report_alert_days=int(_env("CERTWATCH_REPORT_ALERT_DAYS", "20")),
             final_sources=[x.upper() for x in _str_list(_env("CERTWATCH_FINAL_SOURCES", "CA1,CA2,AVI"))],

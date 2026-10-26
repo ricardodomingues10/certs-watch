@@ -53,7 +53,7 @@ def configured(settings: Settings) -> str:
     bad = sorted({"avi_user", "avi_password"} & UNREADABLE_SECRETS)
     if bad:
         files = " ".join(f"secrets/{b}" for b in bad)
-        return (f"O certwatch não consegue ler {files}: o dono tem de ser o UID 10001. No servidor: "
+        return (f"O Atalaia Cert não consegue ler {files}: o dono tem de ser o UID 10001. No servidor: "
                 f"sudo chown 10001:10001 {files} && sudo chmod 400 {files}, e docker compose up -d.")
     if not settings.avi_user or not settings.avi_password:
         return "Faltam as credenciais do AVI nos ficheiros de segredo secrets/avi_user e secrets/avi_password."
@@ -110,7 +110,7 @@ def _explain(exc: Exception, url: str) -> str:
     text = str(exc)
     if "CERTIFICATE_VERIFY_FAILED" in text or "certificate verify failed" in text:
         return (f"O certificado do controlador AVI ({url}) não é reconhecido. Coloque a raiz (e o intermédio) da CA "
-                "que o emitiu na pasta trust/ do certwatch e reinicie. A verificação não é desligada.")
+                "que o emitiu na pasta trust/ do Atalaia Cert e reinicie. A verificação não é desligada.")
     if isinstance(exc, httpx.ConnectTimeout):
         return (f"A ligação ao controlador AVI ({url}) não abriu em 10 s: normalmente é a firewall entre este "
                 "servidor e o AVI (porta 443). Use \"Diagnosticar a ligação\" para ver em que passo para.")

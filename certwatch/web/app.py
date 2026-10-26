@@ -72,7 +72,7 @@ async def lifespan(_app: FastAPI):
     yield
 
 
-app = FastAPI(title="certwatch", version=__version__, lifespan=lifespan, docs_url=None, redoc_url=None, openapi_url=None)
+app = FastAPI(title="Atalaia Cert", version=__version__, lifespan=lifespan, docs_url=None, redoc_url=None, openapi_url=None)
 app.middleware("http")(security_middleware)
 app.mount("/static", StaticFiles(directory=BASE / "static"), name="static")
 templates = Jinja2Templates(directory=BASE / "templates")

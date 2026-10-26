@@ -48,7 +48,7 @@ def client(settings: Settings) -> httpx.Client:
     if not settings.smax_verify_tls:
         verify = False
     return httpx.Client(base_url=settings.smax_url.rstrip("/"), verify=verify,
-                        timeout=httpx.Timeout(30.0, read=120.0), headers={"User-Agent": "certwatch"})
+                        timeout=httpx.Timeout(30.0, read=120.0), headers={"User-Agent": "AtalaiaCert"})
 
 
 def ticket_url(settings: Settings, ticket_id: str) -> str:

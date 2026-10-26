@@ -138,3 +138,21 @@ def test_client_branding(env, tmp_path, monkeypatch):
         assert r.status_code == 200 and r.headers["content-type"].startswith("image/svg+xml")
         assert "sandbox" in r.headers["content-security-policy"]                                # o SVG não corre scripts
         assert c.get("/marca/logo").status_code == 401                                          # só com sessão
+
+
+def test_atalaia_brand_and_logo(env):
+    """O nome visível é Atalaia Cert e o logótipo animado (o vigia na atalaia) é servido com uma CSP própria:
+    a animação está num <style> do SVG, a fotografia em data:, e nunca corre scripts."""
+    from certwatch.web.app import app
+    from certwatch.web.security import SVG_CSP
+    with TestClient(app) as c:
+        page = c.get("/certificados", auth=AUTH).text
+        assert "· Atalaia Cert</title>" in page.replace("\n", "") or " · Atalaia Cert" in page
+        assert 'src="/static/atalaia.svg"' in page and 'href="/static/atalaia-icone.svg"' in page
+        assert ">Atalaia<" in page and "certwatch" not in page.split("<main>")[0].lower().replace("cw_", "")
+        r = c.get("/static/atalaia.svg")
+        assert r.status_code == 200 and r.headers["content-security-policy"] == SVG_CSP
+        svg = r.text
+        assert "<script" not in svg and "prefers-reduced-motion" in svg and 'id="vigia"' in svg
+        assert "@keyframes" not in c.get("/static/atalaia-icone.svg").text                     # o ícone é parado
+        assert c.get("/certificados").headers["www-authenticate"] == 'Basic realm="Atalaia Cert"'

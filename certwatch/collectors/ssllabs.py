@@ -21,7 +21,7 @@ from ..trust import build_bundle
 
 log = logging.getLogger(__name__)
 API = "https://api.ssllabs.com/api/v4"
-USER_AGENT = "certwatch/0.4 (certificate monitoring for the domain owner)"
+USER_AGENT = "AtalaiaCert/0.21 (certificate monitoring for the domain owner)"
 GOOD_GRADES = ("A+", "A", "A-")
 GRADE_ORDER = ("A+", "A", "A-", "B", "C", "D", "E", "F", "M", "T")   # do melhor para o pior
 

@@ -22,7 +22,7 @@
     <td class="nowrap">{{ r.valid_to|dt if r.valid_to else '—' }}</td><td class="small">{{ 'ativo' if r.active else 'inativo' }}</td>
     <td><a class="button" href="/ucmdb/certificado/{{ r.id }}">Editar</a></td></tr>
   {% else %}
-  <tr><td colspan="5"><div class="empty"><b>Nenhum certificado encontrado</b>A pesquisa usa a cópia da CMDB lida pelo certwatch.</div></td></tr>
+  <tr><td colspan="5"><div class="empty"><b>Nenhum certificado encontrado</b>A pesquisa usa a cópia da CMDB lida pelo Atalaia Cert.</div></td></tr>
   {% endfor %}
   </tbody>
 </table>

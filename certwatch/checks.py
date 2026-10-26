@@ -51,7 +51,7 @@ CHECKS: tuple[CheckDef, ...] = (
     CheckDef(
         "rede.dns", "rede", "Nome resolve no DNS",
         "O nome do servidor existe no DNS?",
-        "Resolve o nome a partir do servidor onde o certwatch corre (mesmo DNS interno).",
+        "Resolve o nome a partir do servidor onde o Atalaia Cert corre (mesmo DNS interno).",
         "O nome não existe ou o DNS deste servidor não o conhece. Pode ser um serviço desativado ou um registo errado na CMDB.",
         ("Confirmar com a equipa de sistemas se o serviço ainda existe.",
          "Se foi desativado, marcar o certificado como inativo na CMDB.",
@@ -61,9 +61,9 @@ CHECKS: tuple[CheckDef, ...] = (
         "rede.porta", "rede", "Porta aceita ligações",
         "O servidor responde na porta indicada?",
         "Abre uma ligação TCP à porta (443 por omissão) com tempo limite.",
-        "O servidor não respondeu: está desligado, a porta é outra, ou uma firewall bloqueia o servidor do certwatch.",
+        "O servidor não respondeu: está desligado, a porta é outra, ou uma firewall bloqueia o servidor do Atalaia Cert.",
         ("Verificar se o serviço está ativo e em que porta escuta.",
-         "Pedir abertura de firewall do servidor certwatch para esse destino e porta.",
+         "Pedir abertura de firewall do servidor Atalaia Cert para esse destino e porta.",
          "Se a porta não é a 443, adicionar o endpoint com a porta correta em Servidores."),
     ),
     CheckDef(
@@ -93,7 +93,7 @@ CHECKS: tuple[CheckDef, ...] = (
          "Apache: SSLCertificateFile com fullchain (ou SSLCertificateChainFile) · nginx: ssl_certificate com o ficheiro fullchain.pem.",
          "IIS: importar a intermédia em \"Intermediate Certification Authorities\" do computador · AVI: importar a CA e associá-la ao certificado.",
          "Java/Tomcat: incluir a cadeia completa no keystore.",
-         "Se a raiz é interna e não reconhecida, adicionar a raiz certa em trust/ do certwatch (confirmar com a PKI)."),
+         "Se a raiz é interna e não reconhecida, adicionar a raiz certa em trust/ do Atalaia Cert (confirmar com a PKI)."),
     ),
     CheckDef(
         "cadeia.autoassinado", "cadeia", "Não é autoassinado",

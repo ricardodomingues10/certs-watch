@@ -1,4 +1,4 @@
-"""O que a conta da UCMDB usada pelo certwatch pode fazer pela REST API.
+"""O que a conta da UCMDB usada pelo Atalaia Cert pode fazer pela REST API.
 
 Leitura (nunca muda nada):
 1. POST /rest-api/authenticate — a conta entra e tem acesso à API ("Access to SDK").
@@ -278,7 +278,7 @@ def create_test(settings: Settings, ci_type: str, attr: str, value: str, actor: 
 
 
 def delete_test(settings: Settings, ci_id: str, client: httpx.Client | None = None) -> Step:
-    """Apaga um certificado de teste criado pelo certwatch — e só esse: o nome tem de ser certwatch-teste-….invalid
+    """Apaga um certificado de teste criado pelo Atalaia Cert — e só esse: o nome tem de ser certwatch-teste-….invalid
     e a Description a do teste."""
     what, call = f"Apagar o certificado de teste {ci_id}", "DELETE /dataModel/ci/{id}"
     if not re.fullmatch(r"[0-9a-fA-F]{8,64}", ci_id or ""):
@@ -293,7 +293,7 @@ def delete_test(settings: Settings, ci_id: str, client: httpx.Client | None = No
             if not (name.startswith(TEST_PREFIX) and name.endswith(".invalid")
                     and str(props.get("description") or "").startswith(TEST_MARK)):
                 return Step(what, call, False, f"O CI {ci_id} ({name or 'sem nome'}) não é um certificado de teste do "
-                                               "certwatch: não foi apagado.")
+                                               "Atalaia Cert: não foi apagado.")
             try:
                 d = s.client.request("DELETE", f"/dataModel/ci/{ci_id}", headers=s.headers)
             except httpx.HTTPError as exc:

@@ -8,7 +8,7 @@ from fastapi.security import HTTPBasic, HTTPBasicCredentials
 
 from ..config import get_settings
 
-_basic = HTTPBasic(realm="certwatch")
+_basic = HTTPBasic(realm="Atalaia Cert")
 CSRF_COOKIE = "cw_csrf"
 
 
@@ -20,7 +20,7 @@ def current_user(credentials: HTTPBasicCredentials = Depends(_basic)) -> str:
     ok_pass = secrets.compare_digest(credentials.password.encode(), s.admin_password.encode())
     if not (ok_user and ok_pass):
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Credenciais inválidas",
-                            headers={"WWW-Authenticate": 'Basic realm="certwatch"'})
+                            headers={"WWW-Authenticate": 'Basic realm="Atalaia Cert"'})
     return credentials.username
 
 
@@ -38,6 +38,7 @@ SECURITY_HEADERS = {
     "Referrer-Policy": "no-referrer",
     "Cache-Control": "no-store",
 }
+SVG_CSP = "default-src 'none'; style-src 'unsafe-inline'; img-src data:; sandbox"
 
 
 async def security_middleware(request: Request, call_next):
@@ -47,6 +48,9 @@ async def security_middleware(request: Request, call_next):
     if request.cookies.get(CSRF_COOKIE) != token:
         response.set_cookie(CSRF_COOKIE, token, httponly=True, samesite="strict",
                             secure=get_settings().cookie_secure, path="/")
+    if request.url.path.startswith("/static/") and request.url.path.endswith(".svg"):
+        # os SVG da aplicação (o logótipo) trazem a animação em <style> e a fotografia em data:; nunca correm scripts
+        response.headers["Content-Security-Policy"] = SVG_CSP
     for k, v in SECURITY_HEADERS.items():
         response.headers.setdefault(k, v)
     return response

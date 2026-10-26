@@ -22,7 +22,7 @@ from ..normalize import norm_host, norm_issuer, norm_serial, parse_iso
 from ..trust import build_bundle
 
 log = logging.getLogger(__name__)
-USER_AGENT = "certwatch/0.4 (certificate monitoring for the domain owner)"
+USER_AGENT = "AtalaiaCert/0.21 (certificate monitoring for the domain owner)"
 MAX_PAGES = 20
 
 

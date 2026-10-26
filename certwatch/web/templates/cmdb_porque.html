@@ -2,21 +2,21 @@
 {% block title %}Porque não aparece{% endblock %}
 {% block crumb %}CMDB · <a href="/cmdb/historico">Histórico de alterações</a>{% endblock %}
 {% block page_title %}Porque é que o certificado não aparece na leitura da CMDB{% endblock %}
-{% block lede %}A importação da CMDB e a reconciliação leem os certificados pelo TQL <span class="mono">{{ settings.ucmdb_tql }}</span>. Um certificado criado que o TQL não devolve fica invisível para o certwatch. Aqui compara-se este certificado com os que o TQL devolve. Só leitura.{% endblock %}
+{% block lede %}A importação da CMDB e a reconciliação leem os certificados pelo TQL <span class="mono">{{ settings.ucmdb_tql }}</span>. Um certificado criado que o TQL não devolve fica invisível para o Atalaia Cert. Aqui compara-se este certificado com os que o TQL devolve. Só leitura.{% endblock %}
 {% block content %}
 {% if erro %}<div class="note bad">{{ erro }}</div>{% endif %}
 {% if rep %}
 <section class="card">
   <h2>CI <span class="mono">{{ rep.ci }}</span> <small>{{ rep.cn }} · {{ rep.tipo }}</small></h2>
   {% if rep.no_tql %}
-  <p><span class="tag tag-ok">já aparece</span> O TQL {{ rep.tql }} devolve agora este certificado. Corra <b>Importar certificados da CMDB</b> (Sistema → Execuções) para o certwatch o ver.</p>
+  <p><span class="tag tag-ok">já aparece</span> O TQL {{ rep.tql }} devolve agora este certificado. Corra <b>Importar certificados da CMDB</b> (Sistema → Execuções) para o Atalaia Cert o ver.</p>
   {% elif rep.diferencas %}
   <p>O TQL não o devolve. Difere dos {{ rep.amostra }} certificados do TQL comparados nestes atributos; o filtro do TQL está provavelmente num deles:</p>
   <div class="scroll"><table class="compact">
     <thead><tr><th>Atributo</th><th>Este certificado</th><th>Os certificados do TQL</th></tr></thead>
     {% for d in rep.diferencas %}<tr><td class="mono small">{{ d.atributo }}</td><td class="small">{{ d.este }}</td><td class="small">{{ d.outros }}</td></tr>{% endfor %}
   </table></div>
-  <p class="small mt">Corrija o valor em <a href="/ucmdb/certificado/{{ rep.ci|urlencode }}">Editar um certificado</a> (ou na UCMDB) e importe de novo. Se o atributo não estiver entre os que o certwatch escreve, peça a quem gere o TQL qual é o critério.</p>
+  <p class="small mt">Corrija o valor em <a href="/ucmdb/certificado/{{ rep.ci|urlencode }}">Editar um certificado</a> (ou na UCMDB) e importe de novo. Se o atributo não estiver entre os que o Atalaia Cert escreve, peça a quem gere o TQL qual é o critério.</p>
   {% else %}
   <p>O TQL não o devolve, mas não encontrei nenhum atributo em que difira dos {{ rep.amostra }} certificados comparados. O critério do TQL pode estar numa relação (ex.: ligado a uma aplicação) ou num atributo que a REST não devolve: confirme com quem gere o TQL <span class="mono">{{ rep.tql }}</span>.</p>
   {% endif %}

@@ -2,7 +2,7 @@
 {% block title %}Ligação à UCMDB{% endblock %}
 {% block crumb %}Sistema{% endblock %}
 {% block page_title %}Ligação à UCMDB{% endblock %}
-{% block lede %}Verifica o que a conta configurada no certwatch (segredo <span class="mono">ucmdb_user</span>) consegue fazer pela REST API da UCMDB: entrar, ler as listas (TQL) e, se pedir, atualizar um CI ou criar um certificado de teste. A password nunca aparece aqui nem nos registos.{% endblock %}
+{% block lede %}Verifica o que a conta configurada no Atalaia Cert (segredo <span class="mono">ucmdb_user</span>) consegue fazer pela REST API da UCMDB: entrar, ler as listas (TQL) e, se pedir, atualizar um CI ou criar um certificado de teste. A password nunca aparece aqui nem nos registos.{% endblock %}
 {% block content %}
 {% if erro %}<div class="note bad">{{ erro }}</div>{% endif %}
 
@@ -18,7 +18,7 @@
 
 <section class="card">
   <h2>Atributos das APIs</h2>
-  <p class="small muted">Os atributos do tipo de CI da lista de APIs ({{ settings.ucmdb_tql_apis or 'TQL não definido' }}): quais são obrigatórios, quantas APIs os têm preenchidos e o que o certwatch envia ao criar uma. Não muda nada.</p>
+  <p class="small muted">Os atributos do tipo de CI da lista de APIs ({{ settings.ucmdb_tql_apis or 'TQL não definido' }}): quais são obrigatórios, quantas APIs os têm preenchidos e o que o Atalaia Cert envia ao criar uma. Não muda nada.</p>
   <a class="button" href="/cmdb-final/permissoes/apis?ver=1">Ver atributos das APIs</a>
 </section>
 

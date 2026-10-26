@@ -258,7 +258,7 @@ def texts_for(*layers: dict | None) -> dict:
 
 def text_context(sel: dict, desde: int, ate: int, alert_days: int, ct_dias: int, now: datetime, signature: str) -> dict:
     rel = sel["janela"]
-    return {"saudacao": _greeting(now), "assinatura": signature or "certwatch",
+    return {"saudacao": _greeting(now), "assinatura": signature or "Atalaia Cert",
             "janela": f"nos próximos {ate} dias" if desde <= 0 else f"entre {desde} e {ate} dias",
             "desde": desde, "ate": ate, "alerta": alert_days,
             "n_alerta": sum(1 for r in rel if 0 <= r["dias"] <= alert_days),

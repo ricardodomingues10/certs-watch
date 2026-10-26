@@ -3,7 +3,7 @@
     1 Pedido aberto -> 2 Certificado renovado -> 3 Instalado no servidor -> 4 CMDB atualizada -> 5 Pedido fechado
 
 Cada passo fica feito quando há prova (o pedido, uma renovação registada, o que o servidor apresenta, a CMDB lida
-pelo certwatch, a fase no SMAX). O que falta mostra a ação seguinte.
+pelo Atalaia Cert, a fase no SMAX). O que falta mostra a ação seguinte.
 
 Uma renovação registada aqui (do certificado que o servidor apresenta, do ficheiro do certificado ou à mão a
 partir de um print) entra como fonte "RENOVACAO" na atualização da CMDB (cmdb_final).
@@ -172,7 +172,7 @@ def pipeline(t: SmaxTicket, settings: Settings, ctx: Context) -> dict:
     for r in ctx.renewals.get(cn, []):
         d = _day(r.valid_to, tz)
         if d and (old is None or d > old):
-            ev.append({"fonte": f"Registada no certwatch ({ORIGIN_LABELS.get(r.origin, r.origin)})", "data": d,
+            ev.append({"fonte": f"Registada no Atalaia Cert ({ORIGIN_LABELS.get(r.origin, r.origin)})", "data": d,
                        "serie": r.serial, "emissor": r.issuer, "por": r.created_by, "id": r.id, "registada": True})
     live: list[dict] = []
     for ep in ctx.snap.ep_by_cn.get(cn, []):
