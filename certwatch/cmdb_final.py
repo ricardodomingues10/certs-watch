@@ -1423,6 +1423,64 @@ def start_run(session: Session, actor: str, only: list[str] | None = None) -> Fi
     return run
 
 
+# ------------------------------------------------------------------ AVI pela REST API
+AVI = "AVI"
+AVI_API_ACTOR = "API do AVI"
+
+
+def store_avi_api(session: Session, settings: Settings, today: date, client=None) -> tuple[FinalInput, dict]:
+    """Lê os certificados do AVI pela API e guarda-os como o ficheiro do AVI (o mesmo formato do script).
+    O ficheiro da diretoria import/ não é tocado."""
+    from .collectors import avi as avi_api
+    res = avi_api.fetch(settings, client, with_ca=False)
+    if not res.vs:
+        raise avi_api.AviError("A API do AVI não devolveu nenhum certificado.")
+    data = avi_api.to_csv(res.vs)
+    name = f"avi-api-{datetime.now(ZoneInfo(settings.timezone)):%Y%m%d-%H%M}.csv"
+    items, info = read_source(AVI, name, data, today)        # o mesmo leitor do ficheiro
+    up = FinalInput(source=AVI, name=name, sha256=hashlib.sha256(data).hexdigest(), size=len(data), data=data,
+                    uploaded_by=AVI_API_ACTOR)
+    session.add(up)
+    session.flush()
+    return up, {"certificados": len(res.vs), "validas": info.get("validas", sum(1 for x in items if x.keep)),
+                "pedidos": res.pedidos, "segundos": res.segundos}
+
+
+def _rows_by_name(headers: list[str], rows: list[list]) -> dict[str, dict]:
+    idx = {norm_header(h): i for i, h in enumerate(headers)}
+    get = lambda r, k: (str(r[idx[k]]).strip() if k in idx and idx[k] < len(r) and r[idx[k]] is not None else "")
+    out = {}
+    for r in rows:
+        name = get(r, "nome") or get(r, "subjectcommonname")
+        if name:
+            out[name] = {"cn": get(r, "subjectcommonname"), "fim": get(r, "validitynotafter"),
+                         "serial": get(r, "serialnumber").lower(), "emissor": get(r, "issuercommonname")}
+    return out
+
+
+def avi_compare(file_name: str, file_data: bytes, api_csv: bytes) -> dict:
+    """Compara o ficheiro do AVI com a leitura pela API, certificado a certificado (pelo Nome do objeto no AVI)."""
+    fh, fr = read_table_bytes(file_data, Path(file_name).suffix)
+    ah, ar = read_table_bytes(api_csv, ".csv")
+    f, a = _rows_by_name(fh, fr), _rows_by_name(ah, ar)
+    diffs = []
+    for name in sorted(set(f) & set(a)):
+        x, y = f[name], a[name]
+        what = []
+        if parse_day(x["fim"]).day != parse_day(y["fim"]).day:
+            what.append(f"fim: ficheiro {x['fim'] or '(vazio)'}, API {y['fim'] or '(vazio)'}")
+        if norm_serial(x["serial"]) != norm_serial(y["serial"]):
+            what.append(f"série: ficheiro {x['serial'] or '(vazia)'}, API {y['serial'] or '(vazia)'}")
+        if x["cn"].lower() != y["cn"].lower():
+            what.append(f"CommonName: ficheiro {x['cn']}, API {y['cn']}")
+        if what:
+            diffs.append({"nome": name, "cn": y["cn"], "diferencas": what})
+    only_f = [{"nome": n, **f[n]} for n in sorted(set(f) - set(a))]
+    only_a = [{"nome": n, **a[n]} for n in sorted(set(a) - set(f))]
+    return {"ficheiro": len(f), "api": len(a), "iguais": len(set(f) & set(a)) - len(diffs),
+            "diferentes": diffs, "so_ficheiro": only_f, "so_api": only_a}
+
+
 def all_sources(settings: Settings) -> list[str]:
     """Todas as fontes que podem ser reconciliadas, pela ordem da página."""
     return [*settings.final_sources, AZURE_SOURCE, *([INTERNET] if settings.final_ct else []), RENOVACAO]
@@ -1452,6 +1510,16 @@ def generate(run_id: int, settings: Settings, fetch: Callable | None = None,
     try:
         table, records = (fetch or fetch_cmdb_table)(settings)
         with session_scope() as s:
+            avi_note = ""
+            if (AVI in settings.final_sources and use(AVI) and settings.avi_source in ("api", "auto")
+                    and settings.avi_url):
+                from .collectors.avi import AviError
+                try:
+                    store_avi_api(s, settings, today)
+                except AviError as exc:
+                    if settings.avi_source == "api":
+                        raise FinalError(f"AVI pela API: {exc}") from None
+                    avi_note = f"AVI pela API falhou ({exc}); foi usado o ficheiro."
             inputs = current_inputs(s, settings)
             files = [src for src in settings.final_sources if use(src)]
             missing = [src for src in files if src not in inputs]
@@ -1465,8 +1533,8 @@ def generate(run_id: int, settings: Settings, fetch: Callable | None = None,
                 data = _input_bytes(s, info)
                 items, rinfo = read_source(src, info["nome"], data, today)
                 sources[src] = items
-                src_info[src] = {**rinfo, "origem": info["origem"], "quando": info["quando"].isoformat(),
-                                 "sha256": hashlib.sha256(data).hexdigest()}
+                src_info[src] = {**rinfo, "origem": "api" if info.get("por") == AVI_API_ACTOR else info["origem"],
+                                 "quando": info["quando"].isoformat(), "sha256": hashlib.sha256(data).hexdigest()}
             from .renewal import source_items
             ren = [SourceItem(source=RENOVACAO, row_no=n, cn=x["cn"], day=x["day"], serial=x["serial"], issuer=x["issuer"],
                               san=x["san"], ref=x["ref"], auth=x["origin"] if x["origin"] in ("servidor", "ficheiro") else "",
@@ -1494,6 +1562,8 @@ def generate(run_id: int, settings: Settings, fetch: Callable | None = None,
                     res.problems.extend(ainfo["problemas"])
                 except ValueError as exc:
                     res.problems.append({"fonte": AZURE_SOURCE, "cn": "", "erro": f"Ficheiro do Azure ignorado: {exc}"})
+            if avi_note:
+                res.problems.append({"fonte": AVI, "cn": "", "erro": avi_note})
             decisions = {d.key: d for d in s.scalars(select(FinalDecision))}
             for c in res.changes:
                 c["incluir"], c["porque"] = default_include(c, decisions)

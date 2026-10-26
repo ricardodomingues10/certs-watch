@@ -185,6 +185,17 @@ class Settings:
     unreachable_after: int
 
     # Regras
+    # AVI pela REST API (alternativa ao ficheiro avi* em import/)
+    avi_url: str = ""
+    avi_tenant: str = "admin"
+    avi_endpoint: str = "/api/sslkeyandcertificate?type=SSL_CERTIFICATE_TYPE_VIRTUALSERVICE"
+    avi_endpoint_ca: str = "/api/sslkeyandcertificate?type=SSL_CERTIFICATE_TYPE_CA"
+    avi_user: str | None = None
+    avi_password: str | None = None
+    avi_verify_tls: bool = True
+    avi_version: str = ""
+    avi_page_size: int = 100
+    avi_source: str = "ficheiro"        # ficheiro | api | auto (API, e o ficheiro se a API falhar)
     expiry_thresholds: dict[str, int] = field(default_factory=dict)
     lifetime_warn_pct: float = 0.2
     # Renovação automática (ACME / Let's Encrypt): emissores reconhecidos e prazo a partir do qual se alerta
@@ -311,6 +322,16 @@ class Settings:
             import_sources={**_kv_map(DEFAULT_IMPORT_SOURCES), **_kv_map(_env("CERTWATCH_IMPORT_SOURCES", ""))},
             import_issuers=_kv_map(_env("CERTWATCH_IMPORT_ISSUERS", "")),
             apis_create_defaults=_attr_map(_env("CERTWATCH_APIS_CREATE_DEFAULTS", "")),
+            avi_url=_env("CERTWATCH_AVI_URL", ""),
+            avi_tenant=_env("CERTWATCH_AVI_TENANT", "admin"),
+            avi_endpoint=_env("CERTWATCH_AVI_ENDPOINT", "/api/sslkeyandcertificate?type=SSL_CERTIFICATE_TYPE_VIRTUALSERVICE"),
+            avi_endpoint_ca=_env("CERTWATCH_AVI_ENDPOINT_CA", "/api/sslkeyandcertificate?type=SSL_CERTIFICATE_TYPE_CA"),
+            avi_user=_secret("avi_user", "CERTWATCH_AVI_USER"),
+            avi_password=_secret("avi_password", "CERTWATCH_AVI_PASSWORD"),
+            avi_verify_tls=_env("CERTWATCH_AVI_VERIFY_TLS", "true").lower() != "false",
+            avi_version=_env("CERTWATCH_AVI_VERSION", ""),
+            avi_page_size=int(_env("CERTWATCH_AVI_PAGE_SIZE", "100")),
+            avi_source=(_env("CERTWATCH_AVI_SOURCE", "ficheiro") or "ficheiro").lower(),
             internal_suffixes=_str_list(_env("CERTWATCH_INTERNAL_SUFFIXES", ".local,.lan,.internal,.intranet,.corp")),
             internal_issuer_patterns=_str_list(_env("CERTWATCH_INTERNAL_ISSUER_PATTERNS", "internal,interna")),
             trust_dir=Path(_env("CERTWATCH_TRUST_DIR", "/app/trust")),

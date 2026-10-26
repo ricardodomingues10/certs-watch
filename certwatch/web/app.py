@@ -1543,6 +1543,99 @@ def final_generate(request: Request, csrf: str = Form(""), fonte: list[str] = Fo
     return RedirectResponse(f"/cmdb-final/{run_id}", status_code=303)
 
 
+AVI_CLIENT = None       # testes: cliente httpx para o AVI
+
+
+def _avi_file(s, settings):
+    """O ficheiro do AVI que a reconciliação usa sem a API: o da diretoria import/ ou o último carregado à mão."""
+    f = cf.source_files(s, settings).get(cf.AVI) or {}
+    up = s.scalar(select(FinalInput).where(FinalInput.source == cf.AVI, FinalInput.uploaded_by != cf.AVI_API_ACTOR)
+                  .order_by(FinalInput.id.desc()).limit(1))
+    d = f.get("diretoria")
+    if up is not None and (d is None or as_utc(up.uploaded_at) >= d["quando"]):
+        return up.name, up.data, f"carregado por {up.uploaded_by}, {fmt_dt(up.uploaded_at, True)}"
+    if d is not None:
+        return d["nome"], Path(d["path"]).read_bytes(), f"import/{d['nome']}, {fmt_dt(d['quando'], True)}"
+    return None, None, ""
+
+
+def _avi_render(request, user, **kw):
+    from ..collectors import avi as avi_api
+    settings = get_settings()
+    return render(request, "avi.html", user, settings=settings, problem=avi_api.configured(settings),
+                  **{"res": None, "cmp": None, "erro": "", "ficheiro": "", "cas": [], **kw})
+
+
+@app.get("/cmdb-final/avi")
+def avi_page(request: Request, user: str = Depends(current_user)):
+    return _avi_render(request, user)
+
+
+@app.post("/cmdb-final/avi/testar")
+def avi_test(request: Request, csrf: str = Form(""), user: str = Depends(current_user)):
+    """Lê o AVI pela API (só leitura) e compara com o ficheiro atual. Não muda a fonte da reconciliação."""
+    from ..collectors import avi as avi_api
+    check_csrf(request, csrf)
+    settings = get_settings()
+    try:
+        res = avi_api.fetch(settings, AVI_CLIENT)
+    except avi_api.AviError as exc:
+        with session_scope() as s:
+            audit(s, user, "avi.testar", settings.avi_url, resultado="erro", erro=str(exc)[:300])
+        return _avi_render(request, user, erro=str(exc))
+    cmp, ficheiro = None, ""
+    with session_scope() as s:
+        try:
+            name, data, ficheiro = _avi_file(s, settings)
+        except OSError as exc:
+            name, data, ficheiro = None, None, f"não foi possível ler o ficheiro: {exc}"
+        if data is not None:
+            try:
+                cmp = cf.avi_compare(name, data, avi_api.to_csv(res.vs))
+            except Exception as exc:  # ficheiro ilegível: a leitura pela API continua a ser mostrada
+                ficheiro += f" (não comparado: {exc})"
+        audit(s, user, "avi.testar", settings.avi_url, resultado="ok", certificados=len(res.vs), cas=len(res.ca),
+              pedidos=res.pedidos)
+    today = utcnow().astimezone(_tz()).date()
+    cas = sorted(res.ca, key=lambda r: (cf.parse_day(r["Validity_NotAfter"]).day or today))
+    for r in cas:
+        d = cf.parse_day(r["Validity_NotAfter"]).day
+        r["dias"] = (d - today).days if d else None
+    return _avi_render(request, user, res=res, cmp=cmp, ficheiro=ficheiro, cas=cas)
+
+
+@app.post("/cmdb-final/avi/usar")
+def avi_use(request: Request, csrf: str = Form(""), user: str = Depends(current_user)):
+    """Lê o AVI pela API e guarda a leitura como fonte AVI da próxima reconciliação (o ficheiro fica onde está)."""
+    from ..collectors import avi as avi_api
+    check_csrf(request, csrf)
+    settings = get_settings()
+    try:
+        with session_scope() as s:
+            up, info = cf.store_avi_api(s, settings, utcnow().astimezone(_tz()).date(), AVI_CLIENT)
+            audit(s, user, "avi.usar", up.name, **info)
+    except (avi_api.AviError, cf.FinalError) as exc:
+        return _avi_render(request, user, erro=str(exc))
+    return RedirectResponse("/cmdb-final#fontes", status_code=303)
+
+
+@app.get("/cmdb-final/avi/csv")
+def avi_csv(tipo: str = "vs", user: str = Depends(current_user)):
+    """O CSV no formato do script, lido agora pela API (certificados dos virtual services ou CAs)."""
+    from ..collectors import avi as avi_api
+    settings = get_settings()
+    try:
+        res = avi_api.fetch(settings, AVI_CLIENT, with_ca=tipo == "ca")
+    except avi_api.AviError as exc:
+        raise HTTPException(502, str(exc))
+    with session_scope() as s:
+        audit(s, user, "avi.exportar", tipo, certificados=len(res.ca if tipo == "ca" else res.vs))
+    data = avi_api.to_csv(res.ca if tipo == "ca" else res.vs)
+    name = f"avi-{'ca' if tipo == 'ca' else 'certificados'}-api.csv"
+    return Response(data, media_type="text/csv; charset=utf-8",
+                    headers={"Content-Disposition": f'attachment; filename="{name}"'})
+
+
 @app.post("/cmdb-final/fonte/{source}/diretoria")
 def final_use_dir(request: Request, source: str, csrf: str = Form(""), user: str = Depends(current_user)):
     """Esquece os ficheiros carregados desta fonte: volta a usar o da diretoria import/."""

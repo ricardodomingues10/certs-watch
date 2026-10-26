@@ -8,11 +8,11 @@ name: certwatch
 
 x-app: &app
   build: .
-  image: certwatch:0.18.2
+  image: certwatch:0.19.0
   network_mode: host
   restart: unless-stopped
   env_file: .env
-  secrets: [db_password, ucmdb_user, ucmdb_password, admin_password, smax_user, smax_password, smtp_password]
+  secrets: [db_password, ucmdb_user, ucmdb_password, admin_password, smax_user, smax_password, smtp_password, avi_user, avi_password]
   volumes:
     - ./trust:/app/trust:ro
     - ./import:/app/import:ro
@@ -76,6 +76,12 @@ secrets:
   # (touch secrets/smtp_password)
   smtp_password:
     file: ./secrets/smtp_password
+  # AVI pela API (opcional): conta só de leitura; se não for usado, criar os ficheiros vazios
+  # (touch secrets/avi_user secrets/avi_password)
+  avi_user:
+    file: ./secrets/avi_user
+  avi_password:
+    file: ./secrets/avi_password
 
 volumes:
   pgdata:

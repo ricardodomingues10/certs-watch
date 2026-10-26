@@ -68,7 +68,7 @@
       <td><b>{{ src }}</b><div class="small muted">obrigatória para reconciliar tudo</div>{{ only_btn(src, inputs.get(src), src) }}</td>
       <td class="small">{% if src in ('CA1', 'CA2') %}Exportação da CA (certutil): CommonName, data de expiração, série e estado do pedido. Emissor: {% if issuers.get(src) %}{{ issuers[src] }}{% else %}<span class="tag tag-run" title="Os certificados novos desta CA ficam com o emissor Por verificar">por definir em CERTWATCH_IMPORT_ISSUERS</span>{% endif %}{% else %}Exportação com CommonName, data de fim, série, emissor e nomes alternativos.{% endif %}</td>
       <td>{{ files_cell(src, true) }}</td>
-      <td>{{ actions_cell(src) }}</td>
+      <td>{{ actions_cell(src) }}{% if src == 'AVI' %}<div class="mt-s small"><a href="/cmdb-final/avi">Ler pela API do AVI</a>{% if settings.avi_source != 'ficheiro' %} <span class="tag tag-acc">{{ 'API' if settings.avi_source == 'api' else 'API, ficheiro se falhar' }}</span>{% endif %}</div>{% endif %}</td>
     </tr>
     {% endfor %}
     <tr>

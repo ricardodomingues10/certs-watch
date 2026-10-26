@@ -1,6 +1,6 @@
 import json
 from dataclasses import replace
-from datetime import timedelta
+from datetime import datetime, timedelta, timezone
 
 import httpx
 from sqlalchemy import select
@@ -126,7 +126,7 @@ def test_real_api_secret_list(env):
         out = ingest_apis(s, env, records, fields)
         assert out["com_validade"] == 2 and out["endpoints_criados"] == 0
     with session_scope() as s:
-        evaluate(s, env)
+        evaluate(s, env, now=datetime(2026, 6, 1, tzinfo=timezone.utc))      # data fixa: o teste não envelhece
         types = {(f.type, f.severity) for f in s.scalars(select(Finding))}
     assert ("API_REGISTO_EXPIRADO", "baixa") in types                 # 2023: limpeza, não emergência
     assert not any(t == "API_EXPIRACAO" for t, _ in types)

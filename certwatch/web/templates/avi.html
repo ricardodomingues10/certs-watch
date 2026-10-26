@@ -1,0 +1,83 @@
+{% extends "base.html" %}
+{% block title %}AVI pela API{% endblock %}
+{% block crumb %}CMDB · <a href="/cmdb-final">Reconciliar e atualizar</a>{% endblock %}
+{% block page_title %}AVI pela API{% endblock %}
+{% block lede %}Lê os certificados do AVI diretamente no controlador (REST API, só leitura), no mesmo formato do ficheiro do script de exportação, e compara com o ficheiro que a reconciliação usa hoje. Testar não muda nada: o ficheiro continua a ser a fonte até escolher usar a API.{% endblock %}
+{% block content %}
+{% if erro %}<div class="note bad">{{ erro }}</div>{% endif %}
+
+<section class="card">
+  <h2>Ligação</h2>
+  <table class="compact">
+    <tr><th>Controlador</th><td class="mono small">{{ settings.avi_url or '(não definido: CERTWATCH_AVI_URL)' }}</td></tr>
+    <tr><th>Tenant</th><td class="mono small">{{ settings.avi_tenant }}</td></tr>
+    <tr><th>Certificados</th><td class="mono small">{{ settings.avi_endpoint }}</td></tr>
+    <tr><th>CAs</th><td class="mono small">{{ settings.avi_endpoint_ca or '(não lidas)' }}</td></tr>
+    <tr><th>Credenciais</th><td class="small">{% if settings.avi_user and settings.avi_password %}definidas nos ficheiros de segredo{% else %}<span class="tag tag-err">em falta</span> secrets/avi_user e secrets/avi_password{% endif %}</td></tr>
+    <tr><th>Verificação TLS</th><td class="small">{% if settings.avi_verify_tls %}ligada (CAs públicas e pasta trust/){% else %}<span class="tag tag-err">desligada</span> CERTWATCH_AVI_VERIFY_TLS=false: só para diagnóstico{% endif %}</td></tr>
+    <tr><th>Fonte AVI na reconciliação</th><td class="small">{{ {'ficheiro': 'o ficheiro (import/ ou carregado)', 'api': 'a API; se falhar, a reconciliação para', 'auto': 'a API; se falhar, o ficheiro'}.get(settings.avi_source, settings.avi_source) }} <span class="muted">(CERTWATCH_AVI_SOURCE={{ settings.avi_source }})</span></td></tr>
+  </table>
+  {% if problem %}<p class="small mt"><span class="tag tag-run">por configurar</span> {{ problem }}</p>{% endif %}
+  <div class="inline mt">
+    <form method="post" action="/cmdb-final/avi/testar"><input type="hidden" name="csrf" value="{{ csrf }}">
+      <button class="primary" {{ 'disabled' if problem }}>Testar e comparar com o ficheiro</button></form>
+    {% if not problem %}<a class="button" href="/cmdb-final/avi/csv?tipo=vs">Descarregar CSV dos certificados</a>
+    <a class="button" href="/cmdb-final/avi/csv?tipo=ca">Descarregar CSV das CAs</a>{% endif %}
+  </div>
+</section>
+
+{% if res %}
+<section class="card">
+  <h2>Resultado da leitura</h2>
+  <p><b>{{ res.vs|length }}</b> certificados dos virtual services e <b>{{ res.ca|length }}</b> CAs, em {{ res.segundos }} s ({{ res.pedidos }} pedidos ao controlador).</p>
+  {% for a in res.avisos %}<p class="small"><span class="tag tag-run">aviso</span> {{ a }}</p>{% endfor %}
+  {% if cmp %}
+  <p class="small">Comparado com o ficheiro {{ ficheiro }}, pelo nome do objeto no AVI:</p>
+  <table class="compact">
+    <tr><th>Iguais</th><td class="num"><b>{{ cmp.iguais }}</b></td></tr>
+    <tr><th>Com diferenças</th><td class="num">{{ cmp.diferentes|length }}</td></tr>
+    <tr><th>Só no ficheiro</th><td class="num">{{ cmp.so_ficheiro|length }}</td></tr>
+    <tr><th>Só na API</th><td class="num">{{ cmp.so_api|length }}</td></tr>
+  </table>
+  {% if not cmp.diferentes and not cmp.so_ficheiro and not cmp.so_api %}
+  <p class="small mt"><span class="tag tag-ok">iguais</span> A API dá exatamente os mesmos certificados do ficheiro: pode passar a usá-la.</p>
+  {% else %}
+  <p class="small mt muted">Diferenças são esperadas se o ficheiro for de outro dia: compare a data do ficheiro com a de hoje.</p>
+  {% endif %}
+  {% elif ficheiro %}<p class="small muted">Sem comparação: {{ ficheiro }}</p>
+  {% else %}<p class="small muted">Sem ficheiro do AVI para comparar (nem em import/ nem carregado).</p>{% endif %}
+  <form method="post" action="/cmdb-final/avi/usar" class="mt"><input type="hidden" name="csrf" value="{{ csrf }}">
+    <button data-confirm="Ler o AVI pela API e usar essa leitura como fonte AVI da próxima reconciliação? O ficheiro em import/ não é apagado; volta a ser usado com 'Voltar a usar a diretoria import/'.">Usar a API do AVI na próxima reconciliação</button>
+    <span class="small muted">Guarda a leitura como o ficheiro do AVI (só desta vez). Para ser sempre pela API: CERTWATCH_AVI_SOURCE=auto.</span>
+  </form>
+</section>
+
+{% if cmp and cmp.diferentes %}
+<section class="card flush scroll">
+  <h2>Com diferenças ({{ cmp.diferentes|length }})</h2>
+  <table class="compact"><thead><tr><th>Nome no AVI</th><th>CommonName</th><th>Diferenças</th></tr></thead>
+  {% for d in cmp.diferentes[:300] %}<tr><td class="mono small">{{ d.nome }}</td><td class="mono small">{{ d.cn }}</td><td class="small">{{ d.diferencas|join('; ') }}</td></tr>{% endfor %}
+  </table>
+</section>
+{% endif %}
+{% for titulo, lista in [('Só no ficheiro', cmp.so_ficheiro if cmp else []), ('Só na API', cmp.so_api if cmp else [])] %}{% if lista %}
+<section class="card flush scroll">
+  <h2>{{ titulo }} ({{ lista|length }})</h2>
+  <table class="compact"><thead><tr><th>Nome no AVI</th><th>CommonName</th><th>Fim</th><th>Série</th><th>Emissor</th></tr></thead>
+  {% for r in lista[:300] %}<tr><td class="mono small">{{ r.nome }}</td><td class="mono small">{{ r.cn }}</td><td class="small nowrap">{{ r.fim }}</td><td class="mono small">{{ r.serial }}</td><td class="small">{{ r.emissor }}</td></tr>{% endfor %}
+  </table>
+</section>
+{% endif %}{% endfor %}
+
+{% if cas %}
+<section class="card flush scroll">
+  <h2>CAs no AVI ({{ cas|length }})</h2>
+  <p class="small muted">Raízes e intermédios carregados no AVI, os que expiram primeiro no topo. Um intermédio expirado parte a cadeia de todos os certificados que emitiu.</p>
+  <table class="compact"><thead><tr><th>Nome no AVI</th><th>CommonName</th><th>Emissor</th><th>Fim</th><th class="num">Dias</th></tr></thead>
+  {% for r in cas %}<tr><td class="mono small">{{ r.Nome }}</td><td class="small">{{ r.Subject_CommonName }}</td><td class="small">{{ r.Issuer_CommonName }}</td><td class="small nowrap">{{ r.Validity_NotAfter }}</td>
+    <td class="num">{% if r.dias is none %}—{% elif r.dias < 0 %}<span class="tag tag-err">expirou</span>{% elif r.dias <= 90 %}<span class="tag tag-run">{{ r.dias }}</span>{% else %}{{ r.dias }}{% endif %}</td></tr>{% endfor %}
+  </table>
+</section>
+{% endif %}
+{% endif %}
+{% endblock %}

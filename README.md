@@ -259,6 +259,19 @@ Cada linha da reconciliação mostra o resultado (criado / atualizado / aviso / 
 - Datas: ValidTo vai às 00:00 de Lisboa, primeiro como `AAAA-MM-DDThh:mm:ss` (sem fuso: a UCMDB recusa o `Z` do UTC); se a UCMDB recusar o formato, tenta com milissegundos (`.000`), depois em milissegundos desde 1970 e por fim em UTC. O formato que funcionar passa a ser o primeiro a tentar. Uma alteração com erro pode ser repetida com **Tentar de novo**.
 - Tudo fica no **histórico de alterações** (ver 5.9). A auditoria também regista cada escrita (`ucmdb.escrever`, `ucmdb.editar`).
 
+### 5.10 AVI pela API
+
+Em vez do ficheiro exportado pelo script, o certwatch pode ler os certificados diretamente no controlador AVI (REST API, só leitura). Faz o mesmo que o script (login, páginas de `/api/sslkeyandcertificate`, logout) e produz um CSV com as mesmas colunas (Nome, Subject_CommonName, Validity_NotBefore, Validity_NotAfter, SerialNumber em hexadecimal, Issuer_CommonName, SubjectAlternativeName), lido pelo mesmo leitor do ficheiro.
+
+1. Pedir uma conta do AVI **só de leitura** (papel com leitura em SSL/TLS Certificates, no tenant certo).
+2. No servidor: `echo -n 'utilizador' > secrets/avi_user`, `echo -n 'password' > secrets/avi_password`, `chmod 600 secrets/avi_*`.
+3. Colocar em `trust/` a raiz (e o intermédio) da CA que emitiu o certificado do controlador. Ao contrário do script, a verificação TLS fica ligada.
+4. No `.env`: `CERTWATCH_AVI_URL=https://<controlador>` (e, se forem outros, o tenant e os endpoints do script). `docker compose up -d`.
+5. **CMDB → Reconciliar e atualizar → AVI → Ler pela API do AVI → Testar e comparar com o ficheiro.** Mostra quantos certificados e CAs leu, e compara com o ficheiro atual pelo nome do objeto: iguais, com diferenças (data de fim, série, CommonName), só no ficheiro, só na API. Também lista as CAs do AVI pela data de fim. Testar não muda a fonte da reconciliação. **Descarregar CSV** dá o ficheiro no formato do script.
+6. Quando a comparação estiver certa: **Usar a API do AVI na próxima reconciliação** (só uma vez), ou `CERTWATCH_AVI_SOURCE=auto` (sempre pela API; se a API falhar, usa o ficheiro e diz porquê em Erros nas fontes) ou `api` (se a API falhar, a reconciliação para).
+
+O ficheiro em `import/` e o script não são tocados: até mudar `CERTWATCH_AVI_SOURCE`, a reconciliação usa o ficheiro como hoje. A leitura pela API pede só o nome e o certificado (`fields=name,certificate,type`) e descarta tudo o resto em memória, incluindo a chave privada. Cada teste, exportação e uso fica na auditoria (`avi.testar`, `avi.exportar`, `avi.usar`).
+
 ### 5.9 Histórico de alterações na CMDB
 
 Menu **CMDB → Histórico de alterações**: tudo o que o certwatch escreveu na UCMDB, a partir de uma reconciliação, do Azure ou editado à mão. Para cada escrita: quando, quem, origem, certificado e CI, cada atributo com o valor que tinha e o que foi enviado, o resultado e se a UCMDB o confirmou.
