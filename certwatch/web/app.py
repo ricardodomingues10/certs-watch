@@ -235,7 +235,9 @@ def render(request: Request, name: str, user: str, **ctx):
                                                       "navtree": nav_tree(request.url.path, counts),
                                                       "palette": palette_of(request), "PALETTES": PALETTES,
                                                       "client": {"name": get_settings().client_name,
-                                                                 "logo": client_logo() is not None}, **ctx})
+                                                                 "logo": client_logo() is not None,
+                                                                 "style": get_settings().logo_style if get_settings().logo_style
+                                                                 in ("original", "claro", "placa") else "original"}, **ctx})
 
 
 @app.post("/tema")

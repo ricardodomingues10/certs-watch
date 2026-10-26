@@ -17,15 +17,15 @@
   <input type="checkbox" id="menu-toggle" class="menu-toggle" aria-label="Menu">
   <header class="mobilebar">
     <a class="brand" href="/" aria-label="certwatch, painel"><img src="/static/logo.svg" alt="" width="24" height="24"><span class="word"><b>cert</b>watch</span></a>
-    {% if client and client.logo %}<span class="logo-plate client-mini"><img src="/marca/logo" alt="{{ client.name or 'Cliente' }}" height="22"></span>{% endif %}
+    {% if client and client.logo %}<span class="client-logo logo-{{ client.style }} client-mini"><img src="/marca/logo" alt="{{ client.name or 'Cliente' }}" height="24"></span>{% endif %}
     <label for="menu-toggle" class="menu-btn" aria-label="Abrir ou fechar o menu"><span></span><span></span><span></span></label>
   </header>
   <nav class="rail" aria-label="Navegação principal">
     <a class="brand" href="/" aria-label="certwatch, painel"><img src="/static/logo.svg" alt="" width="28" height="28"><span class="word"><b>cert</b>watch</span></a>
     {% if client and (client.logo or client.name) %}
     <div class="client" title="{{ client.name }}">
-      {% if client.logo %}<span class="logo-plate"><img src="/marca/logo" alt="{{ client.name or 'Cliente' }}"></span>{% endif %}
-      {% if client.name %}<span>{{ client.name }}</span>{% endif %}
+      {% if client.logo %}<span class="client-logo logo-{{ client.style }}"><img src="/marca/logo" alt="{{ client.name or 'Cliente' }}"></span>{% endif %}
+      {% if client.name %}<span class="client-name">{{ client.name }}</span>{% endif %}
     </div>
     {% endif %}
     {% for g in navtree %}

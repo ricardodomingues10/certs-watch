@@ -212,6 +212,7 @@ class Settings:
     avi_page_size: int = 100
     client_name: str = ""              # nome do cliente mostrado na interface (ex.: Santa Casa da Misericórdia de Lisboa)
     branding_dir: Path = Path("/app/branding")   # logo do cliente: logo.svg, logo.png ou logo.webp
+    logo_style: str = "original"       # original (transparente, como é) | claro (branco, para fundos escuros) | placa
     ui_palette: str = "consola"         # tema por omissão: consola | assinatura | relatorio
     dash_expiry_days: int = 20          # painel: "expiram sem pedido" nos próximos N dias
     dash_stale_days: int = 10           # painel: pedido aberto sem movimento há N dias = parado
@@ -355,6 +356,7 @@ class Settings:
             ui_palette=(_env("CERTWATCH_UI_PALETTE", "consola") or "consola").lower(),
             client_name=_env("CERTWATCH_CLIENT_NAME", ""),
             branding_dir=Path(_env("CERTWATCH_BRANDING_DIR", "/app/branding")),
+            logo_style=(_env("CERTWATCH_LOGO_STYLE", "original") or "original").lower(),
             dash_expiry_days=int(_env("CERTWATCH_DASH_EXPIRY_DAYS", "20")),
             dash_stale_days=int(_env("CERTWATCH_DASH_STALE_DAYS", "10")),
             internal_suffixes=_str_list(_env("CERTWATCH_INTERNAL_SUFFIXES", ".local,.lan,.internal,.intranet,.corp")),
