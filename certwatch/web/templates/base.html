@@ -44,6 +44,7 @@
         <input type="search" id="global-q" name="q" value="{{ request.query_params.get('q', '') if p == '/pesquisa' else '' }}"
                placeholder="Procurar certificado, servidor, emissor ou API" aria-label="Procurar">
       </form>
+      {% if busy %}<span class="ocupado" data-ocupado="{{ busy|length }}" role="status" title="A vigia varre a página com o foco enquanto isto corre">A trabalhar: <span>{{ busy|join(' · ') }}</span></span>{% endif %}
       <span class="who">{{ user }}</span>
     </header>
     <main>

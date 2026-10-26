@@ -17,7 +17,7 @@
   </defs>
   <g class="atl-vigia">
     {#- o feixe do foco fica atrás da vigia: passa-lhe por trás da cabeça quando aponta para a esquerda -#}
-    <g class="atl-ab"><g class="atl-lt">
+    <g class="atl-ab atl-feixe"><g class="atl-lt">
       <path d="M83.3 31 L86.7 31 L100 -30 L70 -30 Z" fill="url(#atl-feixe-{{ uid }})"/>
       <circle cx="85" cy="31" r="3.2" fill="#fff4c8" opacity=".55"/>
     </g></g>
@@ -66,15 +66,15 @@
       <path d="M55.6 26.5 v1.6 M58.6 26.1 v1.6" stroke="#c58f73" stroke-width=".35" stroke-linecap="round"/>
     </g>
     {#- antebraço esquerdo com o foco; o foco roda na mão -#}
-    <g class="atl-ab">
+    <g class="atl-ab atl-mao">
       <path d="M82.6 59.6 L85 43.5" stroke="#8a8593" stroke-width="6" stroke-linecap="round"/>
       <path d="M82.6 59.6 L85 43.5" stroke="#2b2930" stroke-width="4.5" stroke-linecap="round"/>
       <g class="atl-lt">
         <rect x="83.4" y="35" width="3.2" height="11.5" rx=".9" fill="#d6a63a" stroke="#6b5523" stroke-width=".5"/>
         <path d="M82.1 35.6 L82.7 31.6 L87.3 31.6 L87.9 35.6 Z" fill="#e2b444" stroke="#6b5523" stroke-width=".5" stroke-linejoin="round"/>
-        <rect x="82.8" y="30.7" width="4.4" height="1.3" rx=".6" fill="#fff4c8" stroke="#6b5523" stroke-width=".35"/>
+        <rect class="atl-lente" x="82.8" y="30.7" width="4.4" height="1.3" rx=".6" fill="#fff4c8" stroke="#6b5523" stroke-width=".35"/>
       </g>
-      <circle cx="85" cy="42.6" r="2.2" fill="#e3b597" stroke="#c58f73" stroke-width=".5"/>
+      <circle class="atl-punho" cx="85" cy="42.6" r="2.2" fill="#e3b597" stroke="#c58f73" stroke-width=".5"/>
     </g>
   </g>
   {#- a atalaia, em desenho, mais baixa e esbatida em baixo -#}

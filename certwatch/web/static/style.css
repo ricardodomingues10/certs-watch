@@ -777,5 +777,16 @@ details.card[open] > summary { margin-bottom: 12px; }
 }
 @keyframes atl-respira { from { transform: translateY(0); } to { transform: translateY(-0.6px); } }
 @keyframes atl-pisca { 0%, 93% { transform: scaleY(1); } 95% { transform: scaleY(.1); } 97%, 100% { transform: scaleY(1); } }
+.atalaia .atl-feixe { transition: opacity .35s; }
+.atalaia.atl-solto .atl-feixe { opacity: 0; }          /* o feixe saiu do logótipo e está na página (app.js) */
 .atalaia.atl-anim-parado * { animation: none !important; }
+/* o foco na página: por cima de tudo, transparente aos cliques; luz nos temas escuros, tom âmbar no tema claro */
+.foco-pagina { position: fixed; inset: 0; width: 100vw; height: 100vh; pointer-events: none; z-index: 60; opacity: 0;
+               transition: opacity .4s ease; mix-blend-mode: screen; }
+.foco-pagina.on { opacity: 1; }
+.foco-pagina stop { stop-color: var(--foco-cor, #ffeaa6); }
+[data-palette="relatorio"] .foco-pagina { mix-blend-mode: multiply; --foco-cor: #f2b632; }
+.ocupado { margin-left: auto; color: var(--muted); font: 12px var(--mono); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 46%; }
+.ocupado span { color: var(--ink); }
+.ocupado + .who { margin-left: 0; }
 @media (prefers-reduced-motion: reduce) { .atalaia.atl-anim-auto * { animation: none !important; } }

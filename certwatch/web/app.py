@@ -229,8 +229,32 @@ def palette_of(request: Request) -> str:
     return p if p in PALETTES else (get_settings().ui_palette if get_settings().ui_palette in PALETTES else "consola")
 
 
+BUSY_WINDOW = timedelta(hours=2)     # trabalho parado há mais tempo do que isto não conta (ex.: worker desligado)
+
+
+def busy_work() -> list[str]:
+    """O que está a correr ou à espera de correr agora: execuções, reconciliações, pedidos SMAX e escritas na UCMDB.
+    Enquanto houver alguma coisa, a vigia do logótipo varre a página com o foco."""
+    since = utcnow() - BUSY_WINDOW
+    out: list[str] = []
+    try:
+        with session_scope() as s:
+            for j in s.scalars(select(JobRun).where(JobRun.status.in_(("pending", "running")), JobRun.requested_at >= since)):
+                out.append(f"{JOB_LABELS.get(j.job, j.job)} ({'a correr' if j.status == 'running' else 'na fila'})")
+            if s.scalar(select(FinalRun.id).where(FinalRun.status == "a_gerar", FinalRun.created_at >= since).limit(1)):
+                out.append("Reconciliação a comparar as fontes")
+            if s.scalar(select(TicketBatch.id).where(TicketBatch.status == "a_criar", TicketBatch.confirmed_at >= since).limit(1)):
+                out.append("Pedidos a criar no SMAX")
+            if s.scalar(select(UcmdbWrite.id).where(UcmdbWrite.estado.in_(uw.BUSY), UcmdbWrite.pedido_em >= since).limit(1)):
+                out.append("Alterações a aplicar na UCMDB")
+    except Exception:
+        return []
+    return out
+
+
 def render(request: Request, name: str, user: str, **ctx):
     counts = nav_counts()
+    ctx.setdefault("busy", busy_work())
     return templates.TemplateResponse(request, name, {"user": user, "csrf": request.state.csrf, "nav": counts,
                                                       "navtree": nav_tree(request.url.path, counts),
                                                       "palette": palette_of(request), "PALETTES": PALETTES,
@@ -240,6 +264,12 @@ def render(request: Request, name: str, user: str, **ctx):
                                                                  in ("original", "claro", "placa") else "original",
                                                                  "anim": get_settings().logo_animation if get_settings().logo_animation
                                                                  in ("sempre", "auto", "parado") else "sempre"}, **ctx})
+
+
+@app.get("/estado/ocupado")
+def busy_state(user: str = Depends(current_user)):
+    """Para a página saber quando o trabalho em curso acabou (a vigia deixa de varrer a página)."""
+    return JSONResponse({"ocupado": busy_work()})
 
 
 @app.post("/tema")

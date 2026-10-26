@@ -161,3 +161,24 @@ def test_atalaia_brand_and_logo(env, monkeypatch):
         st = replace(config.get_settings(), logo_animation="auto")
         monkeypatch.setattr(webapp, "get_settings", lambda: st)
         assert 'class="atalaia atl-anim-auto' in c.get("/certificados", auth=AUTH).text
+
+
+def test_busy_state_drives_the_page_beam(env):
+    """Enquanto há trabalho em curso (execuções na fila ou a correr, recentes), a página diz o quê e o foco varre a
+    página; /estado/ocupado diz quando acabou. Trabalho parado há mais de 2 h não conta (ex.: worker desligado)."""
+    from certwatch.models import JobRun
+    from certwatch.web import app as webapp
+    with TestClient(webapp.app) as c:
+        page = c.get("/", auth=AUTH).text
+        assert "data-ocupado" not in page
+        assert c.get("/estado/ocupado", auth=AUTH).json() == {"ocupado": []}
+        assert c.get("/estado/ocupado").status_code == 401
+        with session_scope() as s:
+            s.add(JobRun(job="scan", requested_by="admin", status="running"))
+            s.add(JobRun(job="ingest_cmdb", requested_by="admin", status="pending",
+                         requested_at=utcnow() - timedelta(hours=5)))                     # esquecido: não conta
+        page = c.get("/", auth=AUTH).text
+        assert 'data-ocupado="1"' in page and "Verificar servidores (a correr)" in page
+        assert c.get("/estado/ocupado", auth=AUTH).json() == {"ocupado": ["Verificar servidores (a correr)"]}
+        js = c.get("/static/app.js").text
+        assert "/estado/ocupado" in js and "foco-pagina" in js

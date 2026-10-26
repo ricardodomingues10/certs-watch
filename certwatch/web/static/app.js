@@ -226,3 +226,167 @@ document.addEventListener("DOMContentLoaded", () => {
     if (!window.confirm(b.dataset.confirm)) e.preventDefault();
   }));
 });
+
+// O foco da vigia sai do logótipo e varre a página enquanto se espera: a página seguinte a carregar, um ficheiro a
+// enviar, ou trabalho em curso no servidor (execuções, reconciliações, pedidos, escritas na UCMDB). O feixe bate nas
+// margens da janela e reflete-se. Não intercepta cliques e não corre se a animação do logótipo estiver parada.
+document.addEventListener("DOMContentLoaded", () => {
+  const logos = Array.from(document.querySelectorAll("svg.atalaia"));
+  if (!logos.length || !document.body.animate) return;
+  const visible = () => logos.find((l) => l.getClientRects().length && l.getBoundingClientRect().width > 0);
+  const animated = (l) => l && l.getAnimations({ subtree: true }).length > 0;
+  const LOOK = new Set(["atl-foco", "atl-braco", "atl-cabeca", "atl-cara", "atl-nariz", "atl-pala", "atl-pupilas"]);
+  const setRate = (r) => logos.forEach((l) => l.getAnimations({ subtree: true }).forEach((a) => {
+    if (LOOK.has(a.animationName)) a.updatePlaybackRate(r);
+  }));
+
+  const NS = "http://www.w3.org/2000/svg";
+  const mk = (tag, attrs, parent) => {
+    const e = document.createElementNS(NS, tag);
+    Object.entries(attrs || {}).forEach(([k, v]) => e.setAttribute(k, v));
+    if (parent) parent.appendChild(e);
+    return e;
+  };
+  const svg = mk("svg", { class: "foco-pagina", "aria-hidden": "true", focusable: "false" });
+  const defs = mk("defs", {}, svg);
+  const MAXSEG = 4;
+  const layers = [{ spread: 0.12, alpha: 0.16 }, { spread: 0.05, alpha: 0.3 }].map((ly, li) => {
+    ly.parts = [];
+    for (let i = 0; i < MAXSEG; i++) {
+      const g = mk("linearGradient", { id: `foco-g${li}${i}`, gradientUnits: "userSpaceOnUse" }, defs);
+      const s0 = mk("stop", { offset: "0", "stop-color": "#ffeaa6" }, g);
+      const s1 = mk("stop", { offset: "1", "stop-color": "#ffeaa6" }, g);
+      const poly = mk("polygon", { fill: `url(#foco-g${li}${i})` }, svg);
+      ly.parts.push({ g, s0, s1, poly });
+    }
+    return ly;
+  });
+  const rg = mk("radialGradient", { id: "foco-brilho" }, defs);
+  mk("stop", { offset: "0", "stop-color": "#fff3c4", "stop-opacity": "1" }, rg);
+  mk("stop", { offset: "1", "stop-color": "#fff3c4", "stop-opacity": "0" }, rg);
+  const glows = [];
+  for (let i = 0; i < MAXSEG - 1; i++) glows.push(mk("circle", { fill: "url(#foco-brilho)", r: "0" }, svg));
+  document.body.appendChild(svg);
+
+  const center = (el) => { const r = el.getBoundingClientRect(); return { x: r.left + r.width / 2, y: r.top + r.height / 2 }; };
+  function draw() {
+    const logo = visible();
+    const hand = logo && logo.querySelector(".atl-mao .atl-punho");
+    const lens = logo && logo.querySelector(".atl-mao .atl-lente");
+    if (!hand || !lens) return;
+    const W = window.innerWidth, H = window.innerHeight;
+    const L = center(lens), P = center(hand);
+    let dx = L.x - P.x, dy = L.y - P.y;
+    const n = Math.hypot(dx, dy) || 1;
+    dx /= n; dy /= n;
+    const total = 1.25 * Math.hypot(W, H);
+    const segs = [];
+    let p = { x: L.x, y: L.y }, s = 0;
+    for (let i = 0; i < MAXSEG && s < total - 1; i++) {
+      const tx = dx > 0 ? (W - p.x) / dx : dx < 0 ? -p.x / dx : Infinity;
+      const ty = dy > 0 ? (H - p.y) / dy : dy < 0 ? -p.y / dy : Infinity;
+      const t = Math.max(0, Math.min(tx, ty, total - s));
+      const q = { x: p.x + dx * t, y: p.y + dy * t };
+      segs.push({ p, q, dx, dy, s0: s, s1: s + t, bounce: t === tx || t === ty });
+      if (t === tx) dx = -dx;
+      if (t === ty) dy = -dy;
+      p = q; s += t;
+    }
+    const fade = (d) => Math.pow(Math.max(0, 1 - d / total), 1.4);
+    layers.forEach((ly) => ly.parts.forEach((part, i) => {
+      const sg = segs[i];
+      if (!sg) { part.poly.setAttribute("points", ""); return; }
+      const w0 = 3 + sg.s0 * Math.tan(ly.spread), w1 = 3 + sg.s1 * Math.tan(ly.spread);
+      const nx = -sg.dy, ny = sg.dx;
+      part.poly.setAttribute("points", [
+        [sg.p.x + nx * w0, sg.p.y + ny * w0], [sg.q.x + nx * w1, sg.q.y + ny * w1],
+        [sg.q.x - nx * w1, sg.q.y - ny * w1], [sg.p.x - nx * w0, sg.p.y - ny * w0]].map((c) => c.join(",")).join(" "));
+      ["x1", "y1", "x2", "y2"].forEach((k, j) => part.g.setAttribute(k, [sg.p.x, sg.p.y, sg.q.x, sg.q.y][j]));
+      part.s0.setAttribute("stop-opacity", (ly.alpha * fade(sg.s0)).toFixed(3));
+      part.s1.setAttribute("stop-opacity", (ly.alpha * fade(sg.s1)).toFixed(3));
+    }));
+    glows.forEach((c, i) => {
+      const sg = segs[i];
+      if (!sg || !sg.bounce || !segs[i + 1]) { c.setAttribute("r", "0"); return; }
+      c.setAttribute("cx", sg.q.x); c.setAttribute("cy", sg.q.y);
+      c.setAttribute("r", (30 + sg.s1 * Math.tan(0.12)).toFixed(1));
+      c.setAttribute("opacity", (0.45 * fade(sg.s1)).toFixed(3));
+    });
+  }
+
+  let on = false, raf = 0, offTimer = 0;
+  const loop = () => { draw(); raf = requestAnimationFrame(loop); };
+  const reasons = new Set();
+  function start(reason) {
+    if (!animated(visible())) return;
+    reasons.add(reason);
+    if (on) return;
+    on = true;
+    clearTimeout(offTimer);
+    logos.forEach((l) => l.classList.add("atl-solto"));
+    setRate(3);
+    svg.classList.add("on");
+    if (!raf) loop();
+  }
+  function stop(reason) {
+    reasons.delete(reason);
+    if (!on || reasons.size) return;
+    on = false;
+    svg.classList.remove("on");
+    offTimer = setTimeout(() => {
+      cancelAnimationFrame(raf); raf = 0;
+      logos.forEach((l) => l.classList.remove("atl-solto"));
+      setRate(1);
+    }, 450);
+  }
+
+  // 1) navegação: a página seguinte a carregar (só se demorar mais de 250 ms) e envio de formulários/ficheiros
+  const KEY = "atl-foco";
+  const mark = () => { try { sessionStorage.setItem(KEY, String(Date.now())); } catch (e) { /* sem armazenamento */ } };
+  let navTimer = 0;
+  const leaving = (delay) => {
+    clearTimeout(navTimer);
+    navTimer = setTimeout(() => { start("nav"); mark(); setTimeout(() => stop("nav"), 45000); }, delay);
+  };
+  // descargas não mudam de página: o foco não as acompanha
+  const isDownload = (url) => /\.(csv|xlsx|pem|crt|cer|zip|json)(\?|$)|\/(csv|excel)(\?|$)|\/ficheiro\/|\/marca\//i.test(url);
+  document.addEventListener("click", (e) => {
+    const a = e.target.closest && e.target.closest("a[href]");
+    if (!a || e.defaultPrevented || e.button !== 0 || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return;
+    if (a.target && a.target !== "_self") return;
+    if (a.hasAttribute("download") || a.hasAttribute("data-sem-foco") || a.origin !== location.origin || isDownload(a.pathname)) return;
+    if (a.pathname === location.pathname && a.search === location.search && a.hash) return;
+    leaving(250);
+  });
+  document.addEventListener("submit", (e) => {
+    const f = e.target;
+    if (e.defaultPrevented || f.hasAttribute("data-sem-foco") || (f.target && f.target !== "_self") || isDownload(f.getAttribute("action") || "")) return;
+    leaving(f.enctype === "multipart/form-data" ? 0 : 250);       // um ficheiro a enviar: logo
+  });
+  window.addEventListener("pageshow", (e) => { if (e.persisted) { clearTimeout(navTimer); stop("nav"); } });
+  // a página nova chegou: o feixe que vinha da anterior recolhe ao logótipo
+  try {
+    const t = Number(sessionStorage.getItem(KEY) || 0);
+    sessionStorage.removeItem(KEY);
+    if (t && Date.now() - t < 60000) { start("chegada"); setTimeout(() => stop("chegada"), 900); }
+  } catch (e) { /* sem armazenamento */ }
+
+  // 2) trabalho em curso no servidor: varre até acabar (pergunta a cada 5 s, só com a página visível)
+  const note = document.querySelector("[data-ocupado]");
+  if (note && note.dataset.ocupado !== "") {
+    start("servidor");
+    const poll = () => {
+      if (document.visibilityState !== "visible") return setTimeout(poll, 5000);
+      fetch("/estado/ocupado", { credentials: "same-origin", headers: { Accept: "application/json" } })
+        .then((r) => (r.ok ? r.json() : null))
+        .then((d) => {
+          if (!d) return setTimeout(poll, 15000);
+          if (d.ocupado.length) { note.querySelector("span").textContent = d.ocupado.join(" · "); setTimeout(poll, 5000); }
+          else { note.hidden = true; stop("servidor"); }
+        })
+        .catch(() => setTimeout(poll, 15000));
+    };
+    setTimeout(poll, 5000);
+  }
+  window.addEventListener("resize", () => { if (on) draw(); });
+});
