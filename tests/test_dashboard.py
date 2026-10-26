@@ -141,7 +141,7 @@ def test_client_branding(env, tmp_path, monkeypatch):
 
 
 def test_atalaia_brand_and_logo(env):
-    """O nome visível é Atalaia Cert e o logótipo animado (o vigia na atalaia) é servido com uma CSP própria:
+    """O nome visível é Atalaia Cert e o logótipo animado (a vigia na atalaia) é servido com uma CSP própria:
     a animação está num <style> do SVG, a fotografia em data:, e nunca corre scripts."""
     from certwatch.web.app import app
     from certwatch.web.security import SVG_CSP
