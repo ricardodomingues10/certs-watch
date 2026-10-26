@@ -94,18 +94,30 @@ ssh -L 8088:127.0.0.1:8088 utilizador@servidor
 
 Abrir `http://localhost:8088`. O utilizador é `admin` e a palavra-passe é o conteúdo de `secrets/admin_password`.
 
-A interface ocupa a largura toda do ecrã e adapta-se a qualquer tamanho. Cada tabela ajusta-se ao espaço que tem: se não couber, escondem-se primeiro as colunas secundárias e, se ainda não couber, cada linha passa a cartão com os campos em grelha. No telemóvel há menu no botão do canto e cartões com o nome de cada campo à esquerda. A matriz de testes desliza na horizontal, com o nome sempre visível. A navegação lateral está agrupada por tarefa: **Inventário** (o que existe), **Verificação** (o que está bem ou mal), **CMDB** (reconciliar, triar o que aparece na internet, editar), **Operação** (pedidos SMAX, relatório) e **Sistema**. A caixa no topo procura em tudo.
+A interface ocupa a largura toda do ecrã e adapta-se a qualquer tamanho. No topo estão as **áreas, por tarefa**: **Hoje** (painel e alertas), **Inventário** (certificados, APIs e segredos, servidores, testes, na internet), **Renovar** (pedidos SMAX, relatório por email), **CMDB** (atualizar a CMDB, editar um certificado, histórico) e **Sistema** (execuções e auditoria, ligação à UCMDB, AVI pela API, como funciona). As páginas da área aparecem como separadores por baixo; no telemóvel ficam no menu do canto. A caixa no topo procura em tudo. Cada tabela ajusta-se ao espaço que tem: escondem-se primeiro as colunas secundárias e, se ainda não couber, cada linha passa a cartão.
+
+**Temas**: Consola (escuro, ciano; por omissão), Assinatura (escuro, violeta) e Relatório (claro, cobalto). Vermelho, âmbar e verde ficam reservados para estados. O tema por omissão define-se em `CERTWATCH_UI_PALETTE=consola|assinatura|relatorio`; cada pessoa pode escolher outro no rodapé (fica guardado só no seu browser).
+
+**Painel**: o que fazer hoje.
+- Contadores no topo: expirados ainda em uso, a expirar sem pedido, renovados mas não instalados, pedidos parados, pedidos abertos com certificado já expirado, alertas críticos e mudanças nos pedidos. Cada um abre a lista.
+- **Expiram sem pedido**: certificados e APIs que expiram nos próximos `CERTWATCH_DASH_EXPIRY_DAYS` dias (20) ou expiraram há até 30 dias, sem pedido em curso no SMAX. Um certificado servido em vários nomes conta uma vez. Seleciona-se e cria-se o pedido dali.
+- **Movimento nos pedidos** (24 h ou 7 dias): pedidos novos, mudanças de fase e comentários. O SMAX só dá a fase atual; o certwatch guarda cada mudança vista entre duas leituras.
+- **Pedidos parados**: abertos sem atualização, comentário nem mudança de fase há `CERTWATCH_DASH_STALE_DAYS` dias (10).
+- **Conformidade e evidência (NIS2)**: gestão de ativos (art. 21.º, n.º 2, al. i), criptografia (al. h), continuidade (% do que expira em 90 dias com pedido, al. c) e eficácia (antecedência e tempo de reação dos pedidos, al. f; usa a data de criação dos pedidos do SMAX). **Exportar evidência** dá um CSV com cada certificado e API, a data, o pedido e os alertas, à data de hoje.
+- No topo, quando foi lida pela última vez cada fonte (ponto âmbar = há mais de 48 h).
+
+**Atualizar a CMDB** em cinco passos (Fontes, Comparar, Rever, Aplicar, Confirmar), com o estado de cada um e o **próximo passo** destacado, numa frase e um botão. Antes de aplicar, "O que vai acontecer" diz quantos certificados são criados, atualizados e deixados como estão. O detalhe técnico da comparação fica recolhido.
 
 | Página | Para que serve |
 |---|---|
-| Painel | Frase de estado, o que fazer hoje (agir, rever), renovações com e sem pedido SMAX, certificados em falha, expirações dos próximos 12 meses, testes com mais falhas |
+| Painel | O que fazer hoje: expiram sem pedido, movimento e pedidos parados, contadores urgentes, conformidade NIS2 e evidência |
 | Certificados | Inventário com estado, tipo, âmbito, situação em linguagem simples, prazo e **renovação automática** (Let's Encrypt). Filtros por tudo isto e exportação CSV |
 | Detalhe | Todos os testes do servidor por camada, com **o que significa e como corrigir** cada falha; cadeia; registos CMDB; alertas |
 | Testes | Resumo de cada teste, notas externas do SSL Labs e matriz servidor × teste; clicar num teste mostra os servidores com problemas e a correção |
 | Como testamos | Explicação de cada teste, de como é feito e de como se corrige |
 | APIs e segredos | Lista de APIs da CMDB: aplicação, localização, expiração, "Expirado?" (e se está desatualizado), registo; vistas e CSV |
 | Na internet | Certificados públicos dos domínios da organização, comparados com a CMDB; decidir adicionar, investigar ou ignorar; exportar CSV |
-| Reconciliar e atualizar | Fontes, comparação com a CMDB explicada passo a passo, diferenças por separador e aplicação na UCMDB |
+| Atualizar a CMDB | Cinco passos guiados: fontes, comparação com a CMDB, rever as diferenças, aplicar na UCMDB, confirmar |
 | Editar um certificado | Corrigir um certificado na UCMDB, com revisão antes de gravar |
 | Alertas | Lista filtrável; **aceitar risco** (justificação obrigatória e prazo até 1 ano) ou reabrir |
 | Servidores | Alvos de verificação; adicionar servidores à mão (ex.: os que usam um wildcard) |

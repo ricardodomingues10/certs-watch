@@ -322,7 +322,7 @@ def test_web_flow(settings, monkeypatch):
     (settings.import_dir / "ca1.csv").write_bytes(CA1)
     with TestClient(webapp.app) as c:
         r = c.get("/cmdb-final", auth=AUTH)
-        assert r.status_code == 200 and "Falta CA2, AVI" in r.text
+        assert r.status_code == 200 and "Falta o ficheiro de CA2, AVI" in r.text
         token = c.cookies["cw_csrf"]
         # carregar fontes pela página
         r = c.post("/cmdb-final/fonte/CA2", data={"csrf": token}, files={"ficheiro": ("ca2.xlsx", ca2_xlsx())}, auth=AUTH)
@@ -364,7 +364,7 @@ def test_web_flow(settings, monkeypatch):
         # páginas antigas
         assert c.get("/cmdb-final/comparar", auth=AUTH).status_code in (404, 422)
         page = c.get("/cmdb-final", auth=AUTH).text
-        assert "Reconciliar agora" in page and "Renovações" in page and "Azure" in page
+        assert "Comparar todas as fontes" in page and "Renovações" in page and "Azure" in page
 
 
 def _ucmdb(topology_query_status=200):
@@ -684,7 +684,7 @@ def test_reconcile_one_source(settings, monkeypatch):
     (settings.import_dir / "avi.csv").write_bytes(AVI)            # só o AVI, na diretoria
     with TestClient(webapp.app) as c:
         page = c.get("/cmdb-final", auth=AUTH).text
-        assert "Reconciliar só esta fonte" in page and "import/avi.csv" in page
+        assert "Comparar só esta fonte" in page and "import/avi.csv" in page
         token = c.cookies["cw_csrf"]
         # tudo: falta CA1 e CA2, com a indicação do nome esperado na diretoria
         r = c.post("/cmdb-final/gerar", data={"csrf": token}, auth=AUTH)

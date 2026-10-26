@@ -79,3 +79,16 @@
   <span class="tag tag-err" title="{{ TICKET_HELP['sem_pedido'] }}">sem pedido</span>
 {% else %}<span class="muted">—</span>{% endif %}
 {%- endmacro %}
+
+{% macro recon_steps(g, csrf) -%}
+<ol class="steps" aria-label="Passos para atualizar a CMDB">
+  {% for st in g.steps %}<li class="step-{{ st.state }}"{% if st.state == 'current' %} aria-current="step"{% endif %}><span class="n">PASSO {{ st.n }}</span><b>{{ st.label }}</b><span class="s">{{ st.sub }}</span></li>{% endfor %}
+</ol>
+{% if g.next.texto %}
+<div class="next" role="status">
+  <div><span class="next-h">Próximo passo</span><p>{{ g.next.texto }}</p></div>
+  {% if g.next.post %}<form method="post" action="{{ g.next.post }}"><input type="hidden" name="csrf" value="{{ csrf }}"><button class="primary">{{ g.next.botao }}</button></form>
+  {% elif g.next.href %}<a class="button primary" href="{{ g.next.href }}">{{ g.next.botao }}</a>{% endif %}
+</div>
+{% endif %}
+{%- endmacro %}

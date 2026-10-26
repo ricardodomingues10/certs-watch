@@ -78,7 +78,7 @@ def test_old_reconcile_page_redirects_and_directory_panel(env, tmp_path, monkeyp
         r = c.get("/reconciliacao", auth=auth, follow_redirects=False)
         assert r.status_code == 301 and r.headers["location"] == "/cmdb-final"
         page = c.get("/cmdb-final", auth=auth).text
-        assert "avi_x.csv" in page and "fonte AVI" in page and "Reconciliar agora" in page
+        assert "avi_x.csv" in page and "fonte AVI" in page and "Comparar todas as fontes" in page
 
 
 def test_old_env_still_reads_azure_and_directory_panel(env, tmp_path, monkeypatch):

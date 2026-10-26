@@ -100,3 +100,20 @@ def test_dashboard_page_and_evidence(env, monkeypatch):
         text = csv.content.decode("utf-8-sig")
         assert csv.status_code == 200 and text.splitlines()[0].startswith("Tipo;Nome;Expira")
         assert "semped.exemplo.pt" in text and "Pagamentos API" in text
+
+
+def test_navigation_and_theme(env):
+    from certwatch.web.app import app, nav_tree
+    tree = {g["key"]: g for g in nav_tree("/cmdb-final/avi", {})}
+    assert tree["sistema"]["on"] and not tree["cmdb"]["on"]                       # o prefixo mais longo ganha
+    assert [i["label"] for i in tree["sistema"]["items"] if i["on"]] == ["AVI pela API"]
+    assert nav_tree("/cert/abc", {})[1]["on"] and nav_tree("/", {})[0]["on"]
+    with TestClient(app) as c:
+        page = c.get("/certificados", auth=AUTH).text
+        assert 'data-palette="consola"' in page and 'aria-current="page">Certificados' in page
+        token = c.cookies["cw_csrf"]
+        r = c.post("/tema", data={"csrf": token, "tema": "relatorio", "next": "/certificados"}, auth=AUTH, follow_redirects=False)
+        assert r.status_code == 303 and r.headers["location"] == "/certificados"
+        assert 'data-palette="relatorio"' in c.get("/certificados", auth=AUTH).text
+        assert c.post("/tema", data={"csrf": token, "tema": "neon"}, auth=AUTH).status_code == 400
+        assert c.post("/tema", data={"csrf": "x", "tema": "consola"}, auth=AUTH).status_code == 403

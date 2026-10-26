@@ -160,8 +160,65 @@ def invalidate_nav() -> None:
     _NAV_CACHE["data"] = None
 
 
+# Navegação por tarefas: cada grupo responde a "o que vou fazer?"; as páginas do grupo aparecem como separadores.
+NAV_GROUPS = [
+    ("hoje", "Hoje", [("/", "Painel", None), ("/findings", "Alertas", "alertas")]),
+    ("inventario", "Inventário", [("/certificados", "Certificados", None), ("/apis", "APIs e segredos", None),
+                                  ("/endpoints", "Servidores", None), ("/testes", "Testes", None),
+                                  ("/descoberta", "Na internet", "ct_por_triar")]),
+    ("renovar", "Renovar", [("/pedidos", "Pedidos SMAX", None), ("/relatorio", "Relatório por email", None)]),
+    ("cmdb", "CMDB", [("/cmdb-final", "Atualizar a CMDB", "reconc_dif"), ("/ucmdb/certificado", "Editar um certificado", None),
+                      ("/cmdb/historico", "Histórico de alterações", None)]),
+    ("sistema", "Sistema", [("/jobs", "Execuções e auditoria", None), ("/cmdb-final/permissoes", "Ligação à UCMDB", None),
+                            ("/cmdb-final/avi", "AVI pela API", None), ("/testes/como-funciona", "Como funciona", None)]),
+]
+_NAV_ALIASES = {"/cert/": "/certificados", "/reconciliacao": "/cmdb-final"}
+PALETTES = {"consola": "Consola (escuro)", "assinatura": "Assinatura (escuro)", "relatorio": "Relatório (claro)"}
+
+
+def nav_tree(path: str, counts: dict) -> list[dict]:
+    """Grupos e páginas com o ativo marcado: a página cujo endereço é o prefixo mais longo do caminho atual."""
+    for old, new in _NAV_ALIASES.items():
+        if path.startswith(old):
+            path = new
+    best, best_len = None, -1
+    for _, _, links in NAV_GROUPS:
+        for href, _, _ in links:
+            hit = path == "/" if href == "/" else (path == href or path.startswith(href + "/") or path.startswith(href + "?"))
+            if hit and len(href) > best_len:
+                best, best_len = href, len(href)
+    out = []
+    for key, label, links in NAV_GROUPS:
+        items = [{"href": h, "label": lb, "on": h == best, "n": counts.get(c) if c else None,
+                  "hot": c == "alertas" and counts.get("alertas_altos")} for h, lb, c in links]
+        out.append({"key": key, "label": label, "href": links[0][0], "on": any(i["on"] for i in items), "items": items,
+                    "n": sum(i["n"] or 0 for i in items if i["n"]) or None})
+    return out
+
+
+def palette_of(request: Request) -> str:
+    p = request.cookies.get("cw_tema", "")
+    return p if p in PALETTES else (get_settings().ui_palette if get_settings().ui_palette in PALETTES else "consola")
+
+
 def render(request: Request, name: str, user: str, **ctx):
-    return templates.TemplateResponse(request, name, {"user": user, "csrf": request.state.csrf, "nav": nav_counts(), **ctx})
+    counts = nav_counts()
+    return templates.TemplateResponse(request, name, {"user": user, "csrf": request.state.csrf, "nav": counts,
+                                                      "navtree": nav_tree(request.url.path, counts),
+                                                      "palette": palette_of(request), "PALETTES": PALETTES, **ctx})
+
+
+@app.post("/tema")
+def set_palette(request: Request, csrf: str = Form(""), tema: str = Form(""), next: str = Form(""),
+                user: str = Depends(current_user)):
+    """Tema da interface, guardado só neste browser."""
+    check_csrf(request, csrf)
+    if tema not in PALETTES:
+        raise HTTPException(400, "Tema desconhecido")
+    r = RedirectResponse(safe_next(next, "/"), status_code=303)
+    r.set_cookie("cw_tema", tema, max_age=365 * 86400, httponly=True, samesite="strict",
+                 secure=get_settings().cookie_secure, path="/")
+    return r
 
 
 def csv_response(filename: str, header: list[str], rows: list[list]) -> Response:
@@ -1519,6 +1576,68 @@ FINAL_VIEWS = {**{k: v["label"] for k, v in cf.VIEWS.items()}, "detalhes": "Deta
 _OLD_VIEWS = {"alteracoes": "novos", "colunas": "detalhes"}
 
 
+def recon_guide(*, missing: list[str], run, busy: bool, to_apply: int, applied: int, write_on: bool,
+                on_run_page: bool, superseded_by: int | None = None) -> dict:
+    """Os 5 passos de "Atualizar a CMDB" com o estado de cada um e o próximo passo, numa frase e um botão."""
+    ready = run is not None and run.status in ("pronto", "bloqueado")
+    changes = len(run.changes or []) if ready else 0
+    st = {k: "todo" for k in ("fontes", "comparar", "rever", "aplicar", "confirmar")}
+    sub = {"fontes": "ficheiros e dados a comparar", "comparar": "ler a CMDB e comparar",
+           "rever": "decidir o que entra", "aplicar": "escrever na UCMDB", "confirmar": "comparar de novo: zero diferenças"}
+    st["fontes"] = "bad" if missing else "done"
+    sub["fontes"] = ("falta " + ", ".join(missing)) if missing else "prontas"
+    if busy:
+        st["comparar"], sub["comparar"] = "current", "a comparar…"
+    elif run is not None and run.status == "erro":
+        st["comparar"], sub["comparar"] = "bad", f"#{run.id} falhou"
+    elif ready:
+        st["comparar"], sub["comparar"] = "done", f"#{run.id}, {fmt_dt(run.created_at, True)}"
+    elif not missing:
+        st["comparar"] = "current"
+    if ready:
+        if not changes:
+            st.update(rever="done", aplicar="done", confirmar="done")
+            sub.update(rever="sem diferenças", aplicar="nada a aplicar", confirmar="a CMDB coincide com as fontes")
+        elif to_apply and not applied:
+            st["rever"], sub["rever"] = "current", f"{to_apply} alteraç{'ões' if to_apply != 1 else 'ão'} por rever"
+        elif to_apply:
+            st.update(rever="done", aplicar="current")
+            sub.update(rever=f"{changes} revistas", aplicar=f"{applied} aplicadas, faltam {to_apply}")
+        else:
+            st.update(rever="done", aplicar="done", confirmar="current")
+            sub.update(rever="revistas", aplicar=f"{applied} aplicadas" if applied else "nada incluído")
+    nxt = {"texto": "", "botao": "", "href": "", "post": ""}
+    if superseded_by:
+        nxt.update(texto=f"Esta reconciliação foi substituída pela #{superseded_by}; só a mais recente pode ser aplicada.",
+                   botao=f"Abrir a #{superseded_by}", href=f"/cmdb-final/{superseded_by}")
+    elif missing:
+        nxt.update(texto=f"Falta o ficheiro de {', '.join(missing)}. Coloque-o na diretoria import/ ou carregue-o aqui. "
+                         "Também pode comparar só as fontes que tem (\"Comparar só esta fonte\").",
+                   botao="Ver as fontes", href="/cmdb-final#fontes")
+    elif busy:
+        nxt.update(texto="A ler a CMDB e as fontes e a comparar. A página atualiza-se sozinha.")
+    elif not ready:
+        nxt.update(texto="Compare as fontes com a CMDB. Nada é escrito na UCMDB sem a sua confirmação.",
+                   botao="Comparar agora", post="/cmdb-final/gerar")
+    elif not changes:
+        nxt.update(texto="A CMDB coincide com as fontes: não há nada a fazer.", botao="Comparar de novo", post="/cmdb-final/gerar")
+    elif st["rever"] == "current":
+        nxt.update(texto=f"Reveja as {to_apply} alterações encontradas e exclua o que não deve entrar na CMDB. Cada linha diz porquê.",
+                   botao="Rever as alterações", href="#alteracoes" if on_run_page else f"/cmdb-final/{run.id}")
+    elif st["aplicar"] == "current":
+        nxt.update(texto=(f"Faltam aplicar {to_apply} alterações na UCMDB." if write_on else
+                          "A escrita na UCMDB está desligada (CERTWATCH_UCMDB_WRITE=true no .env)."),
+                   botao="Aplicar na UCMDB", href="#ucmdb" if on_run_page else f"/cmdb-final/{run.id}#ucmdb")
+    else:
+        nxt.update(texto="Tudo o que estava incluído foi aplicado. Compare de novo para confirmar que não ficaram diferenças.",
+                   botao="Comparar de novo", post="/cmdb-final/gerar")
+    if not on_run_page and ready and changes and st["rever"] == "current":
+        nxt["botao"] = "Rever as alterações"
+    labels = {"fontes": "Fontes", "comparar": "Comparar", "rever": "Rever", "aplicar": "Aplicar", "confirmar": "Confirmar"}
+    return {"steps": [{"n": i + 1, "label": labels[k], "state": st[k], "sub": sub[k]} for i, k in enumerate(labels)],
+            "next": nxt}
+
+
 def _final_error(request: Request, user: str, message: str, back: str):
     return render(request, "final_erro.html", user, message=message, back=back)
 
@@ -1549,13 +1668,22 @@ def final_page(request: Request, user: str = Depends(current_user)):
             s.expunge(r)
         applied = dict(s.execute(select(UcmdbWrite.run_id, func.count()).where(UcmdbWrite.estado.in_(uw.DONE))
                                  .group_by(UcmdbWrite.run_id)).all())
+        lr = runs[0] if runs else None
+        to_apply_n = 0
+        if lr is not None and lr.status in ("pronto", "bloqueado"):
+            done = {w.chave for w in s.scalars(select(UcmdbWrite).where(UcmdbWrite.run_id == lr.id, UcmdbWrite.parte == "cert",
+                                                                        UcmdbWrite.estado.in_(uw.DONE)))}
+            to_apply_n = sum(1 for c in (lr.changes or []) if c.get("incluir", True) and c["chave"] not in done)
         cmdb_at = s.scalar(select(CmdbRecord.last_seen).order_by(CmdbRecord.last_seen.desc()).limit(1))
         apis_at = s.scalar(select(ApiRecord.last_seen).order_by(ApiRecord.last_seen.desc()).limit(1))
         ct = cf.ct_source(s, settings, today)[1] if settings.final_ct else None
         renewals = len(rn.source_items(s, today))
     from ..reconcile import scan_import_dir
     latest = runs[0] if runs else None
-    return render(request, "final.html", user, inputs=inputs, files=files, runs=runs, latest=latest, cmdb_at=cmdb_at,
+    guide = recon_guide(missing=[x for x in settings.final_sources if x not in inputs], run=latest,
+                        busy=bool(latest and latest.status == "a_gerar"), to_apply=to_apply_n,
+                        applied=applied.get(latest.id, 0) if latest else 0, write_on=settings.ucmdb_write, on_run_page=False)
+    return render(request, "final.html", user, guide=guide, inputs=inputs, files=files, runs=runs, latest=latest, cmdb_at=cmdb_at,
                   apis_at=apis_at, settings=settings, FINAL_STATES=FINAL_STATES, ct=ct, renewals=renewals,
                   applied=applied, AZURE=cf.AZURE_SOURCE, dir_files=scan_import_dir(settings),
                   issuers={k: settings.import_issuers.get(k, "") for k in settings.final_sources})
@@ -1993,7 +2121,15 @@ def final_run(request: Request, run_id: int, vista: str = "", q: str = "", fonte
         changes = [c for c in changes if any(ql in (c.get(k) or "").lower() for k in ("cn", "global_id", "serial", "issuer_name"))]
     az_view = request.query_params.get("az", "")
     azure_shown = [x for x in azure if (az_view == "todos" or x["estado"] not in ("igual", "expirado"))]
-    return render(request, "final_run.html", user, run=run, vista=vista, views=FINAL_VIEWS, VIEWS=cf.VIEWS,
+    to_apply = [c for c in all_changes if c.get("incluir", True)
+                and not (writes.get(c["chave"]) and writes[c["chave"]].estado in uw.DONE)]
+    will = {"criar": sum(1 for c in to_apply if c["tipo"] == "novo"), "atualizar": sum(1 for c in to_apply if c["tipo"] != "novo"),
+            "excluidas": sum(1 for c in all_changes if not c.get("incluir", True))}
+    guide = recon_guide(missing=[], run=run, busy=run.status == "a_gerar", to_apply=len(to_apply),
+                        applied=sum(1 for w in writes.values() if w.estado in uw.DONE), write_on=settings.ucmdb_write,
+                        on_run_page=True,
+                        superseded_by=newest if newest and newest != run.id and run.status in ("pronto", "bloqueado") else None)
+    return render(request, "final_run.html", user, run=run, guide=guide, will=will, vista=vista, views=FINAL_VIEWS, VIEWS=cf.VIEWS,
                   changes=changes[:3000], n_changes=len(changes), counts=counts, q=q, newest=newest, sizes=sizes,
                   FINAL_STATES=FINAL_STATES, settings=settings, fonte=fonte, incluida=incluida,
                   can_edit=can_edit, writes=writes, writes_az=writes_az, WRITE_STATES=uw.STATE_LABELS,

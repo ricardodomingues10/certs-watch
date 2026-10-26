@@ -1,78 +1,69 @@
 <!doctype html>
-<html lang="pt-PT">
+<html lang="pt-PT" data-palette="{{ palette or 'consola' }}">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>{% block title %}certwatch{% endblock %} · certwatch</title>
   <link rel="icon" href="/static/logo.svg" type="image/svg+xml">
   <link rel="preload" href="/static/fonts/public-sans-latin-wght-normal.woff2" as="font" type="font/woff2" crossorigin>
+  <link rel="preload" href="/static/fonts/ibm-plex-mono-latin-500-normal.woff2" as="font" type="font/woff2" crossorigin>
   <link rel="stylesheet" href="/static/style.css">
   <script src="/static/app.js" defer></script>
   {% block head %}{% endblock %}
 </head>
 <body>
 {% set p = request.url.path %}
-{% macro navlink(href, label, active, count=None, kind='') -%}
-<a href="{{ href }}" class="{{ 'on' if active }}"{% if active %} aria-current="page"{% endif %}><span>{{ label }}</span>{% if count %}<span class="badge {{ kind }}">{{ count }}</span>{% endif %}</a>
-{%- endmacro %}
-<div class="shell">
-  <input type="checkbox" id="menu-toggle" class="menu-toggle" aria-label="Menu">
-  <header class="mobilebar">
-    <a class="brand" href="/"><img src="/static/logo.svg" alt="" width="28" height="28"><span class="word"><b>cert</b>watch</span></a>
+{% set group = (navtree|selectattr('on')|first) if navtree else none %}
+<input type="checkbox" id="menu-toggle" class="menu-toggle" aria-label="Menu">
+<header class="top">
+  <div class="top-row">
+    <a class="brand" href="/" aria-label="certwatch, painel"><img src="/static/logo.svg" alt="" width="26" height="26"><span class="word"><b>cert</b>watch</span></a>
+    <nav class="areas" aria-label="Áreas">
+      {% for g in navtree %}
+      <a href="{{ g.href }}" class="{{ 'on' if g.on }}"{% if g.on %} aria-current="true"{% endif %}>{{ g.label }}{% if g.n %}<span class="badge {{ 'hot' if g.key == 'hoje' and nav.alertas_altos else 'warm' }}">{{ g.n }}</span>{% endif %}</a>
+      {% endfor %}
+    </nav>
+    <form class="search" method="get" action="/pesquisa" role="search">
+      <input type="search" id="global-q" name="q" value="{{ request.query_params.get('q', '') if p == '/pesquisa' else '' }}"
+             placeholder="Procurar certificado, servidor, emissor ou API" aria-label="Procurar">
+    </form>
+    <span class="who">{{ user }}</span>
     <label for="menu-toggle" class="menu-btn" aria-label="Abrir ou fechar o menu"><span></span><span></span><span></span></label>
-  </header>
-  <nav class="rail" aria-label="Navegação principal">
-    <a class="brand" href="/"><img src="/static/logo.svg" alt="" width="34" height="34"><span class="word"><b>cert</b>watch<small>Gestão de certificados</small></span></a>
-
-    <h4>Visão geral</h4>
-    {{ navlink('/', 'Painel', p == '/') }}
-
-    <h4>Inventário</h4>
-    {{ navlink('/certificados', 'Certificados', p.startswith('/certificados') or p.startswith('/cert/')) }}
-    {{ navlink('/apis', 'APIs', p.startswith('/apis')) }}
-    {{ navlink('/endpoints', 'Servidores', p.startswith('/endpoints')) }}
-
-    <h4>Verificação</h4>
-    {{ navlink('/testes', 'Testes', p.startswith('/testes') and not p.startswith('/testes/como')) }}
-    {{ navlink('/findings', 'Alertas', p.startswith('/findings'), nav.alertas, 'hot' if nav.alertas_altos else '') }}
-
-    <h4>CMDB</h4>
-    {{ navlink('/cmdb-final', 'Reconciliar e atualizar', p.startswith('/cmdb-final') and not p.startswith('/cmdb-final/permissoes'), nav.reconc_dif, 'warm') }}
-    {{ navlink('/descoberta', 'Na internet', p.startswith('/descoberta'), nav.ct_por_triar, 'warm') }}
-    {{ navlink('/ucmdb/certificado', 'Editar um certificado', p.startswith('/ucmdb/certificado')) }}
-    {{ navlink('/cmdb/historico', 'Histórico de alterações', p.startswith('/cmdb/historico')) }}
-
-    <h4>Operação</h4>
-    {{ navlink('/pedidos', 'Pedidos SMAX', p.startswith('/pedidos')) }}
-    {{ navlink('/relatorio', 'Relatório por email', p.startswith('/relatorio')) }}
-
-    <h4>Sistema</h4>
-    {{ navlink('/jobs', 'Execuções e auditoria', p.startswith('/jobs')) }}
-    {{ navlink('/cmdb-final/permissoes', 'Ligação à UCMDB', p.startswith('/cmdb-final/permissoes')) }}
-    {{ navlink('/testes/como-funciona', 'Como funciona', p.startswith('/testes/como')) }}
-  </nav>
-
-  <div class="content">
-    <header class="topbar">
-      <form method="get" action="/pesquisa" role="search">
-        <input type="search" id="global-q" name="q" value="{{ request.query_params.get('q', '') if p == '/pesquisa' else '' }}"
-               placeholder="Procurar certificado, servidor, emissor ou API" aria-label="Procurar">
-      </form>
-      <span class="who">{{ user }}</span>
-    </header>
-    <main>
-      <div class="page-head">
-        <div class="titles">
-          <div class="crumb">{% block crumb %}{% endblock %}</div>
-          <h1>{% block page_title %}{% endblock %}</h1>
-          <p class="lede">{% block lede %}{% endblock %}</p>
-        </div>
-        <div class="page-actions">{% block actions %}{% endblock %}</div>
-      </div>
-      {% block content %}{% endblock %}
-    </main>
-    <footer>certwatch {{ version }} · datas em hora de Lisboa</footer>
   </div>
-</div>
+  {% if group %}
+  <nav class="sub" aria-label="{{ group.label }}">
+    {% for i in group['items'] %}
+    <a href="{{ i.href }}" class="{{ 'on' if i.on }}"{% if i.on %} aria-current="page"{% endif %}>{{ i.label }}{% if i.n %}<span class="badge {{ 'hot' if i.hot else 'warm' }}">{{ i.n }}</span>{% endif %}</a>
+    {% endfor %}
+  </nav>
+  {% endif %}
+</header>
+<nav class="drawer" aria-label="Navegação">
+  {% for g in navtree %}
+  <div class="drawer-group">
+    <h4>{{ g.label }}</h4>
+    {% for i in g['items'] %}<a href="{{ i.href }}" class="{{ 'on' if i.on }}">{{ i.label }}{% if i.n %}<span class="badge {{ 'hot' if i.hot else 'warm' }}">{{ i.n }}</span>{% endif %}</a>{% endfor %}
+  </div>
+  {% endfor %}
+</nav>
+<main>
+  <div class="page-head">
+    <div class="titles">
+      <div class="crumb">{% block crumb %}{% endblock %}</div>
+      <h1>{% block page_title %}{% endblock %}</h1>
+      <p class="lede">{% block lede %}{% endblock %}</p>
+    </div>
+    <div class="page-actions">{% block actions %}{% endblock %}</div>
+  </div>
+  {% block content %}{% endblock %}
+</main>
+<footer>
+  <span>certwatch {{ version }} · datas em hora de Lisboa</span>
+  <form method="post" action="/tema" class="theme">
+    <input type="hidden" name="csrf" value="{{ csrf }}"><input type="hidden" name="next" value="{{ request.url.path }}{{ '?' ~ request.url.query if request.url.query }}">
+    <label>Tema <select name="tema" aria-label="Tema">{% for k, v in PALETTES.items() %}<option value="{{ k }}" {{ 'selected' if palette == k }}>{{ v }}</option>{% endfor %}</select></label>
+    <button>Aplicar</button>
+  </form>
+</footer>
 </body>
 </html>

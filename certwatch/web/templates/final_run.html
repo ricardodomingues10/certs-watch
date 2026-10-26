@@ -1,13 +1,15 @@
 {% extends "base.html" %}
+{% from "_macros.html" import recon_steps %}
 {% block title %}Reconciliação #{{ run.id }}{% endblock %}
 {% block head %}{% if run.status == 'a_gerar' or write_busy %}<meta http-equiv="refresh" content="4">{% endif %}{% endblock %}
-{% block crumb %}<a href="/cmdb-final">Reconciliar e atualizar</a>{% endblock %}
+{% block crumb %}<a href="/cmdb-final">Atualizar a CMDB</a>{% endblock %}
 {% block page_title %}Reconciliação #{{ run.id }} <small><span class="tag {{ {'pronto': 'tag-ok', 'bloqueado': 'tag-run', 'erro': 'tag-err', 'a_gerar': 'tag-acc'}[run.status] }}">{{ FINAL_STATES[run.status] }}</span></small>{% endblock %}
 {% block lede %}Pedida por {{ run.created_by }} em {{ run.created_at|dtt }}{% if run.finished_at %}, concluída às {{ run.finished_at|dtt|replace(run.finished_at|dt ~ ' ', '') }}{% endif %}.{% if newest and newest != run.id %} Há uma reconciliação mais recente: <a href="/cmdb-final/{{ newest }}">#{{ newest }}</a>.{% endif %}{% endblock %}
 {% block content %}
 {% set sm = run.summary or {} %}
 {% if msg %}<div class="note">{{ msg }}</div>{% endif %}
 {% if erro_msg %}<div class="note bad">{{ erro_msg }}</div>{% endif %}
+{{ recon_steps(guide, csrf) }}
 {% if run.status == 'a_gerar' %}
 <div class="note">A ler a CMDB pela API e os ficheiros das fontes, e a comparar. Os certificados com data anterior à da CMDB são verificados no servidor. Esta página atualiza-se sozinha.</div>
 {% elif run.status == 'erro' %}
@@ -15,9 +17,9 @@
 {% endif %}
 
 {% if sm %}
-<section class="card" aria-label="O que foi comparado">
-  <h2>O que foi comparado</h2>
-  {% if sm.get('ambito') %}<p class="small"><span class="tag tag-acc">só {{ sm.ambito|map('source_name')|join(', ') }}</span> Esta reconciliação leu só {{ 'esta fonte' if sm.ambito|length == 1 else 'estas fontes' }}; as outras não foram comparadas. A CMDB foi lida por inteiro.</p>{% endif %}
+{% if sm.get('ambito') %}<p class="small"><span class="tag tag-acc">só {{ sm.ambito|map('source_name')|join(', ') }}</span> Esta reconciliação leu só {{ 'esta fonte' if sm.ambito|length == 1 else 'estas fontes' }}; as outras não foram comparadas. A CMDB foi lida por inteiro.</p>{% endif %}
+<details class="card" aria-label="O que foi comparado">
+  <summary><h2 class="inline-h">O que foi comparado <small>como os dados foram lidos e comparados, passo a passo</small></h2></summary>
   <ol class="dataflow">
     {% for st in flow %}
     <li>
@@ -28,7 +30,7 @@
     </li>
     {% endfor %}
   </ol>
-</section>
+</details>
 
 {% if run.status == 'bloqueado' %}
 <div class="note warn"><b>Os ficheiros CSV não foram gerados</b> (o Excel está disponível em Detalhes técnicos). As alterações podem ser aplicadas na UCMDB na mesma.
@@ -58,6 +60,12 @@
     <li><b>Depois, todas:</b> aplique as alterações incluídas que ainda não foram aplicadas{% if to_apply %} ({{ to_apply|length }}){% endif %}. As do Azure aplicam-se uma a uma, no separador Azure.</li>
   </ol>
   {% if to_apply %}
+  <p class="small"><b>O que vai acontecer</b> se aplicar todas:</p>
+  <div class="will">
+    <div><b>{{ will.criar }}</b><span>certificados novos criados na UCMDB</span></div>
+    <div><b>{{ will.atualizar }}</b><span>certificados atualizados (só os campos que mudam)</span></div>
+    <div><b>{{ will.excluidas }}</b><span>excluídas: ficam como estão na CMDB</span></div>
+  </div>
   <form method="post" action="/cmdb-final/{{ run.id }}/ucmdb" class="inline">
     <input type="hidden" name="csrf" value="{{ csrf }}"><input type="hidden" name="modo" value="todas"><input type="hidden" name="vista" value="{{ vista }}">
     <label class="small"><input type="checkbox" name="confirmo" value="1" required> Revi as alterações e quero aplicar as {{ to_apply|length }} na UCMDB</label>
@@ -70,7 +78,7 @@
   <input type="hidden" name="csrf" value="{{ csrf }}"><input type="hidden" name="modo" value="um"><input type="hidden" name="vista" value="{{ vista }}">
 </form>
 
-<nav class="tabs" aria-label="Resultado da comparação">
+<nav class="tabs" id="alteracoes" aria-label="Resultado da comparação">
   {% for k, label in views.items() %}
   <a href="?vista={{ k }}" class="{{ 'on' if vista == k }}">{{ label }}{% if k in counts %} <span class="n">{{ counts[k] }}</span>{% endif %}</a>
   {% endfor %}

@@ -57,7 +57,7 @@
           <td><a href="{{ it.url }}" class="mono">{{ it.nome }}</a> <span class="tag tag-off">{{ it.tipo }}</span>
             {% if it.nomes|length > 1 %}<div class="small muted">também {{ it.nomes[1:4]|join(', ') }}{% if it.nomes|length > 4 %} e mais {{ it.nomes|length - 4 }}{% endif %}</div>{% endif %}
             {% if it.auto %}<div class="small"><span class="tag tag-run" title="Devia ter sido renovado automaticamente">renovação automática falhou?</span></div>{% endif %}
-            {% if not it.confirmado %}<div class="small muted">data da CMDB, não confirmada no servidor</div>{% endif %}</td>
+            {% if not it.confirmado %}<span class="tag tag-off" title="Data da CMDB, ainda não confirmada no servidor">só CMDB</span>{% endif %}</td>
           <td class="opt small">{{ it.emissor or '—' }}</td>
           <td class="opt small">{% if it.onde %}{{ it.onde[:2]|join(', ') }}{% if it.n_sites > 2 %} e mais {{ it.n_sites - 2 }}{% endif %}{% else %}<span class="muted">—</span>{% endif %}</td>
           <td>{% if it.pedido.main %}{{ ticket_cell(it.pedido, it.dias) }}{% else %}<span class="tag tag-err">sem pedido</span>{% endif %}</td>

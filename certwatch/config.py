@@ -210,6 +210,7 @@ class Settings:
     avi_verify_tls: bool = True
     avi_version: str = ""
     avi_page_size: int = 100
+    ui_palette: str = "consola"         # tema por omissão: consola | assinatura | relatorio
     dash_expiry_days: int = 20          # painel: "expiram sem pedido" nos próximos N dias
     dash_stale_days: int = 10           # painel: pedido aberto sem movimento há N dias = parado
     avi_source: str = "ficheiro"        # ficheiro | api | auto (API, e o ficheiro se a API falhar)
@@ -349,6 +350,7 @@ class Settings:
             avi_version=_env("CERTWATCH_AVI_VERSION", ""),
             avi_page_size=int(_env("CERTWATCH_AVI_PAGE_SIZE", "100")),
             avi_source=(_env("CERTWATCH_AVI_SOURCE", "ficheiro") or "ficheiro").lower(),
+            ui_palette=(_env("CERTWATCH_UI_PALETTE", "consola") or "consola").lower(),
             dash_expiry_days=int(_env("CERTWATCH_DASH_EXPIRY_DAYS", "20")),
             dash_stale_days=int(_env("CERTWATCH_DASH_STALE_DAYS", "10")),
             internal_suffixes=_str_list(_env("CERTWATCH_INTERNAL_SUFFIXES", ".local,.lan,.internal,.intranet,.corp")),
