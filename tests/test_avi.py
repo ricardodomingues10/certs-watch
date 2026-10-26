@@ -202,3 +202,31 @@ def test_avi_page(st, monkeypatch):
         # sem credenciais: a página diz o que falta e não tenta
         monkeypatch.setattr(webapp, "get_settings", lambda: replace(st, avi_password=None))
         assert "secrets/avi_password" in c.get("/cmdb-final/avi", auth=AUTH).text
+
+
+def test_unreadable_optional_secret_does_not_stop_startup(tmp_path, monkeypatch):
+    """Um segredo opcional com o dono errado (ex.: chmod 600 de outro utilizador) não impede o arranque:
+    a página do AVI diz o que corrigir. Os obrigatórios continuam a impedir, com o comando certo."""
+    import os
+    from pathlib import Path
+
+    from certwatch import config
+    secret = tmp_path / "avi_user"
+    secret.write_text("leitor")
+    real_read = Path.read_text
+
+    def deny(self, *a, **k):
+        if self.name in ("avi_user", "admin_password"):
+            raise PermissionError(13, "Permission denied")
+        return real_read(self, *a, **k)
+    monkeypatch.setattr(Path, "read_text", deny)
+    monkeypatch.setenv("CERTWATCH_AVI_USER_FILE", str(secret))
+    assert config._secret("avi_user", "CERTWATCH_AVI_USER") is None and "avi_user" in config.UNREADABLE_SECRETS
+    msg = avi.configured(replace(config.get_settings(), avi_url="https://avi.test", avi_user=None))
+    assert "sudo chown 10001:10001 secrets/avi_user" in msg
+    admin = tmp_path / "admin_password"
+    admin.write_text("x")
+    monkeypatch.setenv("CERTWATCH_ADMIN_PASSWORD_FILE", str(admin))
+    with pytest.raises(RuntimeError, match="chown 10001:10001 secrets/admin_password"):
+        config._secret("admin_password", "CERTWATCH_ADMIN_PASSWORD", required=True)
+    config.UNREADABLE_SECRETS.clear()

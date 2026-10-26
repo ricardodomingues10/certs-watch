@@ -49,6 +49,12 @@ def configured(settings: Settings) -> str:
     """Devolve o que falta configurar ("" = pronto)."""
     if not settings.avi_url:
         return "Defina CERTWATCH_AVI_URL no .env (endereço do controlador AVI)."
+    from ..config import UNREADABLE_SECRETS
+    bad = sorted({"avi_user", "avi_password"} & UNREADABLE_SECRETS)
+    if bad:
+        files = " ".join(f"secrets/{b}" for b in bad)
+        return (f"O certwatch não consegue ler {files}: o dono tem de ser o UID 10001. No servidor: "
+                f"sudo chown 10001:10001 {files} && sudo chmod 400 {files}, e docker compose up -d.")
     if not settings.avi_user or not settings.avi_password:
         return "Faltam as credenciais do AVI nos ficheiros de segredo secrets/avi_user e secrets/avi_password."
     return ""

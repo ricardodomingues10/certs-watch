@@ -6,6 +6,7 @@ de ambiente direta só é aceite como último recurso (útil em testes).
 """
 from __future__ import annotations
 
+import logging
 import os
 import re
 from dataclasses import dataclass, field
@@ -19,7 +20,12 @@ def _env(name: str, default: str | None = None) -> str | None:
     return v if v not in (None, "") else default
 
 
-def _secret(name: str, env_var: str) -> str | None:
+# Segredos opcionais que existem mas não se conseguem ler (ex.: dono errado): a aplicação arranca na mesma e a
+# funcionalidade diz o que corrigir. Os obrigatórios (base de dados, admin) continuam a impedir o arranque.
+UNREADABLE_SECRETS: set[str] = set()
+
+
+def _secret(name: str, env_var: str, required: bool = False) -> str | None:
     candidates = []
     if _env(f"{env_var}_FILE"):
         candidates.append(Path(_env(f"{env_var}_FILE")))
@@ -27,9 +33,18 @@ def _secret(name: str, env_var: str) -> str | None:
     for p in candidates:
         try:
             if p.is_file():
+                UNREADABLE_SECRETS.discard(name)
                 return p.read_text(encoding="utf-8").strip()
         except PermissionError as exc:
-            raise RuntimeError(f"Sem permissão para ler o segredo {p}") from exc
+            if required:
+                raise RuntimeError(f"Sem permissão para ler o segredo {p} (dono deve ser o UID 10001: "
+                                   f"sudo chown 10001:10001 secrets/{name} && sudo chmod 400 secrets/{name})") from exc
+            if name not in UNREADABLE_SECRETS:
+                logging.getLogger(__name__).error(
+                    "Sem permissão para ler o segredo %s: sudo chown 10001:10001 secrets/%s && sudo chmod 400 secrets/%s",
+                    p, name, name)
+            UNREADABLE_SECRETS.add(name)
+            return None
     return _env(env_var)
 
 
@@ -250,7 +265,7 @@ class Settings:
         db_url = _env("CERTWATCH_DATABASE_URL")
         if not db_url:
             user = _env("CERTWATCH_DB_USER", "certwatch")
-            pwd = _secret("db_password", "CERTWATCH_DB_PASSWORD") or ""
+            pwd = _secret("db_password", "CERTWATCH_DB_PASSWORD", required=True) or ""
             host = _env("CERTWATCH_DB_HOST", "127.0.0.1")
             port = _env("CERTWATCH_DB_PORT", "55432")
             name = _env("CERTWATCH_DB_NAME", "certwatch")
@@ -353,7 +368,7 @@ class Settings:
             pipeline_daily_at=_env("CERTWATCH_PIPELINE_DAILY_AT", "06:15"),
             timezone=_env("CERTWATCH_TIMEZONE", "Europe/Lisbon"),
             admin_user=_env("CERTWATCH_ADMIN_USER", "admin"),
-            admin_password=_secret("admin_password", "CERTWATCH_ADMIN_PASSWORD"),
+            admin_password=_secret("admin_password", "CERTWATCH_ADMIN_PASSWORD", required=True),
             cookie_secure=_env("CERTWATCH_COOKIE_SECURE", "false").lower() == "true",
             ucmdb_write=_env("CERTWATCH_UCMDB_WRITE", "false").lower() == "true",
             ucmdb_cert_type=_env("CERTWATCH_UCMDB_CERT_TYPE", "digital_certificate"),

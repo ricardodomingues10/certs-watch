@@ -264,7 +264,7 @@ Cada linha da reconciliação mostra o resultado (criado / atualizado / aviso / 
 Em vez do ficheiro exportado pelo script, o certwatch pode ler os certificados diretamente no controlador AVI (REST API, só leitura). Faz o mesmo que o script (login, páginas de `/api/sslkeyandcertificate`, logout) e produz um CSV com as mesmas colunas (Nome, Subject_CommonName, Validity_NotBefore, Validity_NotAfter, SerialNumber em hexadecimal, Issuer_CommonName, SubjectAlternativeName), lido pelo mesmo leitor do ficheiro.
 
 1. Pedir uma conta do AVI **só de leitura** (papel com leitura em SSL/TLS Certificates, no tenant certo).
-2. No servidor: `echo -n 'utilizador' > secrets/avi_user`, `echo -n 'password' > secrets/avi_password`, `chmod 600 secrets/avi_*`.
+2. No servidor: `echo -n 'utilizador' > secrets/avi_user`, `echo -n 'password' > secrets/avi_password`, `sudo chown 10001:10001 secrets/avi_* && sudo chmod 400 secrets/avi_*` (os contentores correm como o UID 10001; com outro dono o segredo não é lido e a página do AVI diz isso).
 3. Colocar em `trust/` a raiz (e o intermédio) da CA que emitiu o certificado do controlador. Ao contrário do script, a verificação TLS fica ligada.
 4. No `.env`: `CERTWATCH_AVI_URL=https://<controlador>` (e, se forem outros, o tenant e os endpoints do script). `docker compose up -d`.
 5. **CMDB → Reconciliar e atualizar → AVI → Ler pela API do AVI → Testar e comparar com o ficheiro.** Mostra quantos certificados e CAs leu, e compara com o ficheiro atual pelo nome do objeto: iguais, com diferenças (data de fim, série, CommonName), só no ficheiro, só na API. Também lista as CAs do AVI pela data de fim. Testar não muda a fonte da reconciliação. **Descarregar CSV** dá o ficheiro no formato do script.
