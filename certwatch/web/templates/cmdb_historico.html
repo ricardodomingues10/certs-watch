@@ -54,6 +54,7 @@
       <td class="small">{% for m in r.mudancas %}<div><span class="mono">{{ m.atributo }}</span>: {% if w.acao != 'criar' %}<del>{{ m.antes or '(vazio)' }}</del> → {% endif %}<ins>{{ m.depois or '(vazio)' }}</ins></div>{% else %}—{% endfor %}</td>
       <td><span class="tag {{ {'ok': 'tag-ok', 'aviso': 'tag-run', 'erro': 'tag-err', 'ignorado': 'tag-off', 'a_aplicar': 'tag-acc', 'pendente': 'tag-acc'}[w.estado] }}">{{ WRITE_STATES[w.estado] }}</span>
         {% if w.verificado %}<div class="small muted">confirmado na UCMDB</div>{% endif %}
+        {% if w.ucmdb_id in fora_tql %}<div class="small"><span class="tag tag-run" title="A importação da CMDB (TQL {{ tql }}) não o devolve">fora da leitura da CMDB</span> <a href="/cmdb/historico/porque/{{ w.ucmdb_id|urlencode }}">Porquê?</a></div>{% endif %}
         {% if w.detalhe and w.estado != 'ok' %}<div class="small muted">{{ w.detalhe }}</div>{% endif %}</td>
     </tr>
   {% else %}

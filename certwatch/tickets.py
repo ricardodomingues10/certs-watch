@@ -194,8 +194,33 @@ def tickets_by_label(session: Session) -> dict[str, list[SmaxTicket]]:
     return out
 
 
+def current_expiry(session: Session, settings: Settings, inventory: list[dict] | None = None) -> dict[str, dict]:
+    """Por nome: a data de fim do certificado atual (a do servidor, se foi verificado; senão a da CMDB)."""
+    if inventory is None:
+        from .insights import build_inventory
+        inventory = build_inventory(session, settings, utcnow())
+    out = {}
+    for r in inventory:
+        d = r["live_not_after"] or r["cmdb_valid_to"]
+        if d is not None:
+            out[r["cn"]] = {"data": as_utc(d), "fonte": "servidor" if r["live_not_after"] else "CMDB"}
+    return out
+
+
+def already_renewed(t: SmaxTicket, current: dict[str, dict], settings: Settings) -> dict | None:
+    """Pedido aberto cujo certificado já foi renovado: o certificado atual expira depois da data do pedido
+    (mais de 1 dia). O pedido ficou por fechar no SMAX."""
+    if not is_open(t, settings) or t.cert_expiry is None:
+        return None
+    cur = current.get(t.endpoint)
+    if cur and (cur["data"].date() - as_utc(t.cert_expiry).date()).days > 1:
+        return cur
+    return None
+
+
 TICKET_VIEWS = {
     "abertos": "Abertos",
+    "ja_renovado": "Abertos com o certificado já renovado",
     "atrasados": "Abertos com certificado já expirado",
     "fim_ultrapassado": "Abertos com fim planeado ultrapassado",
     "comentarios": "Com comentários",
@@ -204,7 +229,8 @@ TICKET_VIEWS = {
 }
 
 
-def ticket_list(session: Session, settings: Settings, view: str = "abertos", q: str = "") -> tuple[list[dict], dict]:
+def ticket_list(session: Session, settings: Settings, view: str = "abertos", q: str = "",
+                inventory: list[dict] | None = None) -> tuple[list[dict], dict]:
     """Todos os pedidos lidos do SMAX, com a ligação ao certificado ou API e o último comentário."""
     from .models import ApiRecord, CmdbRecord, Endpoint
     from .normalize import norm_label
@@ -213,6 +239,7 @@ def ticket_list(session: Session, settings: Settings, view: str = "abertos", q: 
     cert_names = {r.cn_norm for r in session.scalars(select(CmdbRecord).where(CmdbRecord.active.is_(True)))}
     cert_names |= {e.expected_cn_norm for e in session.scalars(select(Endpoint))}
     apis = {norm_label(a.name): a.name for a in session.scalars(select(ApiRecord).where(ApiRecord.active.is_(True)))}
+    current = current_expiry(session, settings, inventory)
     rows = []
     for t in session.scalars(select(SmaxTicket)):
         aberto = is_open(t, settings)
@@ -225,9 +252,12 @@ def ticket_list(session: Session, settings: Settings, view: str = "abertos", q: 
             nome = apis[norm_label(t.endpoint)]
             alvo = {"tipo": "API", "nome": nome, "url": f"/apis?q={nome}"}
         c = comments.get(t.id, {})
+        renewed = already_renewed(t, current, settings)
         rows.append({
             "t": t, "aberto": aberto, "url": ticket_url(settings, t.id), "discussao": discussions_url(settings, t.id),
-            "cert_expirado": aberto and exp is not None and exp < now,
+            "ja_renovado": renewed,
+            # atrasado = o certificado do pedido expirou e não há outro mais recente (se já foi renovado, é "já renovado")
+            "cert_expirado": aberto and exp is not None and exp < now and not renewed,
             "dias_expirado": (now - exp).days if exp and exp < now else None,
             "fim_ultrapassado": aberto and end is not None and end < now,
             "alvo": alvo, "comentarios": c.get("n", 0), "ultimo_comentario": c.get("ultimo"),
@@ -235,13 +265,15 @@ def ticket_list(session: Session, settings: Settings, view: str = "abertos", q: 
         })
     counts = {
         "abertos": sum(1 for r in rows if r["aberto"]),
+        "ja_renovado": sum(1 for r in rows if r["ja_renovado"]),
         "atrasados": sum(1 for r in rows if r["cert_expirado"]),
         "fim_ultrapassado": sum(1 for r in rows if r["fim_ultrapassado"]),
         "comentarios": sum(1 for r in rows if r["comentarios"]),
         "fechados": sum(1 for r in rows if not r["aberto"]),
         "todos": len(rows),
     }
-    pick = {"abertos": lambda r: r["aberto"], "atrasados": lambda r: r["cert_expirado"],
+    pick = {"abertos": lambda r: r["aberto"], "ja_renovado": lambda r: bool(r["ja_renovado"]),
+            "atrasados": lambda r: r["cert_expirado"],
             "fim_ultrapassado": lambda r: r["fim_ultrapassado"], "comentarios": lambda r: r["comentarios"] > 0,
             "fechados": lambda r: not r["aberto"], "todos": lambda r: True}.get(view, lambda r: r["aberto"])
     rows = [r for r in rows if pick(r)]

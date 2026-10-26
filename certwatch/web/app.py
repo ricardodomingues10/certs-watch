@@ -349,13 +349,14 @@ def dashboard(request: Request, janela: int = 24, user: str = Depends(current_us
         open_findings = list(s.scalars(select(Finding).where(Finding.status == "aberto")))
         items = db_.expiring_without_ticket(inv, snap, s, settings, now)
         activity = db_.ticket_activity(s, settings, now, janela)
-        stale = db_.stale_tickets(s, settings, now)
+        from ..tickets import current_expiry
+        stale = db_.stale_tickets(s, settings, now, current_expiry(s, settings, inv))
         nis = db_.nis2(inv, snap, s, settings, now, open_findings)
         fresh = _freshness(s)
         setup = setup_checklist(s, settings, stats)
-        _, tcounts = ticket_list(s, settings, "atrasados")
+        _, tcounts = ticket_list(s, settings, "atrasados", inventory=inv)
     k = db_.kpis(items, stale, activity, nis, open_findings)
-    k["atrasados"] = tcounts["atrasados"]
+    k["atrasados"], k["ja_renovado"] = tcounts["atrasados"], tcounts["ja_renovado"]
     sev_counts = {sv: sum(1 for f in open_findings if f.severity == sv) for sv in SEVERITIES}
     return render(request, "dashboard.html", user, s=stats, items=items, activity=activity, stale=stale, nis=nis, k=k,
                   janela=janela, fresh=fresh, sev_counts=sev_counts, setup=setup, smax_on=smax_configured(settings),
@@ -1450,6 +1451,9 @@ def cmdb_history(request: Request, q: str = "", ci: str = "", por: str = "", ori
                                    .group_by(UcmdbWrite.acao)).all())
         writes = list(s.scalars(base.order_by(UcmdbWrite.id.desc()).limit(n)))
         users = sorted(x for x in s.scalars(select(UcmdbWrite.por).distinct()) if x)
+        active_ids = set(s.scalars(select(CmdbRecord.ucmdb_id).where(CmdbRecord.active.is_(True))))
+        fora_tql = {w.ucmdb_id for w in writes if w.acao == "criar" and w.parte == "cert" and w.estado in uw.DONE
+                    and w.ucmdb_id and active_ids and w.ucmdb_id not in active_ids}
         for w in writes:
             s.expunge(w)
     from urllib.parse import urlencode
@@ -1458,7 +1462,21 @@ def cmdb_history(request: Request, q: str = "", ci: str = "", por: str = "", ori
               "criadas": by_action.get("criar", 0), "atualizadas": by_action.get("atualizar", 0),
               "fila": sum(by_state.get(x, 0) for x in uw.BUSY)}
     return render(request, "cmdb_historico.html", user, rows=uw.history_rows(writes), f=f, n=n, qs=qs, counts=counts,
+                  fora_tql=fora_tql, tql=get_settings().ucmdb_tql,
                   users=users, ORIGINS=uw.ORIGINS, RESULTS=uw.RESULTS, WRITE_STATES=uw.STATE_LABELS)
+
+
+@app.get("/cmdb/historico/porque/{ucmdb_id}")
+def cmdb_history_why(request: Request, ucmdb_id: str, user: str = Depends(current_user)):
+    """Porque é que um certificado criado não aparece no TQL dos ativos (só leitura)."""
+    if not re.fullmatch(r"[0-9a-zA-Z_-]{1,64}", ucmdb_id):
+        raise HTTPException(404)
+    settings = get_settings()
+    try:
+        rep, erro = uw.why_not_in_tql(settings, ucmdb_id, UCMDB_CLIENT), ""
+    except (ua.UcmdbError, uw.WriteError) as exc:
+        rep, erro = None, str(exc)
+    return render(request, "cmdb_porque.html", user, rep=rep, erro=erro, ucmdb_id=ucmdb_id, settings=settings)
 
 
 @app.get("/cmdb/historico.csv")

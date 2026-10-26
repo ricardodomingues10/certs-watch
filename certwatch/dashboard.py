@@ -14,7 +14,7 @@ from .db import as_utc
 from .evaluator import Snapshot, days_left
 from .models import Finding, SmaxComment, SmaxEvent, SmaxTicket
 from .normalize import norm_label, split_api_name
-from .tickets import is_open, last_comments, link as ticket_link, tickets_by_label, ticket_url
+from .tickets import already_renewed, is_open, last_comments, link as ticket_link, tickets_by_label, ticket_url
 
 EXPIRED_WINDOW = 30          # expirados há até N dias continuam na lista (sem pedido = o mais urgente)
 COVERAGE_DAYS = 90           # cobertura: certificados e APIs que expiram nos próximos N dias
@@ -89,7 +89,7 @@ def ticket_activity(session: Session, settings: Settings, now: datetime, hours: 
     return out
 
 
-def stale_tickets(session: Session, settings: Settings, now: datetime) -> list[dict]:
+def stale_tickets(session: Session, settings: Settings, now: datetime, current: dict | None = None) -> list[dict]:
     """Pedidos abertos sem movimento (atualização, comentário ou mudança de fase) há N dias ou mais."""
     days = settings.dash_stale_days
     last_comment: dict[str, datetime] = {}
@@ -113,7 +113,8 @@ def stale_tickets(session: Session, settings: Settings, now: datetime) -> list[d
         out.append({"pedido": t.id, "url": ticket_url(settings, t.id), "alvo": t.endpoint, "titulo": t.display_label,
                     "fase": t.phase, "grupo": t.owner_group, "responsavel": t.owner_person, "parado": idle,
                     "ultimo": last, "cert_dias": days_left(exp, now) if exp else None,
-                    "urgente": exp is not None and days_left(exp, now) <= settings.dash_expiry_days})
+                    "urgente": exp is not None and days_left(exp, now) <= settings.dash_expiry_days,
+                    "renovado": already_renewed(t, current or {}, settings)})
     out.sort(key=lambda x: (x["cert_dias"] is None, x["cert_dias"] if x["cert_dias"] is not None else 0, x["pedido"]))
     return out
 

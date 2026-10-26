@@ -312,25 +312,56 @@ def run_scan(session: Session, settings: Settings) -> dict:
     return {"alvos": len(targets), "alvos_invalidos": invalid, **counts}
 
 
+def created_not_in_cmdb(session: Session) -> list[str]:
+    """Certificados criados na UCMDB pelo certwatch que a leitura da CMDB (o TQL) não devolve: foram criados, mas
+    o TQL filtra-os (ex.: estado ou outro atributo diferente dos certificados ativos)."""
+    from .models import UcmdbWrite
+    active = set(session.scalars(select(CmdbRecord.ucmdb_id).where(CmdbRecord.active.is_(True))))
+    if not active:
+        return []
+    out = []
+    for w in session.scalars(select(UcmdbWrite).where(UcmdbWrite.acao == "criar", UcmdbWrite.parte == "cert",
+                                                      UcmdbWrite.estado.in_(("ok", "aviso")))):
+        if w.ucmdb_id and w.ucmdb_id not in active:
+            out.append(f"{w.cn} ({w.ucmdb_id})")
+    return out
+
+
 # ---------------------------------------------------------------- execução de jobs
+def _reevaluate(out: dict, settings: Settings) -> dict:
+    """Depois de ler uma fonte, os alertas refletem logo os dados novos (ex.: um certificado acabado de entrar na
+    CMDB deixa de estar "em uso sem registo na CMDB")."""
+    try:
+        with session_scope() as s:
+            out["evaluate"] = evaluate(s, settings)
+    except Exception as exc:   # a leitura já ficou gravada; a reavaliação corre de novo no próximo ciclo
+        log.warning("Reavaliação depois de %s falhou: %s", next(iter(out), "?"), exc)
+    return out
+
+
 def _run(job: str, settings: Settings) -> dict:
     if job == "ingest_cmdb":
         with session_scope() as s:
-            return {"ingest_cmdb": ingest_cmdb(s, settings)}
+            out = {"ingest_cmdb": ingest_cmdb(s, settings)}
+        with session_scope() as s:
+            missing = created_not_in_cmdb(s)
+        if missing:
+            out["ingest_cmdb"]["criados_fora_do_tql"] = missing[:50]
+        return _reevaluate(out, settings)
     if job == "ingest_apis":
         with session_scope() as s:
-            return {"ingest_apis": ingest_apis(s, settings)}
+            return _reevaluate({"ingest_apis": ingest_apis(s, settings)}, settings)
     if job == "ingest_smax":
         from .tickets import ingest_smax
         with session_scope() as s:
-            return {"ingest_smax": ingest_smax(s, settings)}
+            return _reevaluate({"ingest_smax": ingest_smax(s, settings)}, settings)
     if job == "ingest_ct":
         from .discovery import ingest_ct
         with session_scope() as s:
-            return {"ingest_ct": ingest_ct(s, settings)}
+            return _reevaluate({"ingest_ct": ingest_ct(s, settings)}, settings)
     if job == "scan":
         with session_scope() as s:
-            return {"scan": run_scan(s, settings)}
+            return _reevaluate({"scan": run_scan(s, settings)}, settings)
     if job == "ssllabs":
         from .external import run_ssllabs
         return {"ssllabs": run_ssllabs(settings)}

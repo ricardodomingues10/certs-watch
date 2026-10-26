@@ -19,6 +19,7 @@
   <a class="kpi {{ 'is-hot' if k.nao_instalados }}" href="/findings?tipo=RENOVACAO_NAO_INSTALADA"><b>{{ k.nao_instalados }}</b><span>renovados mas não instalados</span></a>
   <a class="kpi {{ 'is-warm' if k.parados }}" href="#parados"><b>{{ k.parados }}</b><span>pedidos parados há ≥ {{ stale_days }} dias</span>{% if k.parados_urgentes %}<small>{{ k.parados_urgentes }} com certificado a expirar</small>{% endif %}</a>
   {% if smax_on or k.atrasados %}<a class="kpi {{ 'is-hot' if k.atrasados }}" href="/pedidos?vista=atrasados"><b>{{ k.atrasados }}</b><span>pedidos abertos com certificado já expirado</span></a>{% endif %}
+  {% if smax_on or k.ja_renovado %}<a class="kpi {{ 'is-warm' if k.ja_renovado }}" href="/pedidos?vista=ja_renovado"><b>{{ k.ja_renovado }}</b><span>pedidos abertos já renovados: podem ser fechados</span></a>{% endif %}
   <a class="kpi {{ 'is-hot' if k.criticos }}" href="/findings?sev=critica"><b>{{ k.criticos }}</b><span>alertas críticos</span></a>
   <a class="kpi" href="#movimento"><b>{{ k.movimento }}</b><span>mudanças nos pedidos ({{ '24 h' if janela == 24 else '7 dias' }})</span></a>
 </section>
@@ -103,7 +104,8 @@
       {% for t in stale[:30] %}<tr>
         <td><a href="/pedidos/smax/{{ t.pedido }}" class="mono">{{ t.pedido }}</a><div class="small muted">{{ t.fase or '—' }}{% if t.grupo %} · {{ t.grupo }}{% endif %}</div></td>
         <td class="nowrap">{{ t.parado }} dias</td>
-        <td><span class="mono small">{{ t.alvo or '—' }}</span><div>{{ days(t.cert_dias) }}</div></td>
+        <td><span class="mono small">{{ t.alvo or '—' }}</span><div>{{ days(t.cert_dias) }}</div>
+          {% if t.renovado %}<span class="tag tag-ok" title="O certificado atual ({{ t.renovado.fonte }}) expira a {{ t.renovado.data|dt }}">já renovado: fechar</span>{% endif %}</td>
       </tr>{% endfor %}
     </table></div>
     {% if stale|length > 30 %}<p class="small pad"><a href="/pedidos">Ver todos os pedidos ({{ stale|length }} parados)</a></p>{% endif %}

@@ -362,6 +362,7 @@ def process(lote: str, settings: Settings, client: httpx.Client | None = None) -
                     s.add(AuditLog(actor=w.por, action="ucmdb.escrever", target=f"{w.acao} {w.cn}"[:600],
                                    details={"geracao": w.run_id, "parte": w.parte, "lista": w.lista, "ci": out.ucmdb_id,
                                             "estado": out.estado, "campos": sorted(plan.campos), "detalhe": out.detalhe[:300]}))
+            check_created_in_tql(us, settings, ids)
     except (UcmdbError, WriteError) as exc:
         with session_scope() as s:
             for w in s.scalars(select(UcmdbWrite).where(UcmdbWrite.lote == lote, UcmdbWrite.estado.in_(BUSY))):
@@ -601,6 +602,69 @@ def queue_azure(session: Session, run: FinalRun, chave: int, lista: str, actor: 
     session.add(UcmdbWrite(run_id=run.id, chave=chave, lote=lote, parte="azure", lista=lista, acao=acao,
                            cn=row["nome"], estado="pendente", por=actor))
     return lote
+
+
+NOT_IN_TQL = "não aparece no TQL"
+
+
+def check_created_in_tql(us: UcmdbSession, settings: Settings, write_ids: list[int]) -> None:
+    """Um certificado criado tem de aparecer no TQL dos certificados ativos (a leitura da CMDB do certwatch e da
+    reconciliação). Se não aparecer, a escrita fica com aviso: foi criado, mas ninguém o vai ver."""
+    if not settings.ucmdb_tql:
+        return
+    with session_scope() as s:
+        created = [w for w in s.scalars(select(UcmdbWrite).where(UcmdbWrite.id.in_(write_ids)))
+                   if w.acao == "criar" and w.parte == "cert" and w.estado in DONE and w.ucmdb_id]
+        if not created:
+            return
+        try:
+            seen = {str(c.get("ucmdbId")) for c in us.topology(settings.ucmdb_tql)}
+        except UcmdbError as exc:
+            log.warning("Não foi possível confirmar no TQL os certificados criados: %s", exc)
+            return
+        for w in created:
+            if w.ucmdb_id not in seen:
+                w.estado = "aviso"
+                w.detalhe = (f"{w.detalhe} Atenção: criado na UCMDB, mas {NOT_IN_TQL} {settings.ucmdb_tql} (os certificados "
+                             "ativos): a importação da CMDB não o vai ver e continua a dar \"em uso sem registo na CMDB\". "
+                             "Veja \"Porquê?\" no histórico de alterações.").strip()
+
+
+def why_not_in_tql(settings: Settings, ucmdb_id: str, client: httpx.Client | None = None) -> dict:
+    """Compara um CI que o TQL não devolve com os certificados que o TQL devolve: tipo e atributos em que difere
+    da (quase) totalidade deles. Só leitura."""
+    from collections import Counter
+    with UcmdbSession(settings, client) as us:
+        ci = us.ci(ucmdb_id)
+        props = ci.get("properties") or {}
+        tql = us.topology(settings.ucmdb_tql)
+        in_tql = any(str(c.get("ucmdbId")) == str(ucmdb_id) for c in tql)
+        sample = [str(c.get("ucmdbId")) for c in tql[:40] if c.get("ucmdbId")]
+        others = []
+        for cid in sample:
+            try:
+                others.append(us.ci(cid))
+            except UcmdbError:
+                continue
+    diffs = []
+    types = Counter(o.get("type") for o in others)
+    if others and ci.get("type") and types and ci.get("type") not in types:
+        diffs.append({"atributo": "tipo do CI", "este": ci.get("type"), "outros": ", ".join(f"{t} ({n})" for t, n in types.most_common(3))})
+    n = len(others)
+    keys = {k for o in others for k in (o.get("properties") or {})}
+    for k in sorted(keys):
+        if k in ("display_label", "name", "global_id", "create_time", "last_modified_time", "description") or \
+                re.search(r"date|time|valid|serial|common_name|issuer|subject|label|id$", k, re.I):
+            continue
+        vals = [str((o.get("properties") or {}).get(k)) for o in others if (o.get("properties") or {}).get(k) not in (None, "")]
+        if n and len(vals) >= 0.9 * n:
+            top, cnt = Counter(vals).most_common(1)[0]
+            mine = props.get(k)
+            if cnt >= 0.9 * n and str(mine) != top:
+                diffs.append({"atributo": k, "este": "(vazio)" if mine in (None, "") else str(mine)[:80],
+                              "outros": f"{top[:80]} (em {cnt} de {n})"})
+    return {"ci": ucmdb_id, "tipo": ci.get("type"), "cn": props.get("common_name") or props.get("display_label") or "",
+            "no_tql": in_tql, "tql": settings.ucmdb_tql, "amostra": n, "diferencas": diffs}
 
 
 def process_in_background(lote: str, settings: Settings) -> None:

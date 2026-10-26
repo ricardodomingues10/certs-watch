@@ -156,6 +156,7 @@ def test_smax_page_overdue_comments_and_api_tickets(env, monkeypatch):
     fake.add("7002", "own.exemplo.pt", NOW + timedelta(days=60), phase="Execute")
     fake.add("7003", "CRM Testes", NOW + timedelta(days=20), phase="Execute")          # pedido de uma API
     fake.add("7004", "antigo.exemplo.pt", NOW - timedelta(days=400), phase="Close")
+    fake.add("7005", "semrenov.exemplo.pt", NOW - timedelta(days=3), phase="Execute")    # expirou e não há certificado novo
     comments = {"7001": [{"Id": "c1", "IsSystem": False, "Body": "<p>Aguardamos o <b>CSR</b> da equipa</p>",
                           "PrivacyType": "PUBLIC", "Submitter": {"UserId": "55"}, "CommentFrom": "Agent",
                           "CreateTime": int((NOW - timedelta(days=1)).timestamp() * 1000)},
@@ -192,7 +193,11 @@ def test_smax_page_overdue_comments_and_api_tickets(env, monkeypatch):
         assert "/pedidos/smax/7001#comentarios" in page
         assert "https://smax.test/saw/Change/7001/discussions?TENANTID=123" in cl.get("/pedidos/smax/7001", auth=AUTH).text
         late = cl.get("/pedidos", params={"vista": "atrasados"}, auth=AUTH).text
-        assert "7001" in late and "7002" not in late and "expirou há 3 d" in late
+        assert "7005" in late and "7002" not in late and "expirou há 3 d" in late
+        # 7001: o pedido era para o wildcard que expirou, mas o wildcard atual expira depois: renovado, pedido por fechar
+        assert "7001" not in late
+        done = cl.get("/pedidos", params={"vista": "ja_renovado"}, auth=AUTH).text
+        assert "7001" in done and "já renovado: fechar" in done and "7005" not in done and "7002" not in done
         com = cl.get("/pedidos", params={"vista": "comentarios"}, auth=AUTH).text
         assert "7001" in com and "7002" not in com
         assert "7004" in cl.get("/pedidos", params={"vista": "fechados"}, auth=AUTH).text

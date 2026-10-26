@@ -40,7 +40,9 @@
         {% if t.environment %}<div class="small muted">{{ t.environment }}</div>{% endif %}</td>
       <td>{{ t.phase or '—' }}{% if r.fim_ultrapassado %}<div><span class="tag tag-run" title="Data de fim planeada: {{ t.scheduled_end|dt }}">fim planeado ultrapassado</span></div>{% endif %}</td>
       <td class="nowrap">{{ t.cert_expiry|dt if t.cert_expiry else '—' }}
-        {% if r.cert_expirado %}<div><span class="tag tag-err">expirou há {{ r.dias_expirado }} d</span></div>{% endif %}</td>
+        {% if r.cert_expirado %}<div><span class="tag tag-err">expirou há {{ r.dias_expirado }} d</span></div>{% endif %}
+        {% if r.ja_renovado %}<div><span class="tag tag-ok" title="O certificado atual ({{ r.ja_renovado.fonte }}) expira a {{ r.ja_renovado.data|dt }}: este pedido era para o anterior">já renovado: fechar</span></div>
+          <div class="small muted">atual até {{ r.ja_renovado.data|dt }} ({{ r.ja_renovado.fonte }})</div>{% endif %}</td>
       <td class="small">{{ t.owner_group or '—' }}{% if t.owner_person %}<div class="muted">{{ t.owner_person }}</div>{% endif %}</td>
       <td class="small comment-cell">{% if r.ultimo_comentario %}{% set c = r.ultimo_comentario %}
         <div class="muted">{{ c.quando|dtt if c.quando else '' }}{% if c.autor %} · {{ c.autor }}{% endif %}</div>

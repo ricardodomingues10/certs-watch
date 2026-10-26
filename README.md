@@ -267,6 +267,8 @@ Cada linha da reconciliação mostra o resultado (criado / atualizado / aviso / 
 - Antes de atualizar, o CI é lido e os campos a mudar têm de ter ainda o valor da reconciliação (ou o que estava no ecrã ao rever). Se alguém os mudou entretanto, não se escreve e a linha diz o que mudou.
 - Depois de escrever, o CI é lido de novo e confirma-se que ficou o que foi enviado; se não, a linha fica com aviso.
 - Se a UCMDB identificar um certificado "novo" como um CI que já existia (regra de identificação), a linha fica com aviso a dizer qual.
+- Depois de criar certificados, confirma-se que aparecem no TQL dos certificados ativos (`CERTWATCH_UCMDB_TQL`), que é o que a importação da CMDB e a reconciliação leem. Se o TQL filtrar o certificado (ex.: um atributo como "Certificado Gerido" vazio), a linha fica com aviso, a importação diz quais ficaram de fora e o histórico mostra **Porquê?**: compara o certificado com os que o TQL devolve e indica os atributos em que difere.
+- Cada importação (CMDB, APIs, SMAX, internet, servidores) reavalia logo os alertas: um certificado acabado de entrar na CMDB deixa de aparecer como "em uso sem registo na CMDB" sem esperar pela execução seguinte.
 - Só a reconciliação mais recente pode ser aplicada.
 - Datas: ValidTo vai às 00:00 de Lisboa, primeiro como `AAAA-MM-DDThh:mm:ss` (sem fuso: a UCMDB recusa o `Z` do UTC); se a UCMDB recusar o formato, tenta com milissegundos (`.000`), depois em milissegundos desde 1970 e por fim em UTC. O formato que funcionar passa a ser o primeiro a tentar. Uma alteração com erro pode ser repetida com **Tentar de novo**.
 - Tudo fica no **histórico de alterações** (ver 5.9). A auditoria também regista cada escrita (`ucmdb.escrever`, `ucmdb.editar`).
@@ -327,6 +329,10 @@ Situações de cada certificado:
 | Pedido aberto para outra data | Há um pedido aberto para o nome, mas para outro certificado (anterior por fechar, ou data errada no pedido) |
 | Só pedidos fechados | Já houve pedidos, todos fechados |
 | Sem pedido | Nenhum pedido para o nome; destacado a vermelho quando faltam 30 dias ou menos |
+
+A data conta: um pedido só cobre o certificado se a data de expiração do pedido for a do certificado atual (±1 dia). Do lado dos pedidos:
+- **Abertos com o certificado já renovado** (etiqueta "já renovado: fechar"): o pedido continua aberto no SMAX, mas o certificado atual (o do servidor, se foi verificado; senão o da CMDB) expira mais de 1 dia depois da data do pedido. A renovação foi feita e o pedido ficou por fechar. Aparecem no painel e na vista própria em Pedidos SMAX.
+- **Abertos com certificado já expirado**: a data do pedido passou e não há certificado mais recente. Só estes contam como atrasados.
 
 Onde aparece: coluna **Pedido SMAX** em Certificados (filtro "Sem pedido em curso", pesquisa pelo número do pedido, exportação CSV com o link), secção **Pedidos no SMAX** no topo do detalhe de cada certificado (todos os pedidos, abertos e fechados), e no Painel ("expiram em 30 dias … destes sem pedido em curso" e coluna Pedido em "Precisam de ação"). O número do pedido abre o SMAX (`CERTWATCH_SMAX_TICKET_URL`).
 
