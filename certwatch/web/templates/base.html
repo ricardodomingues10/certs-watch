@@ -1,4 +1,4 @@
-<!doctype html>
+{% from "_atalaia.html" import atalaia %}<!doctype html>
 <html lang="pt-PT" data-palette="{{ palette or 'consola' }}">
 <head>
   <meta charset="utf-8">
@@ -16,13 +16,13 @@
 <div class="shell">
   <input type="checkbox" id="menu-toggle" class="menu-toggle" aria-label="Menu">
   <header class="mobilebar">
-    <a class="brand" href="/" aria-label="Atalaia Cert, painel"><img src="/static/atalaia-icone.svg" alt="" width="30" height="30"><span class="word">Atalaia <b>Cert</b></span></a>
+    <a class="brand" href="/" aria-label="Atalaia Cert, painel">{{ atalaia("m", "atl-mini", client.anim if client else "sempre") }}<span class="word">Atalaia <b>Cert</b></span></a>
     {% if client and client.logo %}<span class="client-logo logo-{{ client.style }} client-mini"><img src="/marca/logo" alt="{{ client.name or 'Cliente' }}" height="24"></span>{% endif %}
     <label for="menu-toggle" class="menu-btn" aria-label="Abrir ou fechar o menu"><span></span><span></span><span></span></label>
   </header>
   <nav class="rail" aria-label="Navegação principal">
     <a class="brand brand-tower" href="/" aria-label="Atalaia Cert, painel">
-      <img class="tower" src="/static/atalaia.svg" alt="" width="78" height="137">
+      {{ atalaia("r", "tower", client.anim if client else "sempre") }}
       <span class="wordmark"><span class="name">Atalaia</span><span class="kind">Cert</span></span>
     </a>
     {% if client and (client.logo or client.name) %}

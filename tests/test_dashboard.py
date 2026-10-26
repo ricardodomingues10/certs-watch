@@ -140,19 +140,24 @@ def test_client_branding(env, tmp_path, monkeypatch):
         assert c.get("/marca/logo").status_code == 401                                          # só com sessão
 
 
-def test_atalaia_brand_and_logo(env):
-    """O nome visível é Atalaia Cert e o logótipo animado (a vigia na atalaia) é servido com uma CSP própria:
-    a animação está num <style> do SVG, a fotografia em data:, e nunca corre scripts."""
-    from certwatch.web.app import app
+def test_atalaia_brand_and_logo(env, monkeypatch):
+    """O nome visível é Atalaia Cert. O logótipo (a vigia com o foco) é SVG inline animado por style.css: não depende
+    de <style> dentro do SVG nem de imagens externas, por isso mexe-se com a CSP da página."""
+    from dataclasses import replace
+    from certwatch.web import app as webapp
     from certwatch.web.security import SVG_CSP
-    with TestClient(app) as c:
+    with TestClient(webapp.app) as c:
         page = c.get("/certificados", auth=AUTH).text
-        assert "· Atalaia Cert</title>" in page.replace("\n", "") or " · Atalaia Cert" in page
-        assert 'src="/static/atalaia.svg"' in page and 'href="/static/atalaia-icone.svg"' in page
-        assert ">Atalaia<" in page and "certwatch" not in page.split("<main>")[0].lower().replace("cw_", "")
-        r = c.get("/static/atalaia.svg")
-        assert r.status_code == 200 and r.headers["content-security-policy"] == SVG_CSP
-        svg = r.text
-        assert "<script" not in svg and "prefers-reduced-motion" in svg and 'id="vigia"' in svg
-        assert "@keyframes" not in c.get("/static/atalaia-icone.svg").text                     # o ícone é parado
+        assert " · Atalaia Cert" in page and 'href="/static/atalaia-icone.svg"' in page
+        assert page.count('<svg class="atalaia atl-anim-sempre') == 2                       # coluna e barra do telemóvel
+        assert 'id="atl-feixe-r"' in page and 'id="atl-feixe-m"' in page                   # ids únicos por logótipo
+        head = page.split("<main>")[0]
+        assert "<style" not in head and "<script>" not in head and 'class="atl-lt"' in head
+        css = c.get("/static/style.css").text
+        assert "@keyframes atl-foco" in css and ".atalaia.atl-anim-parado" in css
+        icon = c.get("/static/atalaia-icone.svg")
+        assert icon.status_code == 200 and icon.headers["content-security-policy"] == SVG_CSP and "<script" not in icon.text
         assert c.get("/certificados").headers["www-authenticate"] == 'Basic realm="Atalaia Cert"'
+        st = replace(config.get_settings(), logo_animation="auto")
+        monkeypatch.setattr(webapp, "get_settings", lambda: st)
+        assert 'class="atalaia atl-anim-auto' in c.get("/certificados", auth=AUTH).text

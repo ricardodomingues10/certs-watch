@@ -1,0 +1,101 @@
+{#- Logótipo da Atalaia Cert: uma idosa de lenço preto vigia do alto de uma atalaia, de frente para nós, com a mão
+    direita a fazer de pala sobre os olhos e um foco na mão esquerda cujo feixe acompanha o olhar.
+    SVG inline (sem <style> nem scripts): a animação está em style.css (classes atl-*), por isso respeita a CSP.
+    uid torna únicos os id dos gradientes quando há mais do que um logótipo na página. -#}
+{% macro atalaia(uid, cls="", anim="sempre") -%}
+<svg class="atalaia atl-anim-{{ anim }} {{ cls }}" viewBox="-2 -10 124 122" role="img" aria-label="Atalaia Cert: uma idosa de lenço preto vigia do alto de uma atalaia com um foco na mão" focusable="false">
+  <defs>
+    <linearGradient id="atl-feixe-{{ uid }}" gradientUnits="userSpaceOnUse" x1="85" y1="31" x2="85" y2="-30">
+      <stop offset="0" stop-color="#fff4c8" stop-opacity=".9"/>
+      <stop offset=".35" stop-color="#ffe9a0" stop-opacity=".45"/>
+      <stop offset=".75" stop-color="#ffe9a0" stop-opacity="0"/>
+    </linearGradient>
+    <linearGradient id="atl-esbate-{{ uid }}" x1="0" y1="0" x2="0" y2="1">
+      <stop offset=".8" stop-color="#fff"/><stop offset="1" stop-color="#fff" stop-opacity="0"/>
+    </linearGradient>
+    <mask id="atl-base-{{ uid }}"><rect x="-2" y="-10" width="124" height="122" fill="url(#atl-esbate-{{ uid }})"/></mask>
+  </defs>
+  <g class="atl-vigia">
+    {#- o feixe do foco fica atrás da vigia: passa-lhe por trás da cabeça quando aponta para a esquerda -#}
+    <g class="atl-ab"><g class="atl-lt">
+      <path d="M83.3 31 L86.7 31 L100 -30 L70 -30 Z" fill="url(#atl-feixe-{{ uid }})"/>
+      <circle cx="85" cy="31" r="3.2" fill="#fff4c8" opacity=".55"/>
+    </g></g>
+    {#- corpo: vestido preto, xaile pelos ombros e uma cruz de ouro -#}
+    <g class="atl-tronco">
+      <path d="M43 74 L43 58 Q44 50.5 52 49.5 L68 49.5 Q76 50.5 77 58 L77 74 Z" fill="#2b2930" stroke="#8a8593" stroke-width=".8" stroke-linejoin="round"/>
+      <path d="M41.5 70 L41.5 57.5 Q42.5 49 52 48 L57 48 Q55.6 59 51.2 70 Z" fill="#55444b" stroke="#8a8593" stroke-width=".8" stroke-linejoin="round"/>
+      <path d="M78.5 70 L78.5 57.5 Q77.5 49 68 48 L63 48 Q64.4 59 68.8 70 Z" fill="#55444b" stroke="#8a8593" stroke-width=".8" stroke-linejoin="round"/>
+      <path d="M53.6 60 l-1.6 .9 M52.6 63.6 l-1.7 .8 M51.4 67 l-1.7 .7 M66.4 60 l1.6 .9 M67.4 63.6 l1.7 .8 M68.6 67 l1.7 .7" stroke="#8a7a82" stroke-width=".55" stroke-linecap="round"/>
+      <path d="M60 51.6 v4.4 M58.6 53.1 h2.8" stroke="#d9ad3f" stroke-width=".9" stroke-linecap="round"/>
+      <rect x="56.6" y="42" width="6.8" height="8" rx="2" fill="#c58f73"/>
+    </g>
+    {#- braço direito (à esquerda para nós): ombro até ao cotovelo -#}
+    <path d="M46.5 55 L37.5 43.5" stroke="#8a8593" stroke-width="6.6" stroke-linecap="round"/>
+    <path d="M46.5 55 L37.5 43.5" stroke="#2b2930" stroke-width="5" stroke-linecap="round"/>
+    {#- braço esquerdo (à direita para nós): ombro até ao cotovelo -#}
+    <path d="M73.5 55 L82.6 59.6" stroke="#8a8593" stroke-width="6.6" stroke-linecap="round"/>
+    <path d="M73.5 55 L82.6 59.6" stroke="#2b2930" stroke-width="5" stroke-linecap="round"/>
+    {#- cabeça: lenço preto atado ao queixo, cabelo branco, óculos -#}
+    <g class="atl-cabeca">
+      <path d="M60 20 C70.8 20 72.6 28 71.4 34.5 C70.6 39.5 66.4 44 60 45 C53.6 44 49.4 39.5 48.6 34.5 C47.4 28 49.2 20 60 20 Z" fill="#1e1c22" stroke="#8a8593" stroke-width=".8"/>
+      <path d="M52.4 23.6 Q60 19.6 67.6 23.6" fill="none" stroke="#3b3842" stroke-width=".7" stroke-linecap="round"/>
+      <g class="atl-cara">
+        <ellipse cx="60" cy="33.3" rx="6.3" ry="7.4" fill="#e3b597"/>
+        <path d="M54.2 28 Q60 25 65.8 28" fill="none" stroke="#d2cdc5" stroke-width="1.8" stroke-linecap="round"/>
+        <path d="M55.7 30.3 q1.5 -.8 3 0 M61.3 30.3 q1.5 -.8 3 0" fill="none" stroke="#bdb6ad" stroke-width=".6" stroke-linecap="round"/>
+        <g class="atl-pupilas"><g class="atl-olhos">
+          <circle cx="57.3" cy="32.5" r=".85" fill="#2a2228"/><circle cx="62.7" cy="32.5" r=".85" fill="#2a2228"/>
+        </g></g>
+        <circle cx="57.3" cy="32.6" r="2.3" fill="none" stroke="#8f8a96" stroke-width=".45"/>
+        <circle cx="62.7" cy="32.6" r="2.3" fill="none" stroke="#8f8a96" stroke-width=".45"/>
+        <path d="M59.6 32.2 q.4 -.5 .8 0" fill="none" stroke="#8f8a96" stroke-width=".45"/>
+        <circle cx="55.4" cy="36.4" r="1.3" fill="#d98d7a" opacity=".45"/><circle cx="64.6" cy="36.4" r="1.3" fill="#d98d7a" opacity=".45"/>
+        <path class="atl-nariz" d="M60 33.8 q1.3 2.4 -.2 2.8 q-.8 .1 -1.1 -.4" fill="none" stroke="#c58f73" stroke-width=".6" stroke-linecap="round"/>
+        <path d="M58.1 38.7 q1.9 .8 3.8 0" fill="none" stroke="#b07a62" stroke-width=".6" stroke-linecap="round"/>
+        <path d="M55.6 34.7 l-.8 .5 M64.4 34.7 l.8 .5" stroke="#c58f73" stroke-width=".35" stroke-linecap="round"/>
+        <circle cx="60" cy="44.7" r="1.7" fill="#1e1c22" stroke="#8a8593" stroke-width=".6"/>
+        <path d="M59.1 45.9 l-1.3 3.4 M60.9 45.9 l1.3 3.4" stroke="#1e1c22" stroke-width="1.2" stroke-linecap="round"/>
+      </g>
+    </g>
+    {#- antebraço e mão em pala sobre os olhos: acompanham a cabeça -#}
+    <g class="atl-pala">
+      <path d="M37.5 43.5 L48.8 29" stroke="#8a8593" stroke-width="6" stroke-linecap="round"/>
+      <path d="M37.5 43.5 L48.8 29" stroke="#2b2930" stroke-width="4.5" stroke-linecap="round"/>
+      <path d="M47.4 30.6 Q46.8 27.3 49.8 26.7 L61.8 25.3 Q63.4 25.3 63.2 26.9 Q62.9 28.3 61.2 28.5 L50.6 30.8 Z" fill="#e3b597" stroke="#c58f73" stroke-width=".5" stroke-linejoin="round"/>
+      <path d="M55.6 26.5 v1.6 M58.6 26.1 v1.6" stroke="#c58f73" stroke-width=".35" stroke-linecap="round"/>
+    </g>
+    {#- antebraço esquerdo com o foco; o foco roda na mão -#}
+    <g class="atl-ab">
+      <path d="M82.6 59.6 L85 43.5" stroke="#8a8593" stroke-width="6" stroke-linecap="round"/>
+      <path d="M82.6 59.6 L85 43.5" stroke="#2b2930" stroke-width="4.5" stroke-linecap="round"/>
+      <g class="atl-lt">
+        <rect x="83.4" y="35" width="3.2" height="11.5" rx=".9" fill="#d6a63a" stroke="#6b5523" stroke-width=".5"/>
+        <path d="M82.1 35.6 L82.7 31.6 L87.3 31.6 L87.9 35.6 Z" fill="#e2b444" stroke="#6b5523" stroke-width=".5" stroke-linejoin="round"/>
+        <rect x="82.8" y="30.7" width="4.4" height="1.3" rx=".6" fill="#fff4c8" stroke="#6b5523" stroke-width=".35"/>
+      </g>
+      <circle cx="85" cy="42.6" r="2.2" fill="#e3b597" stroke="#c58f73" stroke-width=".5"/>
+    </g>
+  </g>
+  {#- a atalaia, em desenho, mais baixa e esbatida em baixo -#}
+  <g mask="url(#atl-base-{{ uid }})">
+    <rect x="34" y="57" width="7.5" height="9" rx="1" fill="#cdbb9f" stroke="#5a4e44" stroke-width="1"/>
+    <rect x="78.5" y="57" width="7.5" height="9" rx="1" fill="#cdbb9f" stroke="#5a4e44" stroke-width="1"/>
+    <path d="M35 71.5 L85 71.5 L88 114 L32 114 Z" fill="#cdbb9f"/>
+    <path d="M72 71.5 L85 71.5 L88 114 L75 114 Z" fill="#ad9a7c"/>
+    <path d="M38.5 71.5 L44 71.5 L43 114 L36.5 114 Z" fill="#e0d3bd" opacity=".7"/>
+    <g fill="#b9a587">
+      <rect x="40" y="75.5" width="7" height="3.6" rx="1.4"/><rect x="50" y="77.5" width="8" height="3.6" rx="1.4"/>
+      <rect x="64" y="75.5" width="7" height="3.6" rx="1.4"/><rect x="45" y="85.5" width="6" height="3.4" rx="1.4"/>
+      <rect x="68" y="86" width="7" height="3.6" rx="1.4"/><rect x="38.5" y="95.5" width="7" height="3.6" rx="1.4"/>
+      <rect x="57" y="99.5" width="8" height="3.6" rx="1.4"/><rect x="47" y="105.5" width="8" height="3.6" rx="1.4"/>
+    </g>
+    <g fill="#98856a"><rect x="77" y="79" width="6" height="3.4" rx="1.4"/><rect x="76" y="96" width="7" height="3.6" rx="1.4"/></g>
+    <path d="M35 71.5 L85 71.5 L88 114 L32 114 Z" fill="none" stroke="#5a4e44" stroke-width="1.1" stroke-linejoin="round"/>
+    <rect x="32.5" y="64" width="55" height="7.5" rx="2" fill="#dccdb4" stroke="#5a4e44" stroke-width="1"/>
+    <path d="M42 64 v7.5 M52.5 64 v7.5 M63.5 64 v7.5 M75 64 v7.5" stroke="#8d7c66" stroke-width=".55"/>
+    <path d="M56 94 L56 85.2 Q60 80.6 64 85.2 L64 94 Z" fill="#2b2420" stroke="#5a4e44" stroke-width=".8"/>
+    <rect x="41.8" y="85" width="2.1" height="8" rx="1" fill="#2b2420"/>
+  </g>
+</svg>
+{%- endmacro %}

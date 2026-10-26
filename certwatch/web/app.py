@@ -237,7 +237,9 @@ def render(request: Request, name: str, user: str, **ctx):
                                                       "client": {"name": get_settings().client_name,
                                                                  "logo": client_logo() is not None,
                                                                  "style": get_settings().logo_style if get_settings().logo_style
-                                                                 in ("original", "claro", "placa") else "original"}, **ctx})
+                                                                 in ("original", "claro", "placa") else "original",
+                                                                 "anim": get_settings().logo_animation if get_settings().logo_animation
+                                                                 in ("sempre", "auto", "parado") else "sempre"}, **ctx})
 
 
 @app.post("/tema")
