@@ -230,3 +230,36 @@ def test_unreadable_optional_secret_does_not_stop_startup(tmp_path, monkeypatch)
     with pytest.raises(RuntimeError, match="chown 10001:10001 secrets/admin_password"):
         config._secret("admin_password", "CERTWATCH_ADMIN_PASSWORD", required=True)
     config.UNREADABLE_SECRETS.clear()
+
+
+def test_diagnose_steps(st, monkeypatch):
+    """O diagnóstico para no primeiro passo que falha e diz o que fazer; a página mostra-o."""
+    import socket
+    steps = avi.diagnose(replace(st, avi_url="https://nao-existe.invalid"))
+    assert steps[-1]["passo"] == "DNS" and not steps[-1]["ok"]
+    # porta fechada num endereço local: a ligação TCP é recusada
+    srv = socket.socket()
+    srv.bind(("127.0.0.1", 0))
+    port = srv.getsockname()[1]
+    srv.close()
+    steps = avi.diagnose(replace(st, avi_url=f"https://127.0.0.1:{port}"), timeout=2)
+    assert [x["passo"] for x in steps] == ["DNS", "Ligação TCP"] and not steps[-1]["ok"] and "firewall" in steps[-1]["fazer"]
+    from certwatch.web import app as webapp
+    monkeypatch.setattr(webapp, "get_settings", lambda: st)
+    monkeypatch.setattr(webapp, "AVI_DIAGNOSE", lambda s: [
+        {"passo": "DNS", "ok": True, "detalhe": "avi.test → 10.0.0.5", "fazer": ""},
+        {"passo": "Ligação TCP", "ok": False, "detalhe": "avi.test:443 não respondeu em 10 s",
+         "fazer": "Peça a abertura deste servidor para 10.0.0.5 na porta TCP 443."}])
+    with TestClient(webapp.app) as c:
+        c.get("/cmdb-final/avi", auth=AUTH)
+        page = c.post("/cmdb-final/avi/diagnosticar", data={"csrf": c.cookies["cw_csrf"]}, auth=AUTH).text
+    assert "Diagnóstico da ligação" in page and "Peça a abertura deste servidor para 10.0.0.5" in page
+
+
+def test_avi_ignores_internet_proxy(st, monkeypatch):
+    monkeypatch.setenv("HTTPS_PROXY", "http://proxy.invalid:3128")
+    s = avi.AviSession(st)
+    try:
+        assert not s.client._mounts or all(t is None for t in s.client._mounts.values())
+    finally:
+        s.client.close()

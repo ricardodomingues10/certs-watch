@@ -21,10 +21,24 @@
   <div class="inline mt">
     <form method="post" action="/cmdb-final/avi/testar"><input type="hidden" name="csrf" value="{{ csrf }}">
       <button class="primary" {{ 'disabled' if problem }}>Testar e comparar com o ficheiro</button></form>
+    <form method="post" action="/cmdb-final/avi/diagnosticar"><input type="hidden" name="csrf" value="{{ csrf }}">
+      <button {{ 'disabled' if not settings.avi_url }}>Diagnosticar a ligação</button></form>
     {% if not problem %}<a class="button" href="/cmdb-final/avi/csv?tipo=vs">Descarregar CSV dos certificados</a>
     <a class="button" href="/cmdb-final/avi/csv?tipo=ca">Descarregar CSV das CAs</a>{% endif %}
   </div>
 </section>
+
+{% if diag %}
+<section class="card">
+  <h2>Diagnóstico da ligação</h2>
+  <p class="small muted">Do servidor do certwatch até ao AVI, sem proxy. Para no primeiro passo que falha.</p>
+  <table class="compact"><thead><tr><th>Passo</th><th>Resultado</th><th>O que fazer</th></tr></thead>
+  {% for x in diag %}<tr><td><b>{{ x.passo }}</b></td>
+    <td class="small"><span class="tag {{ 'tag-ok' if x.ok else 'tag-err' }}">{{ 'ok' if x.ok else 'falhou' }}</span> {{ x.detalhe }}</td>
+    <td class="small">{{ x.fazer or '—' }}</td></tr>{% endfor %}
+  </table>
+</section>
+{% endif %}
 
 {% if res %}
 <section class="card">

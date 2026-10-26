@@ -1544,6 +1544,7 @@ def final_generate(request: Request, csrf: str = Form(""), fonte: list[str] = Fo
 
 
 AVI_CLIENT = None       # testes: cliente httpx para o AVI
+AVI_DIAGNOSE = None     # testes: substitui o diagnóstico de rede
 
 
 def _avi_file(s, settings):
@@ -1563,7 +1564,7 @@ def _avi_render(request, user, **kw):
     from ..collectors import avi as avi_api
     settings = get_settings()
     return render(request, "avi.html", user, settings=settings, problem=avi_api.configured(settings),
-                  **{"res": None, "cmp": None, "erro": "", "ficheiro": "", "cas": [], **kw})
+                  **{"res": None, "cmp": None, "erro": "", "ficheiro": "", "cas": [], "diag": None, **kw})
 
 
 @app.get("/cmdb-final/avi")
@@ -1602,6 +1603,18 @@ def avi_test(request: Request, csrf: str = Form(""), user: str = Depends(current
         d = cf.parse_day(r["Validity_NotAfter"]).day
         r["dias"] = (d - today).days if d else None
     return _avi_render(request, user, res=res, cmp=cmp, ficheiro=ficheiro, cas=cas)
+
+
+@app.post("/cmdb-final/avi/diagnosticar")
+def avi_diagnose(request: Request, csrf: str = Form(""), user: str = Depends(current_user)):
+    """DNS, TCP, TLS, login e uma leitura: diz em que passo a ligação ao AVI para."""
+    from ..collectors import avi as avi_api
+    check_csrf(request, csrf)
+    settings = get_settings()
+    steps = AVI_DIAGNOSE(settings) if AVI_DIAGNOSE else avi_api.diagnose(settings)
+    with session_scope() as s:
+        audit(s, user, "avi.diagnosticar", settings.avi_url, passos={x["passo"]: x["ok"] for x in steps})
+    return _avi_render(request, user, diag=steps)
 
 
 @app.post("/cmdb-final/avi/usar")

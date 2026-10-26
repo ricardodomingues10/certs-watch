@@ -270,6 +270,8 @@ Em vez do ficheiro exportado pelo script, o certwatch pode ler os certificados d
 5. **CMDB → Reconciliar e atualizar → AVI → Ler pela API do AVI → Testar e comparar com o ficheiro.** Mostra quantos certificados e CAs leu, e compara com o ficheiro atual pelo nome do objeto: iguais, com diferenças (data de fim, série, CommonName), só no ficheiro, só na API. Também lista as CAs do AVI pela data de fim. Testar não muda a fonte da reconciliação. **Descarregar CSV** dá o ficheiro no formato do script.
 6. Quando a comparação estiver certa: **Usar a API do AVI na próxima reconciliação** (só uma vez), ou `CERTWATCH_AVI_SOURCE=auto` (sempre pela API; se a API falhar, usa o ficheiro e diz porquê em Erros nas fontes) ou `api` (se a API falhar, a reconciliação para).
 
+**Diagnosticar a ligação** (na mesma página) testa passo a passo, sem proxy: DNS, ligação TCP à porta, TLS (com a verificação do certificado do controlador), login e uma leitura, e para no primeiro que falha com o que fazer (por exemplo, o IP e a porta a pedir na firewall). A ligação ao AVI nunca usa o `HTTPS_PROXY` do `.env`: o controlador é interno.
+
 O ficheiro em `import/` e o script não são tocados: até mudar `CERTWATCH_AVI_SOURCE`, a reconciliação usa o ficheiro como hoje. A leitura pela API pede só o nome e o certificado (`fields=name,certificate,type`) e descarta tudo o resto em memória, incluindo a chave privada. Cada teste, exportação e uso fica na auditoria (`avi.testar`, `avi.exportar`, `avi.usar`).
 
 ### 5.9 Histórico de alterações na CMDB
