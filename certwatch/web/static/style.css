@@ -780,12 +780,13 @@ details.card[open] > summary { margin-bottom: 12px; }
 .atalaia .atl-feixe { transition: opacity .35s; }
 .atalaia.atl-solto .atl-feixe { opacity: 0; }          /* o feixe saiu do logótipo e está na página (app.js) */
 .atalaia.atl-anim-parado * { animation: none !important; }
-/* o foco na página: por cima de tudo, transparente aos cliques; luz nos temas escuros, tom âmbar no tema claro */
+/* o foco na página (app.js), só à volta do Painel: por cima de tudo, transparente aos cliques, numa camada própria
+   (sem modos de mistura, para não obrigar o navegador a redesenhar a página inteira a cada imagem) */
 .foco-pagina { position: fixed; inset: 0; width: 100vw; height: 100vh; pointer-events: none; z-index: 60; opacity: 0;
-               transition: opacity .4s ease; mix-blend-mode: screen; }
+               transition: opacity .4s ease; will-change: opacity; --foco-forca: 1; }
 .foco-pagina.on { opacity: 1; }
 .foco-pagina stop { stop-color: var(--foco-cor, #ffeaa6); }
-[data-palette="relatorio"] .foco-pagina { mix-blend-mode: multiply; --foco-cor: #f2b632; }
+[data-palette="relatorio"] .foco-pagina { --foco-cor: #f2b632; --foco-forca: .6; }
 .ocupado { margin-left: auto; color: var(--muted); font: 12px var(--mono); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 46%; }
 .ocupado span { color: var(--ink); }
 .ocupado + .who { margin-left: 0; }
