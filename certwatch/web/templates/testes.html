@@ -1,7 +1,7 @@
 {% extends "base.html" %}
 {% from "_macros.html" import cell, state, type_chip, scope_chip, stackbar, fixbox %}
 {% block title %}Testes{% endblock %}
-{% block crumb %}Verificação{% endblock %}
+{% block crumb %}Vigilância{% endblock %}
 {% block page_title %}Testes{% endblock %}
 {% block lede %}Todos os servidores passam pelos mesmos {{ CHECKS|length }} testes, organizados em camadas da rede até ao inventário. Uma falha numa camada impede os testes das seguintes, que ficam como "não testado". Clique num teste para ver os servidores com problemas e como se corrige.{% endblock %}
 {% block actions %}<a class="button" href="/testes/como-funciona">Como funciona cada teste</a>{% endblock %}

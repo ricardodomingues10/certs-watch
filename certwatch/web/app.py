@@ -162,10 +162,10 @@ def invalidate_nav() -> None:
 
 # Navegação por tarefas: cada grupo responde a "o que vou fazer?"; as páginas do grupo aparecem como separadores.
 NAV_GROUPS = [
-    ("hoje", "Hoje", [("/", "Painel", None), ("/findings", "Alertas", "alertas")]),
+    ("hoje", "", [("/", "Painel", None)]),                       # os alertas estão no sino, ao pé do utilizador
     ("inventario", "Inventário", [("/certificados", "Certificados", None), ("/apis", "APIs e segredos", None),
-                                  ("/endpoints", "Servidores", None), ("/testes", "Testes", None),
-                                  ("/descoberta", "Na internet", "ct_por_triar")]),
+                                  ("/endpoints", "Servidores", None)]),
+    ("vigilancia", "Vigilância", [("/testes", "Testes", None), ("/descoberta", "Na internet", "ct_por_triar")]),
     ("renovar", "Renovar", [("/pedidos", "Pedidos SMAX", None), ("/relatorio", "Relatório por email", None)]),
     ("cmdb", "CMDB", [("/cmdb-final", "Atualizar a CMDB", "reconc_dif"), ("/ucmdb/certificado", "Editar um certificado", None),
                       ("/cmdb/historico", "Histórico de alterações", None)]),
@@ -189,8 +189,8 @@ def nav_tree(path: str, counts: dict) -> list[dict]:
                 best, best_len = href, len(href)
     out = []
     for key, label, links in NAV_GROUPS:
-        items = [{"href": h, "label": lb, "on": h == best, "n": counts.get(c) if c else None,
-                  "hot": c == "alertas" and counts.get("alertas_altos")} for h, lb, c in links]
+        items = [{"href": h, "label": lb, "on": h == best, "n": counts.get(c) if c else None, "hot": False}
+                 for h, lb, c in links]
         out.append({"key": key, "label": label, "href": links[0][0], "on": any(i["on"] for i in items), "items": items,
                     "n": sum(i["n"] or 0 for i in items if i["n"]) or None})
     return out

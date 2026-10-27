@@ -115,7 +115,7 @@ a:focus-visible, button:focus-visible, input:focus-visible, select:focus-visible
 .search { flex: 1; max-width: 520px; }
 .search input[type=search] { width: 100%; padding: 7px 12px 7px 32px; border-radius: var(--radius-s); min-height: 34px; font-size: 13px;
   background: var(--panel-2) url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16' fill='none' stroke='%237f8c9a' stroke-width='1.7'%3E%3Ccircle cx='7' cy='7' r='4.6'/%3E%3Cpath d='M10.6 10.6 14 14' stroke-linecap='round'/%3E%3C/svg%3E") no-repeat 10px center / 14px; }
-.who { margin-left: auto; color: var(--muted); font: 12px var(--mono); white-space: nowrap; }
+.who { margin-left: 0; color: var(--muted); font: 12px var(--mono); white-space: nowrap; }
 .menu-btn { display: none; }
 main { padding: 22px 24px 48px; width: 100%; min-width: 0; }
 footer { display: flex; flex-wrap: wrap; justify-content: space-between; align-items: center; gap: 8px 16px;
@@ -789,5 +789,12 @@ details.card[open] > summary { margin-bottom: 12px; }
 [data-palette="relatorio"] .foco-pagina { --foco-cor: #f2b632; --foco-forca: .6; }
 .ocupado { margin-left: auto; color: var(--muted); font: 12px var(--mono); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 46%; }
 .ocupado span { color: var(--ink); }
-.ocupado + .who { margin-left: 0; }
+.ocupado + .sino { margin-left: 0; }
+/* alertas: sino com o número por cima, ao pé do utilizador */
+.sino { position: relative; display: inline-flex; align-items: center; justify-content: center; width: 38px; height: 34px;
+        margin-left: auto; border-radius: var(--radius-s); color: var(--muted); flex: none; }
+.sino:hover { color: var(--ink); background: var(--panel-2); text-decoration: none; }
+.sino.on { color: var(--accent); }
+.sino .badge { position: absolute; top: -3px; right: -4px; min-width: 18px; padding: 0 5px; border-radius: 9px;
+               font-size: 10.5px; line-height: 17px; box-shadow: 0 0 0 2px var(--panel); }
 @media (prefers-reduced-motion: reduce) { .atalaia.atl-anim-auto * { animation: none !important; } }

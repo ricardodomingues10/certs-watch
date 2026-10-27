@@ -32,7 +32,7 @@
     </div>
     {% endif %}
     {% for g in navtree %}
-    <h4>{{ g.label }}</h4>
+    {% if g.label %}<h4>{{ g.label }}</h4>{% endif %}
     {% for i in g['items'] %}
     <a href="{{ i.href }}" class="{{ 'on' if i.on }}"{% if i.on %} aria-current="page"{% endif %}><span>{{ i.label }}</span>{% if i.n %}<span class="badge {{ 'hot' if i.hot else 'warm' }}">{{ i.n }}</span>{% endif %}</a>
     {% endfor %}
@@ -45,6 +45,13 @@
                placeholder="Procurar certificado, servidor, emissor ou API" aria-label="Procurar">
       </form>
       {% if busy %}<span class="ocupado" data-ocupado="{{ busy|length }}" role="status" title="A vigia varre a página com o foco enquanto isto corre">A trabalhar: <span>{{ busy|join(' · ') }}</span></span>{% endif %}
+      {% set na = nav.alertas or 0 %}{% set nh = nav.alertas_altos or 0 %}
+      <a class="sino{{ ' on' if p.startswith('/findings') }}" href="/findings"{% if p.startswith('/findings') %} aria-current="page"{% endif %}
+         title="{{ na }} alerta{{ 's' if na != 1 }} aberto{{ 's' if na != 1 }}{% if nh %}, {{ nh }} alto{{ 's' if nh != 1 }} ou crítico{{ 's' if nh != 1 }}{% endif %}"
+         aria-label="Alertas: {{ na }} aberto{{ 's' if na != 1 }}{% if nh %}, {{ nh }} alto{{ 's' if nh != 1 }} ou crítico{{ 's' if nh != 1 }}{% endif %}">
+        <svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true" focusable="false"><path d="M12 3.2c-3.3 0-5.7 2.5-5.7 5.8v3.6L4.6 15.6c-.4.7.1 1.6.9 1.6h13c.8 0 1.3-.9.9-1.6l-1.7-3V9c0-3.3-2.4-5.8-5.7-5.8Z" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round"/><path d="M9.8 19.3a2.3 2.3 0 0 0 4.4 0" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/></svg>
+        {% if na %}<span class="badge {{ 'hot' if nh else 'warm' }}">{{ na if na < 100 else '99+' }}</span>{% endif %}
+      </a>
       <span class="who">{{ user }}</span>
     </header>
     <main>

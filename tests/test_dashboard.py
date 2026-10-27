@@ -108,6 +108,9 @@ def test_navigation_and_theme(env):
     assert tree["sistema"]["on"] and not tree["cmdb"]["on"]                       # o prefixo mais longo ganha
     assert [i["label"] for i in tree["sistema"]["items"] if i["on"]] == ["AVI pela API"]
     assert nav_tree("/cert/abc", {})[1]["on"] and nav_tree("/", {})[0]["on"]
+    groups = {g["key"]: [i["label"] for i in g["items"]] for g in nav_tree("/", {})}
+    assert groups["hoje"] == ["Painel"] and groups["inventario"] == ["Certificados", "APIs e segredos", "Servidores"]
+    assert groups["vigilancia"] == ["Testes", "Na internet"] and not any("Alertas" in v for v in groups.values())
     with TestClient(app) as c:
         page = c.get("/certificados", auth=AUTH).text
         assert 'data-palette="consola"' in page and 'aria-current="page"><span>Certificados</span>' in page
@@ -182,3 +185,22 @@ def test_busy_state_drives_the_page_beam(env):
         assert c.get("/estado/ocupado", auth=AUTH).json() == {"ocupado": ["Verificar servidores (a correr)"]}
         js = c.get("/static/app.js").text
         assert "/estado/ocupado" in js and "foco-pagina" in js
+
+
+def test_alert_bell_next_to_user(env):
+    """Os alertas saem do menu: um sino ao pé do utilizador com o número de alertas abertos por cima
+    (vermelho se houver altos ou críticos)."""
+    from certwatch.web import app as webapp
+    webapp.invalidate_nav()                                   # os contadores ficam 30 s em cache entre testes
+    with TestClient(webapp.app) as c:
+        page = c.get("/certificados", auth=AUTH).text
+        bell = page.split('class="sino')[1].split("</a>")[0]
+        assert 'href="/findings"' in bell and "Alertas: 0 abertos" in bell and "badge" not in bell
+        webapp.invalidate_nav()
+        webapp._NAV_CACHE.update(at=webapp.time.monotonic(), data={"alertas": 12, "alertas_altos": 3})
+        page = c.get("/findings", auth=AUTH).text
+        bell = page.split('class="sino')[1].split("</a>")[0]
+        assert bell.startswith(' on"') and 'aria-current="page"' in bell
+        assert '<span class="badge hot">12</span>' in bell and "3 altos ou críticos" in bell
+        assert page.index('class="sino') < page.index('class="who"')
+        webapp.invalidate_nav()
