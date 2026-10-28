@@ -414,3 +414,54 @@ document.addEventListener("DOMContentLoaded", () => {
     send({ reset: true }).then(() => location.reload());
   });
 });
+
+// Avisos por cima da página (ex.: "não tem permissões"): fecham no × ou sozinhos ao fim de 10 s. Numa conta só de
+// consulta, carregar num botão que altera algo mostra logo o aviso, sem sair da página (o servidor recusa na mesma).
+window.atalaiaToast = (msg) => {
+  const box = document.querySelector("[data-toasts]");
+  if (!box) return;
+  const t = document.createElement("div");
+  t.className = "toast"; t.setAttribute("role", "alert");
+  const span = document.createElement("span"); span.textContent = msg;
+  const x = document.createElement("button"); x.type = "button"; x.className = "toast-x"; x.setAttribute("aria-label", "Fechar o aviso"); x.textContent = "×";
+  t.append(span, x); box.append(t);
+  armToast(t);
+};
+function armToast(t) {
+  const close = () => { t.classList.add("is-out"); setTimeout(() => t.remove(), 250); };
+  const x = t.querySelector(".toast-x");
+  if (x) x.addEventListener("click", close);
+  let timer = setTimeout(close, 10000);
+  t.addEventListener("mouseenter", () => clearTimeout(timer));
+  t.addEventListener("mouseleave", () => { timer = setTimeout(close, 4000); });
+}
+document.addEventListener("DOMContentLoaded", () => {
+  document.querySelectorAll("[data-toasts] .toast").forEach(armToast);
+  const body = document.body;
+  if (body.dataset.role !== "leitura") return;
+  const ALLOWED = ["/tema", "/painel/disposicao", "/conta/palavra-passe", "/sair"];
+  document.addEventListener("submit", (e) => {
+    const f = e.target;
+    if ((f.getAttribute("method") || "get").toLowerCase() !== "post") return;
+    const path = new URL(f.action, location.href).pathname;
+    if (ALLOWED.includes(path)) return;
+    e.preventDefault(); e.stopImmediatePropagation();
+    const b = e.submitter || f.querySelector("button");
+    const what = (b && b.textContent.trim()) || "esta ação";
+    window.atalaiaToast(`O utilizador ${body.dataset.user} não tem permissões para «${what}»: a conta é de ${body.dataset.roleLabel || "só consulta"}. ` +
+                        "Peça a um administrador para mudar o papel em Sistema → Utilizadores.");
+  }, true);
+});
+
+// Utilizadores: ao escolher outro papel, o botão Guardar dessa linha fica destacado (ainda não foi guardado)
+document.addEventListener("DOMContentLoaded", () => {
+  document.querySelectorAll("form.us-role select[name=papel]").forEach((sel) => {
+    const start = sel.value, btn = sel.form.querySelector("button");
+    if (!btn || !start) return;
+    sel.addEventListener("change", () => {
+      const changed = sel.value !== start;
+      btn.classList.toggle("primary", changed);
+      btn.textContent = changed ? "Guardar o papel" : "Guardar";
+    });
+  });
+});

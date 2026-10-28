@@ -12,7 +12,7 @@
   <script src="/static/app.js" defer></script>
   {% block head %}{% endblock %}
 </head>
-<body>
+<body data-user="{{ user }}" data-role="{{ role }}" data-role-label="{{ ROLES.get(role, '')|lower if role else '' }}">
 {% set p = request.url.path %}
 <div class="shell">
   <input type="checkbox" id="menu-toggle" class="menu-toggle" aria-label="Menu">
@@ -63,6 +63,8 @@
         <div class="page-actions">{% block actions %}{% endblock %}</div>
       </div>
       {% block content %}{% endblock %}
+      {#- avisos (ex.: ação sem permissão): aparecem por cima da página e desaparecem sozinhos -#}
+      <div class="toasts" data-toasts aria-live="assertive">{% if aviso %}<div class="toast" role="alert"><span>{{ aviso }}</span><button type="button" class="toast-x" aria-label="Fechar o aviso">×</button></div>{% endif %}</div>
     </main>
     <footer>
       <span>Atalaia Cert {{ version }}{% if client and client.name %} · {{ client.name }}{% endif %} · datas em hora de Lisboa</span>

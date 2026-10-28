@@ -47,7 +47,7 @@ from ..collectors.smax import ticket_url
 from ..tickets import TICKET_HELP, TICKET_ORDER, TICKET_STATES, TICKET_VIEWS, comment_files, filter_tickets, ticket_list, tickets_by_label, link as ticket_link, tickets_by_endpoint
 from ..trust import local_trust_files
 from ..normalize import norm_label, split_api_name, is_ip, is_valid_hostname, norm_host, norm_issuer
-from .security import (SESSION_COOKIE, check_csrf, check_login, clear_failures, current_user, forget_logins, note_failure,
+from .security import (SESSION_COOKIE, PermissionDenied, check_csrf, check_login, clear_failures, current_user, forget_logins, note_failure,
                        require_admin, security_middleware, too_many)
 from .. import users as us
 from ..models import User, UserPref
@@ -274,7 +274,40 @@ def busy_work() -> list[str]:
     return out
 
 
+NOTICE_COOKIE = "cw_aviso"
+
+
+def denied_message(e: PermissionDenied) -> str:
+    papel = us.ROLES.get(e.role, e.role or "sem papel").lower()
+    return (f"O utilizador {e.user} não tem permissões para {e.action}: a conta é de {papel}. "
+            "Peça a um administrador para mudar o papel em Sistema → Utilizadores.")
+
+
+@app.exception_handler(PermissionDenied)
+async def permission_denied(request: Request, exc: PermissionDenied):
+    """Ação recusada pelo papel: o navegador volta à página onde estava e mostra o aviso; pedidos de scripts
+    recebem 403 com a mesma mensagem."""
+    msg = denied_message(exc)
+    with session_scope() as s:
+        audit(s, exc.user, "acesso.recusado", request.url.path, papel=exc.role)
+    if "text/html" not in request.headers.get("accept", ""):
+        return JSONResponse({"detail": msg}, status_code=403)
+    ref = request.headers.get("referer", "")
+    back = "/"
+    if ref:
+        from urllib.parse import urlsplit
+        u, here = urlsplit(ref), urlsplit(str(request.base_url))
+        if u.netloc == here.netloc and u.path != request.url.path:
+            back = safe_next(u.path + (f"?{u.query}" if u.query else ""), "/")
+    r = RedirectResponse(back, status_code=303)
+    r.set_cookie(NOTICE_COOKIE, quote(msg[:600]), max_age=60, httponly=True, samesite="strict",
+                 secure=get_settings().cookie_secure, path="/")
+    return r
+
+
 def render(request: Request, name: str, user: str, **ctx):
+    from urllib.parse import unquote
+    aviso = unquote(request.cookies.get(NOTICE_COOKIE, ""))[:600]
     counts = nav_counts()
     ctx.setdefault("busy", busy_work())
     role = getattr(request.state, "role", "")
@@ -287,9 +320,9 @@ def render(request: Request, name: str, user: str, **ctx):
             for i in g["items"]:
                 if i["href"] == "/utilizadores" and i["n"]:
                     i["hot"] = True
-    return templates.TemplateResponse(request, name, {"user": user, "csrf": request.state.csrf, "nav": counts,
+    r = templates.TemplateResponse(request, name, {"user": user, "csrf": request.state.csrf, "nav": counts,
                                                       "navtree": tree, "role": role, "ROLES": us.ROLES,
-                                                      "via": getattr(request.state, "via", ""),
+                                                      "via": getattr(request.state, "via", ""), "aviso": aviso,
                                                       "palette": palette_of(request), "PALETTES": PALETTES,
                                                       "client": {"name": get_settings().client_name,
                                                                  "logo": client_logo() is not None,
@@ -297,6 +330,9 @@ def render(request: Request, name: str, user: str, **ctx):
                                                                  in ("original", "claro", "placa") else "original",
                                                                  "anim": get_settings().logo_animation if get_settings().logo_animation
                                                                  in ("sempre", "auto", "parado") else "sempre"}, **ctx})
+    if aviso:
+        r.delete_cookie(NOTICE_COOKIE, path="/")          # o aviso aparece uma vez
+    return r
 
 
 @app.get("/estado/ocupado")

@@ -306,3 +306,30 @@ def test_disabling_closes_sessions(web):
     web.post(f"/utilizadores/{uid}/desativar", data={"csrf": csrf(web)}, auth=AUTH)
     web.cookies.set("cw_sessao", sess)
     assert web.get("/certificados").status_code == 401
+
+
+def test_denied_action_shows_notice_on_same_page(web):
+    """Numa conta só de consulta, uma ação recusada volta à página onde estava, com um aviso a dizer quem e o quê
+    (em vez de uma página de erro); um script recebe 403 com a mesma mensagem."""
+    token, _ = invite(web, "leitor@exemplo.pt", papel="leitura")
+    accept(web, token)
+    reader = ("leitor@exemplo.pt", PW)
+    page = web.get("/jobs", auth=reader).text
+    assert 'data-role="leitura"' in page and 'data-user="leitor@exemplo.pt"' in page
+    html = {"Accept": "text/html", "Referer": "http://testserver/jobs"}
+    r = web.post("/jobs/pipeline", data={"csrf": csrf(web), "next": "/jobs"}, auth=reader, headers=html, follow_redirects=False)
+    assert r.status_code == 303 and r.headers["location"] == "/jobs"
+    back = web.get("/jobs", auth=reader).text
+    assert 'class="toast"' in back and "O utilizador leitor@exemplo.pt não tem permissões para executar trabalhos" in back
+    assert 'class="toast"' not in web.get("/jobs", auth=reader).text                          # aparece uma vez
+    api = web.post("/jobs/pipeline", data={"csrf": csrf(web)}, auth=reader)
+    assert api.status_code == 403 and "não tem permissões para executar trabalhos" in api.json()["detail"]
+    # um operador que abre Utilizadores fica onde estava, com o aviso
+    t2, _ = invite(web, "op@exemplo.pt", papel="operador")
+    accept(web, t2)
+    r = web.get("/utilizadores", auth=("op@exemplo.pt", PW), headers={"Accept": "text/html", "Referer": "http://testserver/certificados"},
+                follow_redirects=False)
+    assert r.status_code == 303 and r.headers["location"] == "/certificados"
+    assert "não tem permissões para gerir os utilizadores" in web.get("/certificados", auth=("op@exemplo.pt", PW)).text
+    with session_scope() as s:
+        assert s.scalar(select(AuditLog).where(AuditLog.action == "acesso.recusado")) is not None

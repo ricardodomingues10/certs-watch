@@ -26,6 +26,27 @@ FAIL_LIMIT, FAIL_WINDOW = 10, 900          # 10 tentativas falhadas em 15 min bl
 READONLY_POST = {"/tema", "/painel/disposicao", "/conta/palavra-passe", "/sair"}
 
 
+class PermissionDenied(Exception):
+    """A pessoa entrou, mas o papel dela não deixa fazer isto. A aplicação mostra um aviso na página onde estava
+    (em vez de abrir uma página de erro)."""
+
+    def __init__(self, user: str, role: str, action: str):
+        super().__init__(action)
+        self.user, self.role, self.action = user, role, action
+
+
+# o que cada endereço faz, para o aviso dizer que ação foi recusada
+ACTIONS = [("/jobs", "executar trabalhos"), ("/pedidos", "criar ou alterar pedidos no SMAX"),
+           ("/cmdb-final", "atualizar a CMDB"), ("/ucmdb", "escrever na UCMDB"), ("/cmdb", "alterar a CMDB"),
+           ("/findings", "decidir sobre alertas"), ("/endpoints", "alterar servidores"),
+           ("/descoberta", "triar certificados encontrados na internet"), ("/relatorio", "preparar ou enviar relatórios"),
+           ("/utilizadores", "gerir os utilizadores"), ("/certificados", "alterar certificados"), ("/apis", "alterar APIs")]
+
+
+def action_of(path: str) -> str:
+    return next((label for prefix, label in ACTIONS if path == prefix or path.startswith(prefix + "/")), "fazer esta alteração")
+
+
 def forget_logins() -> None:
     _OK_CACHE.clear()
     _SESSION_CACHE.clear()
@@ -146,13 +167,13 @@ def current_user(request: Request, credentials: HTTPBasicCredentials | None = De
     role, name = found
     request.state.user, request.state.role, request.state.via = name, role, via
     if role == "leitura" and request.method not in ("GET", "HEAD", "OPTIONS") and request.url.path not in READONLY_POST:
-        raise HTTPException(status.HTTP_403_FORBIDDEN, "A sua conta é só de consulta: não pode alterar nada.")
+        raise PermissionDenied(name, role, action_of(request.url.path))
     return name
 
 
 def require_admin(request: Request, user: str = Depends(current_user)) -> str:
     if getattr(request.state, "role", "") != "admin":
-        raise HTTPException(status.HTTP_403_FORBIDDEN, "Só um administrador pode gerir os utilizadores.")
+        raise PermissionDenied(user, getattr(request.state, "role", ""), "gerir os utilizadores")
     return user
 
 
@@ -178,7 +199,7 @@ SECURITY_HEADERS = {
                                "frame-ancestors 'none'; form-action 'self'; base-uri 'none'",
     "X-Content-Type-Options": "nosniff",
     "X-Frame-Options": "DENY",
-    "Referrer-Policy": "no-referrer",
+    "Referrer-Policy": "same-origin",          # só a própria aplicação vê de que página se veio (para voltar lá com um aviso)
     "Cache-Control": "no-store",
 }
 SVG_CSP = "default-src 'none'; style-src 'unsafe-inline'; img-src data:; sandbox"
