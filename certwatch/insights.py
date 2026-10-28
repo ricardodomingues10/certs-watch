@@ -20,7 +20,7 @@ from .db import as_utc
 from .evaluator import FINDING_TYPES, SEV_RANK, Snapshot, load_snapshot
 from .models import Certificate, CmdbRecord, Endpoint, Finding, ScanResult
 from .normalize import classify, norm_issuer
-from .scanner import summarize
+from .fontes.servidores import summarize
 
 _MIN_DT = datetime.min.replace(tzinfo=timezone.utc)
 
@@ -128,6 +128,11 @@ def build_inventory(session: Session, settings: Settings, now: datetime, snap: S
             "live_status": "ok" if live_cert else (statuses[0] if statuses else None),
             "live_not_after": live_cert.not_after if live_cert else None,
             "live_issuer": live_cert.issuer_cn if live_cert else None,
+            "live_not_before": live_cert.not_before if live_cert else None,
+            "vida_dias": ((as_utc(live_cert.not_after) - as_utc(live_cert.not_before)).days
+                          if live_cert and live_cert.not_before and live_cert.not_after else None),
+            "key_type": live_cert.key_type if live_cert else "", "key_bits": live_cert.key_bits if live_cert else None,
+            "sig_hash": live_cert.sig_hash if live_cert else "",
             "live_sha256": live_cert.sha256 if live_cert else None,
             "dias": days,
             "fonte_data": "live" if live_cert else ("cmdb" if latest else "—"),
@@ -142,6 +147,8 @@ def build_inventory(session: Session, settings: Settings, now: datetime, snap: S
             "max_sev": max((f.severity for f in fl), key=lambda x: SEV_RANK[x], default=None),
         })
     rows.sort(key=lambda r: (r["dias"] is None, r["dias"] if r["dias"] is not None else 0, r["cn"]))
+    from .owners import attach
+    attach(session, rows)
     return rows
 
 

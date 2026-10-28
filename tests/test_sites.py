@@ -105,7 +105,7 @@ def test_ct_names_become_endpoints_without_noise(env):
     # Sem resposta: não entra no inventário, não dá alerta, e é desligado após N falhas
     from certwatch.jobs import run_scan
     from certwatch import jobs
-    from certwatch.scanner import ScanOutcome
+    from certwatch.fontes.servidores import ScanOutcome
     import certwatch.jobs as J
     orig = J.scan_endpoint
     J.scan_endpoint = lambda host, port, cafile, timeout: ScanOutcome(host, port, status="dns_error", error="não resolve")
@@ -170,11 +170,11 @@ def test_smax_page_overdue_comments_and_api_tickets(env, monkeypatch):
             return httpx.Response(200, json={"entities": [{"properties": {"Name": "Ana Técnica"}}]})
         return base(request)
     fake.handler = handler
-    from certwatch.collectors import smax
+    from certwatch.fontes import smax
     monkeypatch.setattr(smax, "client", fake.client)
     _setup(env)
     with session_scope() as db:
-        from certwatch.collectors.ucmdb import parse_apis
+        from certwatch.fontes.ucmdb import parse_apis
         from certwatch.jobs import ingest_apis
         recs, fields = parse_apis([{"ucmdbId": "x", "properties": {"display_label": "CRM Testes", "secret_expiration_date":
                                     (NOW + timedelta(days=20)).strftime("%d-%m-%Y %H:%M:%S")}}], s)

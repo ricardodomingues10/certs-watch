@@ -23,7 +23,7 @@ _OK_CACHE: dict[str, tuple[float, str, str]] = {}
 _SESSION_CACHE: dict[str, tuple[float, str, str]] = {}
 _FAILS: dict[str, list[float]] = {}
 FAIL_LIMIT, FAIL_WINDOW = 10, 900          # 10 tentativas falhadas em 15 min bloqueiam esse utilizador nesse endereço
-READONLY_POST = {"/tema", "/painel/disposicao", "/conta/palavra-passe", "/sair"}
+READONLY_POST = {"/tema", "/painel/disposicao", "/conta/palavra-passe", "/conta/calendario", "/sair"}
 
 
 class PermissionDenied(Exception):

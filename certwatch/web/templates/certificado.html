@@ -65,6 +65,29 @@
 {% endif %}
 
 <div class="grid2">
+<section class="card" id="dono">
+  <h2>Dono</h2>
+  {% if dono %}
+  <p><b>{{ dono.equipa or 'Sem equipa' }}</b>{% if dono.pessoa %} · {{ dono.pessoa }}{% endif %}
+    {% if dono.origem == 'smax' %}<span class="tag tag-run" title="Grupo e responsável do pedido {{ dono.pedido }} no SMAX">sugerido pelo SMAX</span>{% else %}<span class="tag tag-ok">atribuído</span>{% endif %}</p>
+  {% if dono.email %}<p class="small">Avisos iriam para <span class="mono">{{ dono.email }}</span>.</p>{% endif %}
+  {% if dono.origem == 'atribuido' %}<p class="small muted">Por {{ dono.por }} em {{ dono.em|dt }}.</p>{% endif %}
+  {% else %}
+  <p class="muted">Ainda sem dono. Escolha a equipa responsável por este certificado.</p>
+  {% endif %}
+  <details{{ ' open' if not dono }}>
+    <summary>{{ 'Mudar o dono' if dono else 'Atribuir o dono' }}</summary>
+    {% if equipas %}
+    <form method="post" action="/certificados/dono" class="stack ow-form">
+      <input type="hidden" name="csrf" value="{{ csrf }}"><input type="hidden" name="cn" value="{{ cn }}">
+      <label>Equipa<select name="equipa"><option value="">— sem equipa —</option>{% for t in equipas %}<option value="{{ t.id }}" {{ 'selected' if dono and dono.equipa_id == t.id }}>{{ t.name }}</option>{% endfor %}</select></label>
+      <label>Pessoa responsável (opcional)<input type="text" name="pessoa" maxlength="128" value="{{ dono.pessoa if dono and dono.origem == 'atribuido' else '' }}"></label>
+      <label>Email da pessoa (opcional)<input type="email" name="email" maxlength="254" value="{{ dono.email if dono and dono.origem == 'atribuido' and dono.pessoa else '' }}"></label>
+      <button class="small-btn">Guardar o dono</button>
+    </form>
+    {% else %}<p class="small">Primeiro crie as equipas em <a href="/donos">Donos</a>.</p>{% endif %}
+  </details>
+</section>
 <section class="card">
   <h2>Renovação</h2>
   {% if auto_renew == 'auto' %}<p><span class="tag tag-ok">Automática</span> <span class="small muted">detetado em: {{ auto_src }}</span></p>

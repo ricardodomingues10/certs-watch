@@ -10,7 +10,7 @@ from datetime import datetime, timedelta, timezone
 from sqlalchemy import delete, select
 from sqlalchemy.orm import Session
 
-from .collectors.smax import discussions_url, fetch_comments, fetch_tickets, ticket_url
+from .fontes.smax import discussions_url, fetch_comments, fetch_tickets, ticket_url
 from .config import Settings
 from .db import as_utc, utcnow
 from .models import SmaxComment, SmaxEvent, SmaxFile, SmaxTicket

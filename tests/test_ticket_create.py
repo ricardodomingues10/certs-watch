@@ -83,7 +83,7 @@ def smax_env(env, monkeypatch):
         monkeypatch.setenv(k, v)
     config.get_settings.cache_clear()
     fake = FakeSmax()
-    from certwatch.collectors import smax
+    from certwatch.fontes import smax
     monkeypatch.setattr(smax, "client", fake.client)
     # Execução síncrona nos testes (em produção corre numa thread)
     monkeypatch.setattr(tc, "execute_in_background", lambda bid, actor, st: tc.execute(bid, actor, st, pause=0))

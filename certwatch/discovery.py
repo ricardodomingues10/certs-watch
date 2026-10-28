@@ -7,7 +7,7 @@ from datetime import datetime, timedelta
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from .collectors.ct import CtRecord, fetch_all, serial_key, time_key, time_name_keys
+from .fontes.ct import CtRecord, fetch_all, serial_key, time_key, time_name_keys
 from .config import Settings
 from .db import as_utc, utcnow
 from .models import Certificate, CmdbRecord, CtCert

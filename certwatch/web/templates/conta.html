@@ -38,4 +38,16 @@
     {% endif %}
   </section>
 </div>
+<section class="card" id="calendario" aria-labelledby="h-cal">
+  <h2 id="h-cal">Calendário de expirações</h2>
+  <p class="small">Cada certificado e segredo de API num dia do calendário, com o dono e o pedido, e lembretes 30 e 7 dias antes. <a href="/calendario.ics">Descarregar agora (.ics)</a> para importar uma vez, ou crie um link pessoal para <b>subscrever</b> no Outlook («Adicionar calendário» → «Da Internet»), que se atualiza sozinho.</p>
+  {% if cal_url %}
+  <label class="us-copy"><span class="sr">Link do calendário</span><input type="text" readonly value="{{ cal_url }}" class="mono" data-select-all></label>
+  <p class="small muted">Quem tiver este link vê as datas de expiração e os nomes dos certificados: não o partilhe. Um link novo invalida este.</p>
+  {% endif %}
+  <div class="ru-acts">
+    <form method="post" action="/conta/calendario"><input type="hidden" name="csrf" value="{{ csrf }}"><input type="hidden" name="acao" value="gerar"><button class="small-btn primary">{{ 'Criar um link novo' if cal_on else 'Criar o link para subscrever' }}</button></form>
+    {% if cal_on %}<form method="post" action="/conta/calendario"><input type="hidden" name="csrf" value="{{ csrf }}"><input type="hidden" name="acao" value="apagar"><button class="small-btn us-del">Apagar o link</button></form><span class="small muted">Link ativo desde {{ cal_since }}.</span>{% endif %}
+  </div>
+</section>
 {% endblock %}

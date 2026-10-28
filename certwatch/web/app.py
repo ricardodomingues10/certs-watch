@@ -22,8 +22,8 @@ from sqlalchemy import func, select
 
 from .. import __version__
 from ..checks import CHECK_BY_ID, CHECKS, LAYERS, STATUS_LABELS, evaluate_endpoint
-from ..collectors.smax import configured as smax_configured
-from ..collectors.ssllabs import GOOD_GRADES, GRADE_ORDER, report_url
+from ..fontes.smax import configured as smax_configured
+from ..fontes.ssllabs import GOOD_GRADES, GRADE_ORDER, report_url
 from ..classify import (AUTO_RENEW_HELP, AUTO_RENEW_LABELS, SCOPE_HELP, SCOPE_LABELS, TYPE_HELP, TYPE_LABELS,
                         cert_type, is_auto_renew, scope_of)
 from ..config import get_settings
@@ -31,7 +31,7 @@ from ..db import as_utc, init_db, session_scope, utcnow
 from ..evaluator import FINDING_CHECK, FINDING_TYPES, SEV_RANK, SEVERITIES, days_left, load_snapshot
 from ..insights import STATE_LABELS, ancestry, build_inventory, check_matrix, check_totals, dashboard_stats
 from ..jobs import apis_configured, JOBS, enqueue
-from ..collectors.ct import SOURCE_LABELS
+from ..fontes.ct import SOURCE_LABELS
 from ..discovery import CT_STATE_HELP, CT_STATES, CT_TABS, TRIAGE_LABELS, classify_ct
 from ..models import (ApiRecord, AuditLog, Certificate, CmdbRecord, CtCert, Endpoint, FinalInput,
                       EmailReport, EmailTemplate, FinalRun, Finding, JobRun, Renewal, ScanResult, SmaxComment, SmaxFile,
@@ -43,14 +43,15 @@ from .. import report as rp
 from .. import ucmdb_access as ua
 from .. import ucmdb_write as uw
 from ..azure_rec import CLASS_LABELS as AZ_CLASSES, STATE_LABELS as AZ_STATES
-from ..collectors.smax import ticket_url
+from ..fontes.smax import ticket_url
 from ..tickets import TICKET_HELP, TICKET_ORDER, TICKET_STATES, TICKET_VIEWS, comment_files, filter_tickets, ticket_list, tickets_by_label, link as ticket_link, tickets_by_endpoint
 from ..trust import local_trust_files
 from ..normalize import norm_label, split_api_name, is_ip, is_valid_hostname, norm_host, norm_issuer
 from .security import (SESSION_COOKIE, PermissionDenied, check_csrf, check_login, clear_failures, current_user, forget_logins, note_failure,
                        require_admin, security_middleware, too_many)
 from .. import users as us
-from ..models import User, UserPref
+from ..models import CertOwner, Team, TicketRule, User, UserPref
+from .. import owners as ow
 
 BASE = Path(__file__).parent
 MONTHS = ["jan", "fev", "mar", "abr", "mai", "jun", "jul", "ago", "set", "out", "nov", "dez"]
@@ -85,7 +86,7 @@ templates = Jinja2Templates(directory=BASE / "templates")
 
 class _RedactInvite(logging.Filter):
     """O código do link de convite vai no endereço (/convite/<código>): nunca fica no registo de acessos."""
-    _re = re.compile(r"(/convite/)[^\s?\"]+")
+    _re = re.compile(r"(/convite/|/calendario/)[^\s?\"]+")
 
     def filter(self, record: logging.LogRecord) -> bool:
         if isinstance(record.args, tuple):
@@ -134,6 +135,7 @@ def fmt_ago(value) -> str:
 
 
 templates.env.filters["ago"] = fmt_ago
+templates.env.filters["ndias"] = lambda v: "—" if v is None else f"{v} dia" if v in (1, -1) else f"{v} dias"
 templates.env.globals.update(
     FINDING_TYPES=FINDING_TYPES, FINDING_CHECK=FINDING_CHECK, SEVERITIES=SEVERITIES, version=__version__,
     TYPE_LABELS=TYPE_LABELS, TYPE_HELP=TYPE_HELP, SCOPE_LABELS=SCOPE_LABELS, SCOPE_HELP=SCOPE_HELP,
@@ -185,12 +187,14 @@ def invalidate_nav() -> None:
 NAV_GROUPS = [
     ("hoje", "", [("/", "Painel", None)]),                       # os alertas estão no sino, ao pé do utilizador
     ("inventario", "Inventário", [("/certificados", "Certificados", None), ("/apis", "APIs e segredos", None),
-                                  ("/endpoints", "Servidores", None)]),
+                                  ("/endpoints", "Servidores", None), ("/donos", "Donos", None)]),
     ("vigilancia", "Vigilância", [("/testes", "Testes", None), ("/descoberta", "Na internet", "ct_por_triar")]),
-    ("renovar", "Renovar", [("/pedidos", "Pedidos SMAX", None), ("/relatorio", "Relatório por email", None)]),
+    ("renovar", "Renovar", [("/pedidos", "Pedidos SMAX", None), ("/pedidos/regras", "Regras de pedidos", None),
+                            ("/preparar-47-dias", "Preparar os 47 dias", None), ("/relatorio", "Relatório por email", None)]),
     ("cmdb", "CMDB", [("/cmdb-final", "Atualizar a CMDB", "reconc_dif"), ("/ucmdb/certificado", "Editar um certificado", None),
                       ("/cmdb/historico", "Histórico de alterações", None)]),
-    ("sistema", "Sistema", [("/jobs", "Execuções e auditoria", None), ("/cmdb-final/permissoes", "Ligação à UCMDB", None),
+    ("sistema", "Sistema", [("/jobs", "Execuções e auditoria", None), ("/fontes", "Fontes e chamadas", None),
+                            ("/cmdb-final/permissoes", "Ligação à UCMDB", None),
                             ("/cmdb-final/avi", "AVI pela API", None), ("/utilizadores", "Utilizadores", "pedidos_acesso"),
                             ("/testes/como-funciona", "Como funciona", None)]),
 ]
@@ -333,6 +337,17 @@ def render(request: Request, name: str, user: str, **ctx):
     if aviso:
         r.delete_cookie(NOTICE_COOKIE, path="/")          # o aviso aparece uma vez
     return r
+
+
+@app.get("/fontes")
+def sources_page(request: Request, user: str = Depends(current_user)):
+    """Cada sistema com que o Atalaia Cert fala, como, e cada chamada (lida de certwatch/fontes/*.py)."""
+    from ..fontes import all_sources
+    fontes = all_sources(get_settings())
+    totals = {"em_uso": sum(1 for f in fontes for c in f["chamadas"] if c["estado"].startswith("em uso")),
+              "planeadas": sum(1 for f in fontes for c in f["chamadas"] if c["estado"] == "planeado"),
+              "escrita": sum(1 for f in fontes for c in f["chamadas"] if c["acesso"] == "escrita")}
+    return render(request, "fontes.html", user, fontes=fontes, totals=totals)
 
 
 @app.get("/estado/ocupado")
@@ -828,13 +843,15 @@ def account_page(request: Request, user: str = Depends(current_user)):
     return _account(request, user)
 
 
-def _account(request: Request, user: str, notas=None, erros=None, status_code: int = 200):
+def _account(request: Request, user: str, notas=None, erros=None, status_code: int = 200, cal_url: str = ""):
     st = get_settings()
     with session_scope() as s:
         u = us.by_email(s, user)
         me = _user_row(u, utcnow()) if u else None
+        cal = s.scalar(select(UserPref).where(UserPref.username == user, UserPref.key == "calendario"))
+        cal_since = cal.value.get("criado", "")[:10] if cal else ""
     r = render(request, "conta.html", user, me=me, ROLE_HELP=us.ROLE_HELP, notas=notas or [], erros=erros or [],
-               password_min=st.password_min)
+               password_min=st.password_min, cal_url=cal_url, cal_on=bool(cal), cal_since=cal_since)
     r.status_code = status_code
     return r
 
@@ -948,12 +965,16 @@ def dashboard(request: Request, janela: int = 24, vista: str = "", user: str = D
     nav = nav_counts()
     stale_ids = {t["pedido"]: t["parado"] for t in stale}
     trabalho = db_.work_queue(items, nis, k, stale, tcounts, nav, stats, fresh, now, can_create)
+    from .. import rules as rl
+    with session_scope() as s:
+        inv_by_cn = {r["cn"]: r for r in inv}
+        regras = [{"name": r.name, "n": len(rl.matches(r, items, inv_by_cn))} for r in rl.rules(s) if r.enabled]
     return render(request, "dashboard.html", user, s=stats, items=items, activity=activity, stale=stale, nis=nis, k=k,
                   janela=janela, vista=vista, fresh=fresh, sev_counts=sev_counts, setup=setup, smax_on=smax_configured(settings),
                   can_create=can_create, limit=settings.dash_expiry_days, stale_days=settings.dash_stale_days,
                   now=now, prazos=prazos, camadas=db_.layer_summary(matrix), fases=db_.open_by_phase(open_rows),
                   abertos=open_rows, stale_ids=stale_ids, frase=db_.headline(k, len(items)), trabalho=trabalho,
-                  nav_n=nav, layout=panel_layout(user), CARD_LABELS=PANEL_LABELS)
+                  nav_n=nav, layout=panel_layout(user), CARD_LABELS=PANEL_LABELS, regras=regras)
 
 
 @app.get("/painel/evidencia.csv")
@@ -996,7 +1017,7 @@ CERT_FILTERS = {"proprio": "Com certificado próprio", "outro": "Servidos por ou
 
 
 def _inventory_filtered(q: str, dias: str, estado: str, tipo: str, ambito: str, renovacao: str, pedido: str = "",
-                        servido: str = ""):
+                        servido: str = "", dono: str = ""):
     with session_scope() as s:
         rows = build_inventory(s, get_settings(), utcnow())
     total = len(rows)
@@ -1029,31 +1050,40 @@ def _inventory_filtered(q: str, dias: str, estado: str, tipo: str, ambito: str, 
         rows = [r for r in rows if r["smax"]["state"] != "em_curso"]
     elif pedido in TICKET_STATES:
         rows = [r for r in rows if r["smax"]["state"] == pedido]
+    if dono == "sem":
+        rows = [r for r in rows if not r["dono"]]
+    elif dono == "smax":
+        rows = [r for r in rows if r["dono"] and r["dono"]["origem"] == "smax"]
+    elif dono.isdigit():
+        rows = [r for r in rows if r["dono"] and r["dono"]["equipa_id"] == int(dono)]
     return rows, total
 
 
 @app.get("/certificados")
 def certificados(request: Request, q: str = "", dias: str = "", estado: str = "", tipo: str = "", ambito: str = "",
-                 renovacao: str = "", pedido: str = "", servido: str = "", user: str = Depends(current_user)):
-    rows, total = _inventory_filtered(q, dias, estado, tipo, ambito, renovacao, pedido, servido)
-    return render(request, "certificados.html", user, rows=rows, total=total, q=q, dias=dias,
+                 renovacao: str = "", pedido: str = "", servido: str = "", dono: str = "", user: str = Depends(current_user)):
+    rows, total = _inventory_filtered(q, dias, estado, tipo, ambito, renovacao, pedido, servido, dono)
+    with session_scope() as s:
+        equipas = [{"id": t.id, "name": t.name} for t in ow.teams(s)]
+    return render(request, "certificados.html", user, rows=rows, total=total, q=q, dias=dias, dono=dono, equipas=equipas,
                   estado=estado, tipo=tipo, ambito=ambito, renovacao=renovacao, pedido=pedido, servido=servido,
                   cert_filters=CERT_FILTERS,
                   ticket_filters=TICKET_FILTERS, smax_on=smax_configured(get_settings()),
                   create_on=tc.can_create(get_settings()),
                   export_qs=urlencode({k: v for k, v in dict(q=q, dias=dias, estado=estado, tipo=tipo, ambito=ambito,
-                                                                 renovacao=renovacao, pedido=pedido, servido=servido).items() if v}))
+                                                                 renovacao=renovacao, pedido=pedido, servido=servido,
+                                                                 dono=dono).items() if v}))
 
 
 @app.get("/certificados/exportar")
 def certificados_csv(q: str = "", dias: str = "", estado: str = "", tipo: str = "", ambito: str = "",
-                     renovacao: str = "", pedido: str = "", servido: str = "", user: str = Depends(current_user)):
-    rows, _ = _inventory_filtered(q, dias, estado, tipo, ambito, renovacao, pedido, servido)
+                     renovacao: str = "", pedido: str = "", servido: str = "", dono: str = "", user: str = Depends(current_user)):
+    rows, _ = _inventory_filtered(q, dias, estado, tipo, ambito, renovacao, pedido, servido, dono)
     return csv_response("certificados.csv",
                         ["Certificado", "Estado", "Tipo", "Âmbito", "Renovação automática", "Dias", "Expira",
                          "Data de", "Emissor (servidor)", "Emissores (CMDB)", "Situação", "Registos CMDB", "APIs",
                          "Pedido SMAX", "Situação do pedido", "Fase do pedido", "Pedidos abertos", "Link do pedido",
-                         "Servido pelo certificado", "Instalado em"],
+                         "Servido pelo certificado", "Instalado em", "Equipa dona", "Pessoa responsável", "Dono vem de"],
                         [[r["common_name"], STATE_LABELS.get(r["state"], r["state"]), TYPE_LABELS.get(r["type"], r["type"]),
                           SCOPE_LABELS.get(r["scope"], r["scope"]), "Sim" if r["renovacao"] == "auto" else "Não",
                           r["dias"], fmt_dt(r["live_not_after"] or r["cmdb_valid_to"]),
@@ -1062,7 +1092,9 @@ def certificados_csv(q: str = "", dias: str = "", estado: str = "", tipo: str = 
                           (r["smax"]["main"] or {}).get("id", ""), r["smax"]["label"], (r["smax"]["main"] or {}).get("fase", ""),
                           ", ".join(x["id"] for x in r["smax"]["open"]), (r["smax"]["main"] or {}).get("url", ""),
                           (r["servido_por"] or {}).get("nome", ""),
-                          ", ".join(sorted({x["host"] for x in r["instalado_em"]}))]
+                          ", ".join(sorted({x["host"] for x in r["instalado_em"]})),
+                          (r["dono"] or {}).get("equipa", ""), (r["dono"] or {}).get("pessoa", ""),
+                          {"atribuido": "atribuído", "smax": "pedido SMAX"}.get((r["dono"] or {}).get("origem"), "")]
                          for r in rows])
 
 
@@ -1103,13 +1135,314 @@ def certificado_detalhe(request: Request, cn: str, user: str = Depends(current_u
         instalado_em = inv_row["instalado_em"] if inv_row else []
         effective = leaf0.not_after if leaf0 else (recs[0].valid_to if recs else None)
         smax = inv_row["smax"] if inv_row else ticket_link(tickets_by_endpoint(s).get(cn, []), effective, settings)
+    with session_scope() as s:
+        equipas = [{"id": t.id, "name": t.name} for t in ow.teams(s)]
     return render(request, "certificado.html", user, smax=smax, smax_on=smax_configured(settings),
+                  dono=inv_row["dono"] if inv_row else None, equipas=equipas,
                   servido_por=servido_por, instalado_em=instalado_em,
                   create_on=tc.can_create(settings), cn=cn, recs=recs, inactive=inactive, eps=ep_data, apis=apis,
                   findings=findings, ctype=ctype, scope=scope, now=now, ext=ext, ssllabs_on=bool(settings.ssllabs_email),
                   auto_renew="auto" if (auto_cmdb or auto_live) else "manual",
                   auto_src=", ".join(x for x, ok in (("CMDB", auto_cmdb), ("servidor", auto_live)) if ok),
                   max_until=(now + timedelta(days=365)).astimezone(_tz()).strftime("%Y-%m-%d"))
+
+
+@app.post("/certificados/dono")
+def certificado_dono(request: Request, csrf: str = Form(""), cn: str = Form(""), equipa: str = Form(""),
+                     pessoa: str = Form(""), email: str = Form(""), user: str = Depends(current_user)):
+    """Atribuir (ou tirar) o dono de um certificado."""
+    check_csrf(request, csrf)
+    email = us.norm_email(email)
+    if email and not us.valid_email(email):
+        raise HTTPException(400, "O email da pessoa responsável não é válido")
+    with session_scope() as s:
+        tid = int(equipa) if equipa.isdigit() and s.get(Team, int(equipa)) else None
+        o = ow.set_owner(s, cn, tid, pessoa, email, user)
+        audit(s, user, "dono.atribuir", cn, equipa=tid, pessoa=pessoa.strip()[:128], removido=o is None)
+    return RedirectResponse(f"/certificados/detalhe?cn={quote(cn)}#dono", status_code=303)
+
+
+# ------------------------------------------------------------------ donos (equipas)
+def _donos_page(request: Request, user: str, notas=None, erros=None, previa=None, form=None, status_code: int = 200):
+    from ..fontes import teams as teams_src
+    now = utcnow()
+    with session_scope() as s:
+        rows = build_inventory(s, get_settings(), now)
+        equipas = ow.teams(s)
+        hooks = teams_src.webhooks()
+        stats = []
+        for t in equipas:
+            mine = [r for r in rows if r["dono"] and r["dono"]["equipa_id"] == t.id]
+            stats.append({"t": t, "n": len(mine), "atribuidos": sum(1 for r in mine if r["dono"]["origem"] == "atribuido"),
+                          "a30": sum(1 for r in mine if r["dias"] is not None and 0 <= r["dias"] <= 30),
+                          "expirados": sum(1 for r in mine if r["dias"] is not None and r["dias"] < 0),
+                          "teams_ok": bool(t.teams_key and t.teams_key in hooks)})
+    sem = [r for r in rows if not r["dono"]]
+    smax_only = {}
+    for r in rows:
+        if r["dono"] and r["dono"]["origem"] == "smax" and not r["dono"]["equipa_id"]:
+            smax_only.setdefault(r["dono"]["equipa"] or "(sem grupo)", 0)
+            smax_only[r["dono"]["equipa"] or "(sem grupo)"] += 1
+    r = render(request, "donos.html", user, stats=stats, sem=sem, total=len(rows), smax_only=sorted(smax_only.items()),
+               notas=notas or [], erros=erros or [], previa=previa, f=form or {}, hooks_n=len(hooks),
+               equipas=[{"id": t.id, "name": t.name} for t in equipas])
+    r.status_code = status_code
+    return r
+
+
+@app.get("/donos")
+def donos_page(request: Request, user: str = Depends(current_user)):
+    return _donos_page(request, user)
+
+
+@app.post("/donos/equipa")
+def donos_team_save(request: Request, csrf: str = Form(""), id: str = Form(""), nome: str = Form(""), email: str = Form(""),
+                    grupo: str = Form(""), teams: str = Form(""), notas: str = Form(""), user: str = Depends(current_user)):
+    check_csrf(request, csrf)
+    nome, email = nome.strip()[:128], us.norm_email(email)
+    if not nome:
+        return _donos_page(request, user, erros=["A equipa precisa de um nome."], status_code=400)
+    if email and not us.valid_email(email):
+        return _donos_page(request, user, erros=[f"O email {email} não é válido."], status_code=400)
+    if teams and not re.fullmatch(r"[A-Za-z0-9_.-]{1,64}", teams.strip()):
+        return _donos_page(request, user, erros=["A chave do Teams só pode ter letras, números, ponto, hífen e sublinhado."], status_code=400)
+    with session_scope() as s:
+        other = s.scalar(select(Team).where(func.lower(Team.name) == nome.lower()))
+        t = s.get(Team, int(id)) if id.isdigit() else None
+        if other is not None and other is not t:
+            return _donos_page(request, user, erros=[f"Já existe a equipa {other.name}."], status_code=400)
+        novo = t is None
+        if novo:
+            t = Team(name=nome)
+            s.add(t)
+        t.name, t.email, t.smax_group, t.teams_key, t.notes = nome, email, grupo.strip()[:256], teams.strip(), notas.strip()[:500]
+        audit(s, user, "dono.equipa_" + ("criar" if novo else "alterar"), nome)
+    return _donos_page(request, user, notas=[f"Equipa {nome} {'criada' if novo else 'guardada'}."])
+
+
+@app.post("/donos/equipa/{tid}/apagar")
+def donos_team_delete(request: Request, tid: int, csrf: str = Form(""), user: str = Depends(current_user)):
+    check_csrf(request, csrf)
+    with session_scope() as s:
+        t = s.get(Team, tid)
+        if t is None:
+            raise HTTPException(404)
+        name = t.name
+        for o in s.scalars(select(CertOwner).where(CertOwner.team_id == tid)):
+            o.team_id = None
+            if not o.person:
+                s.delete(o)
+        s.delete(t)
+        audit(s, user, "dono.equipa_apagar", name)
+    return _donos_page(request, user, notas=[f"Equipa {name} apagada; os certificados dela ficaram sem equipa."])
+
+
+@app.post("/donos/atribuir")
+def donos_bulk(request: Request, csrf: str = Form(""), padrao: str = Form(""), equipa: str = Form(""),
+               pessoa: str = Form(""), so_sem: str = Form(""), acao: str = Form("previa"), user: str = Depends(current_user)):
+    """Atribuir em bloco por padrão de nomes (ex.: *.exemplo.local). Primeiro mostra quais; só aplica ao confirmar."""
+    check_csrf(request, csrf)
+    form = {"padrao": padrao, "equipa": equipa, "pessoa": pessoa, "so_sem": so_sem}
+    pats = [x for x in re.split(r"[\s,;]+", padrao.strip().lower()) if x]
+    if not pats:
+        return _donos_page(request, user, erros=["Escreva um padrão de nomes, por exemplo *.exemplo.local."], form=form, status_code=400)
+    with session_scope() as s:
+        t = s.get(Team, int(equipa)) if equipa.isdigit() else None
+        if t is None:
+            return _donos_page(request, user, erros=["Escolha a equipa."], form=form, status_code=400)
+        rows = build_inventory(s, get_settings(), utcnow())
+        hits = [r for r in rows if any(ow.match_pattern(r["cn"], x) for x in pats)
+                and (not so_sem or not r["dono"] or r["dono"]["origem"] != "atribuido")]
+        if acao != "aplicar":
+            return _donos_page(request, user, previa={"rows": hits[:300], "n": len(hits), "equipa": t.name}, form=form)
+        for r in hits:
+            ow.set_owner(s, r["cn"], t.id, pessoa, "", user)
+        audit(s, user, "dono.atribuir_bloco", ", ".join(pats)[:600], equipa=t.name, n=len(hits))
+        name = t.name
+    return _donos_page(request, user, notas=[f"{len(hits)} certificado(s) atribuído(s) à equipa {name}."])
+
+
+# ------------------------------------------------------------------ regras para abrir pedidos (sem execução automática)
+def _rules_context(s):
+    """As regras e, para cada uma, os pedidos que abriria hoje."""
+    import certwatch.dashboard as db_
+    from .. import rules as rl
+    settings, now = get_settings(), utcnow()
+    snap = load_snapshot(s)
+    inv = build_inventory(s, settings, now, snap)
+    items = db_.expiring_without_ticket(inv, snap, s, settings, now)
+    inv_by_cn = {r["cn"]: r for r in inv}
+    teams = {t.id: t for t in ow.teams(s)}
+    out = []
+    for r in rl.rules(s):
+        m = rl.matches(r, items, inv_by_cn)
+        out.append({"r": r, "desc": rl.describe(r, teams), "matches": m,
+                    "grupos": sorted({rl.group_for(r, x, teams) for x in m}), "criaveis": [x["criar"] for x in m if x["criar"]],
+                    "equipa": teams[r.team_id].name if r.team_id in teams else ""})
+    return out, teams
+
+
+@app.get("/pedidos/regras")
+def rules_page(request: Request, editar: str = "", user: str = Depends(current_user)):
+    return _rules_page(request, user, editar=editar)
+
+
+def _rules_page(request: Request, user: str, notas=None, erros=None, editar: str = "", status_code: int = 200):
+    from .. import rules as rl
+    with session_scope() as s:
+        regras, teams = _rules_context(s)
+        equipas = [{"id": t.id, "name": t.name, "grupo": t.smax_group} for t in teams.values()]
+    ed = next((x["r"] for x in regras if editar.isdigit() and x["r"].id == int(editar)), None)
+    r = render(request, "regras.html", user, regras=regras, equipas=equipas, KINDS=rl.KINDS, SCOPES=rl.SCOPES,
+               RENEWALS=rl.RENEWALS, TEMPLATES=rl.TEMPLATES, notas=notas or [], erros=erros or [], ed=ed,
+               can_create=tc.can_create(get_settings()))
+    r.status_code = status_code
+    return r
+
+
+@app.post("/pedidos/regras")
+def rules_save(request: Request, csrf: str = Form(""), id: str = Form(""), nome: str = Form(""), dias: str = Form("30"),
+               tipo: str = Form("certificado"), ambito: str = Form("todos"), renovacao: str = Form("manual"),
+               emissor: str = Form(""), equipa: str = Form(""), grupo: str = Form(""), modelo: str = Form(""),
+               user: str = Depends(current_user)):
+    from .. import rules as rl
+    check_csrf(request, csrf)
+    if modelo.isdigit() and int(modelo) < len(rl.TEMPLATES):
+        t = rl.TEMPLATES[int(modelo)]
+        nome, dias, tipo, ambito, renovacao = t["name"], str(t["days"]), t["kind"], t["scope"], t["renewal"]
+    if not nome.strip() or not dias.isdigit() or not 1 <= int(dias) <= 365:
+        return _rules_page(request, user, erros=["A regra precisa de um nome e de um número de dias entre 1 e 365."], status_code=400)
+    if tipo not in rl.KINDS or ambito not in rl.SCOPES or renovacao not in rl.RENEWALS:
+        return _rules_page(request, user, erros=["Valores desconhecidos na regra."], status_code=400)
+    with session_scope() as s:
+        r = s.get(TicketRule, int(id)) if id.isdigit() else None
+        novo = r is None
+        if novo:
+            r = TicketRule(created_by=user)
+            s.add(r)
+        r.name, r.days, r.kind, r.scope, r.renewal = nome.strip()[:128], int(dias), tipo, ambito, renovacao
+        r.issuer_contains, r.smax_group = emissor.strip()[:128], grupo.strip()[:256]
+        r.team_id = int(equipa) if equipa.isdigit() and s.get(Team, int(equipa)) else None
+        r.updated_by, r.updated_at = user, utcnow()
+        audit(s, user, "regra." + ("criar" if novo else "alterar"), r.name, dias=r.days, ativa=r.enabled)
+        name = r.name
+    return _rules_page(request, user, notas=[f"Regra «{name}» {'criada (desligada)' if novo else 'guardada'}."])
+
+
+@app.post("/pedidos/regras/{rid}/{acao}")
+def rules_action(request: Request, rid: int, acao: str, csrf: str = Form(""), user: str = Depends(current_user)):
+    check_csrf(request, csrf)
+    if acao not in ("ativar", "desativar", "apagar"):
+        raise HTTPException(404)
+    with session_scope() as s:
+        r = s.get(TicketRule, rid)
+        if r is None:
+            raise HTTPException(404)
+        name = r.name
+        if acao == "apagar":
+            s.delete(r)
+        else:
+            r.enabled, r.updated_by, r.updated_at = acao == "ativar", user, utcnow()
+        audit(s, user, "regra." + acao, name)
+    msg = {"ativar": f"Regra «{name}» ativa: aparece no Painel com os pedidos que abriria. Nada é aberto sem confirmação.",
+           "desativar": f"Regra «{name}» desligada.", "apagar": f"Regra «{name}» apagada."}[acao]
+    return _rules_page(request, user, notas=[msg])
+
+
+# ------------------------------------------------------------------ calendário de expirações (.ics)
+def _ics(request: Request, equipa: str = "", base: str = ""):
+    from .. import calendar_ics
+    settings, now = get_settings(), utcnow()
+    with session_scope() as s:
+        snap = load_snapshot(s)
+        inv = build_inventory(s, settings, now, snap)
+        tid = int(equipa) if equipa.isdigit() else None
+        t = s.get(Team, tid) if tid else None
+        name = "Atalaia Cert · expirações" + (f" · {t.name}" if t else "")
+        body = calendar_ics.build(inv, snap.apis, now, us.base_url(settings, base or str(request.base_url)),
+                                  team_id=t.id if t else None, name=name)
+    fname = "atalaia-expiracoes" + (f"-{t.id}" if t else "") + ".ics"
+    return Response(body, media_type="text/calendar; charset=utf-8",
+                    headers={"Content-Disposition": f'attachment; filename="{fname}"'})
+
+
+@app.get("/calendario.ics")
+def calendar_download(request: Request, equipa: str = "", user: str = Depends(current_user)):
+    return _ics(request, equipa)
+
+
+@app.get("/calendario/{token}.ics")
+def calendar_feed(request: Request, token: str, equipa: str = ""):
+    """Subscrição (Outlook, Google, Apple): o link pessoal criado em A minha conta. Deixa de valer se a conta for
+    desativada ou se o link for substituído."""
+    key = us.token_hash(token)
+    st = get_settings()
+    with session_scope() as s:
+        pref = next((p for p in s.scalars(select(UserPref).where(UserPref.key == "calendario")) if p.value.get("hash") == key), None)
+        who = pref.username if pref else None
+        ok = bool(who) and ((who == st.admin_user and st.admin_password) or
+                            (us.by_email(s, who) is not None and us.by_email(s, who).status == "ativo"))
+    if not ok:
+        raise HTTPException(404, "Calendário não encontrado")
+    return _ics(request, equipa)
+
+
+@app.post("/conta/calendario")
+def account_calendar(request: Request, csrf: str = Form(""), acao: str = Form("gerar"), user: str = Depends(current_user)):
+    check_csrf(request, csrf)
+    import secrets as _secrets
+    token = _secrets.token_urlsafe(24) if acao == "gerar" else ""
+    with session_scope() as s:
+        pref = s.scalar(select(UserPref).where(UserPref.username == user, UserPref.key == "calendario"))
+        if pref is not None:
+            s.delete(pref)
+        if token:
+            s.add(UserPref(username=user, key="calendario", value={"hash": us.token_hash(token), "criado": utcnow().isoformat()}))
+        audit(s, user, "calendario." + ("gerar" if token else "apagar"), user)
+    st = get_settings()
+    url = f"{us.base_url(st, str(request.base_url))}/calendario/{token}.ics" if token else ""
+    return _account(request, user, notas=["Link do calendário criado: copie-o já, só aparece agora." if token else
+                                          "Link do calendário apagado: as subscrições deixam de atualizar."], cal_url=url)
+
+
+@app.get("/preparar-47-dias")
+def prep47_page(request: Request, horas: str = "2", user: str = Depends(current_user)):
+    """O que muda com os certificados de 47 dias e quanto trabalho de renovação traz a cada equipa."""
+    from .. import prep47 as pp
+    from .. import rules as rl
+    from ..fontes import teams as teams_src
+    try:
+        h = max(0.25, min(40.0, float(horas.replace(",", "."))))
+    except ValueError:
+        h = 2.0
+    settings, now = get_settings(), utcnow()
+    with session_scope() as s:
+        inv = build_inventory(s, settings, now)
+        a = pp.analyse(inv, settings, now.astimezone(_tz()).date(), h)
+        regras = rl.rules(s)
+        equipas = ow.teams(s)
+        n_cal = len(list(s.scalars(select(UserPref).where(UserPref.key == "calendario"))))
+    hooks = teams_src.webhooks()
+    checks = [
+        {"ok": a["sem_dono"] == 0, "t": "Cada certificado público tem dono",
+         "d": f"{a['sem_dono']} de {a['n_manual']} certificados públicos de renovação manual ainda sem dono." if a["sem_dono"] else "Todos têm equipa responsável.",
+         "href": "/certificados?dono=sem", "acao": "Atribuir donos"},
+        {"ok": any(r.enabled and r.scope in ("externo", "todos") for r in regras), "t": "Regras para abrir os pedidos a tempo",
+         "d": f"{sum(1 for r in regras if r.enabled)} regra(s) ativa(s) de {len(regras)}. Com 47 dias, abrir o pedido a 30 dias deixa de chegar: o pedido tem de abrir logo depois da renovação anterior.",
+         "href": "/pedidos/regras", "acao": "Ver as regras"},
+        {"ok": bool(equipas) and all(t.email or (t.teams_key and t.teams_key in hooks) for t in equipas), "t": "Cada equipa tem para onde ser avisada",
+         "d": f"{sum(1 for t in equipas if t.email or (t.teams_key and t.teams_key in hooks))} de {len(equipas)} equipas com email ou Teams (os avisos ainda não são enviados sozinhos).",
+         "href": "/donos", "acao": "Ver as equipas"},
+        {"ok": n_cal > 0, "t": "As datas estão nos calendários", "d": f"{n_cal} pessoa(s) subscreveram o calendário de expirações.",
+         "href": "/conta#calendario", "acao": "Subscrever"},
+        {"ok": a["pct_auto"] is not None and a["pct_auto"] >= 80, "t": "A maioria dos certificados públicos renova sozinha",
+         "d": (f"{a['pct_auto']} % dos certificados públicos têm renovação automática." if a["pct_auto"] is not None else "Sem certificados públicos no inventário.") +
+              " Os outros precisam de um cliente ACME no servidor ou no balanceador.",
+         "href": "/fontes#f-acme", "acao": "Ver como"},
+        {"ok": None, "t": "Validação do domínio automática", "d": "Em 2029 a validação do domínio só se pode reutilizar 10 dias: cada renovação volta a provar o domínio, por isso a prova (registo DNS) tem de ser automática.",
+         "href": "/fontes#f-dns", "acao": "Ver a fonte DNS"},
+    ]
+    return render(request, "prep47.html", user, a=a, checks=checks, horas=h, CLASSES=pp.CLASSES)
 
 
 @app.get("/cert/{sha256}")
@@ -1452,13 +1785,13 @@ def pedido_smax(request: Request, tid: str, user: str = Depends(current_user)):
 
 
 def cf_discussions(settings, tid):
-    from ..collectors.smax import discussions_url
+    from ..fontes.smax import discussions_url
     return discussions_url(settings, tid)
 
 
 @app.get("/pedidos/ficheiro/{fid}")
 def pedido_ficheiro(fid: int, download: int = 0, user: str = Depends(current_user)):
-    from ..collectors.smax import IMAGE_TYPES
+    from ..fontes.smax import IMAGE_TYPES
     with session_scope() as s:
         f = s.get(SmaxFile, fid)
         if f is None or not f.data:
@@ -1573,7 +1906,7 @@ def pedido_fase(request: Request, tid: str, csrf: str = Form(""), acao: str = Fo
         raise HTTPException(400, "Confirmação em falta.")
     with session_scope() as s:
         _ticket_or_404(s, tid)
-    from ..collectors.smax import SmaxError, change_phase
+    from ..fontes.smax import SmaxError, change_phase
     try:
         res = change_phase(settings, tid, acao, comentario.strip()[:4000])
     except SmaxError as exc:
@@ -2422,7 +2755,7 @@ def _avi_file(s, settings):
 
 
 def _avi_render(request, user, **kw):
-    from ..collectors import avi as avi_api
+    from ..fontes import avi as avi_api
     settings = get_settings()
     return render(request, "avi.html", user, settings=settings, problem=avi_api.configured(settings),
                   **{"res": None, "cmp": None, "erro": "", "ficheiro": "", "cas": [], "diag": None, **kw})
@@ -2436,7 +2769,7 @@ def avi_page(request: Request, user: str = Depends(current_user)):
 @app.post("/cmdb-final/avi/testar")
 def avi_test(request: Request, csrf: str = Form(""), user: str = Depends(current_user)):
     """Lê o AVI pela API (só leitura) e compara com o ficheiro atual. Não muda a fonte da reconciliação."""
-    from ..collectors import avi as avi_api
+    from ..fontes import avi as avi_api
     check_csrf(request, csrf)
     settings = get_settings()
     try:
@@ -2469,7 +2802,7 @@ def avi_test(request: Request, csrf: str = Form(""), user: str = Depends(current
 @app.post("/cmdb-final/avi/diagnosticar")
 def avi_diagnose(request: Request, csrf: str = Form(""), user: str = Depends(current_user)):
     """DNS, TCP, TLS, login e uma leitura: diz em que passo a ligação ao AVI para."""
-    from ..collectors import avi as avi_api
+    from ..fontes import avi as avi_api
     check_csrf(request, csrf)
     settings = get_settings()
     steps = AVI_DIAGNOSE(settings) if AVI_DIAGNOSE else avi_api.diagnose(settings)
@@ -2481,7 +2814,7 @@ def avi_diagnose(request: Request, csrf: str = Form(""), user: str = Depends(cur
 @app.post("/cmdb-final/avi/usar")
 def avi_use(request: Request, csrf: str = Form(""), user: str = Depends(current_user)):
     """Lê o AVI pela API e guarda a leitura como fonte AVI da próxima reconciliação (o ficheiro fica onde está)."""
-    from ..collectors import avi as avi_api
+    from ..fontes import avi as avi_api
     check_csrf(request, csrf)
     settings = get_settings()
     try:
@@ -2496,7 +2829,7 @@ def avi_use(request: Request, csrf: str = Form(""), user: str = Depends(current_
 @app.get("/cmdb-final/avi/csv")
 def avi_csv(tipo: str = "vs", user: str = Depends(current_user)):
     """O CSV no formato do script, lido agora pela API (certificados dos virtual services ou CAs)."""
-    from ..collectors import avi as avi_api
+    from ..fontes import avi as avi_api
     settings = get_settings()
     try:
         res = avi_api.fetch(settings, AVI_CLIENT, with_ca=tipo == "ca")

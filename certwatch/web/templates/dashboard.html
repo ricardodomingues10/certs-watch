@@ -161,6 +161,8 @@
 {% set fazer = [] %}
 {% if nav_n.reconc_dif %}{% set _ = fazer.append({'n': nav_n.reconc_dif, 't': 'Rever alterações da CMDB', 'd': 'comparação #' ~ nav_n.reconc_run ~ '; nada é escrito sem confirmar', 'href': '/cmdb-final/' ~ nav_n.reconc_run}) %}{% endif %}
 {% if nav_n.ct_por_triar %}{% set _ = fazer.append({'n': nav_n.ct_por_triar, 't': 'Triar certificados na internet', 'd': 'nomes que a CMDB não conhece', 'href': '/descoberta'}) %}{% endif %}
+{% set nregra = regras|sum(attribute='n') %}
+{% if nregra %}{% set _ = fazer.append({'n': nregra, 't': 'Pedidos que as regras ativas abririam', 'd': regras|selectattr('n')|map(attribute='name')|join(', ') ~ '; confirme antes de abrir', 'href': '/pedidos/regras'}) %}{% endif %}
 {% if stale %}{% set t0 = stale[0] %}{% set _ = fazer.append({'n': stale|length, 'warn': true, 't': 'Pedidos parados há ≥ ' ~ stale_days ~ ' dias', 'd': t0.pedido ~ (' · ' ~ t0.alvo if t0.alvo else '') ~ (' expira em ' ~ t0.cert_dias ~ ' dias' if t0.cert_dias is not none and t0.cert_dias >= 0 else ''), 'href': '/pedidos/smax/' ~ t0.pedido if stale|length == 1 else '/pedidos'}) %}{% endif %}
 {% if k.ja_renovado %}{% set _ = fazer.append({'n': k.ja_renovado, 't': 'Pedidos já renovados', 'd': 'pedidos abertos já renovados: podem ser fechados', 'href': '/pedidos?vista=ja_renovado'}) %}{% endif %}
 {% set porver = s.ep_total - s.ep_verified %}
@@ -204,7 +206,7 @@
     </div>
     {% if loop.last and loop.length > 8 %}</details>{% endif %}
     {% endfor %}
-    {% if can_create %}<div class="pn-foot pn-foot-act"><button class="primary">Criar pedidos para os selecionados</button><span class="small muted">Abre um rascunho para rever antes de criar no SMAX. As APIs pedem-se à mão.</span></div>{% endif %}
+    {% if can_create %}<div class="pn-foot pn-foot-act"><button class="primary">Criar pedidos para os selecionados</button><span class="small muted">Abre um rascunho para rever antes de criar no SMAX. As APIs pedem-se à mão. <a href="/pedidos/regras">Regras para abrir pedidos sozinho</a>{% if not regras %} (nenhuma ativa){% endif %}.</span></div>{% endif %}
   </form>
   {% else %}
   <p class="pn-empty"><b>Nada por pedir.</b> Tudo o que expira nos próximos {{ limit }} dias tem pedido em curso.</p>

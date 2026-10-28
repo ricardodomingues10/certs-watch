@@ -5,7 +5,7 @@ from datetime import timedelta
 
 import httpx
 
-from certwatch.collectors import smax
+from certwatch.fontes import smax
 from certwatch.db import session_scope, utcnow
 from certwatch.insights import build_inventory
 from certwatch.jobs import ingest_cmdb

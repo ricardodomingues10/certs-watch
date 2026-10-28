@@ -9,13 +9,13 @@ from datetime import timedelta
 from sqlalchemy import delete, select
 from sqlalchemy.orm import Session
 
-from .collectors.ucmdb import fetch_apis, fetch_certificates
+from .fontes.ucmdb import fetch_apis, fetch_certificates
 from .config import Settings
 from .db import LOCK_PIPELINE, JobBusy, advisory_lock, session_scope, utcnow
 from .evaluator import evaluate
 from .models import ApiRecord, Certificate, CmdbRecord, Endpoint, JobRun, ScanResult
 from .normalize import classify, is_ip, is_valid_hostname, norm_host, norm_issuer, parse_iso
-from .scanner import ScanOutcome, scan_endpoint, summarize
+from .fontes.servidores import ScanOutcome, scan_endpoint, summarize
 from .trust import build_bundle
 
 log = logging.getLogger(__name__)
@@ -172,7 +172,7 @@ def apis_configured(settings: Settings) -> bool:
 
 def load_api_records(settings: Settings) -> tuple[list[dict], dict]:
     """REST (TQL + enriquecimento) primeiro; se não houver datas de expiração, o ficheiro api-cmdb* em import/."""
-    from .collectors.ucmdb import UcmdbError
+    from .fontes.ucmdb import UcmdbError
     from .reconcile import find_api_file, read_api_file
     records, fields, rest_error = None, {}, None
     if settings.ucmdb_tql_apis:
@@ -384,7 +384,7 @@ def _run(job: str, settings: Settings) -> dict:
                 log.exception("Ingestão de APIs falhou")
                 summary["ingest_apis"] = {"erro": str(exc)}
         from .discovery import ingest_ct
-        from .collectors.smax import configured as smax_configured
+        from .fontes.smax import configured as smax_configured
         if smax_configured(settings):
             from .tickets import ingest_smax
             try:

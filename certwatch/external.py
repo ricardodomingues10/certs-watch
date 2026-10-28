@@ -9,7 +9,7 @@ from typing import Callable
 import httpx
 from sqlalchemy import select
 
-from .collectors import ssllabs
+from .fontes import ssllabs
 from .config import Settings
 from .db import as_utc, session_scope, utcnow
 from .insights import build_inventory

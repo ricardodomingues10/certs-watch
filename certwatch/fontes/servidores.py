@@ -25,6 +25,24 @@ from cryptography.hazmat.primitives.serialization import Encoding, PublicFormat
 from cryptography.x509.oid import NameOID
 
 
+# ------------------------------------------------------------------ o que esta fonte faz e que chamadas faz
+FONTE = {
+    "id": "servidores", "nome": "Servidores (ligação TLS direta)", "tipo": "TLS", "estado": "em uso",
+    "para": "Ligar a cada servidor e porta, ler o certificado e a cadeia que apresenta e correr os 13 testes.",
+    "config": ["CERTWATCH_SCAN_ALLOWED_PORTS", "CERTWATCH_SCAN_TIMEOUT", "trust/ (raízes internas)"],
+    "chamadas": [
+        {"metodo": "DNS", "endereco": "resolução do nome (getaddrinfo)", "para": "o servidor existe? que endereço tem?", "acesso": "leitura", "estado": "em uso", "onde": "fontes/servidores.py · scan_endpoint"},
+        {"metodo": "TLS", "endereco": "{servidor}:{porta} com SNI (443, 465, 636, 993, 995, 8443, …)", "para": "aperto de mão TLS, certificado e cadeia, versão do protocolo", "acesso": "leitura", "estado": "em uso", "onde": "fontes/servidores.py · _handshake"},
+        {"metodo": "STARTTLS", "endereco": "SMTP 25/587, LDAP 389, IMAP 143, POP3 110", "para": "serviços que começam sem cifra e passam a TLS", "acesso": "leitura", "estado": "planeado", "onde": "—"},
+        {"metodo": "TCP", "endereco": "gamas de endereços autorizadas", "para": "descobrir na rede serviços TLS que a CMDB não conhece", "acesso": "leitura", "estado": "planeado", "onde": "—"},
+    ],
+}
+
+
+def estado(settings) -> tuple[bool, str]:
+    return True, "portas " + ", ".join(str(p) for p in settings.scan_allowed_ports)
+
+
 @dataclass
 class ScanOutcome:
     host: str

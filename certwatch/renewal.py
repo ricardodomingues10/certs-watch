@@ -54,7 +54,7 @@ def parse_certificate(data: bytes) -> dict:
         cert = None
     if cert is None:
         raise RenewalError("O ficheiro não é um certificado X.509 (PEM ou DER). Exporte o certificado em .cer/.crt/.pem.")
-    from .scanner import summarize
+    from .fontes.servidores import summarize
     from cryptography.hazmat.primitives.serialization import Encoding
     s = summarize(cert.public_bytes(Encoding.DER))
     return {"cn": s["subject_cn"], "nomes": s["sans_dns"], "not_before": s["not_before"], "not_after": s["not_after"],
@@ -95,7 +95,7 @@ def scan_now(session: Session, settings: Settings, cn: str) -> list[dict]:
     """Verifica agora os servidores deste certificado (até 10). Sem servidores registados, liga-se a cn:443."""
     from .jobs import _store_outcome, _valid_target
     from .models import Endpoint
-    from .scanner import scan_endpoint, summarize
+    from .fontes.servidores import scan_endpoint, summarize
     from .trust import build_bundle
     from .normalize import is_ip, is_valid_hostname
     cafile = build_bundle(settings)

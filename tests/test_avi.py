@@ -10,7 +10,7 @@ from fastapi.testclient import TestClient
 from sqlalchemy import select
 
 from certwatch import cmdb_final as cf
-from certwatch.collectors import avi
+from certwatch.fontes import avi
 from certwatch.db import session_scope
 from certwatch.models import AuditLog, FinalInput, FinalRun
 
@@ -131,7 +131,7 @@ def test_compare_with_script_file(st):
 
 
 def _gen(st, monkeypatch, fake):
-    import certwatch.collectors.avi as mod
+    import certwatch.fontes.avi as mod
     monkeypatch.setattr(mod, "fetch", lambda settings, client=None, with_ca=True: ORIG_FETCH(settings, fake.client(), with_ca))
     from tests.test_cmdb_final import CA1, CIS, ca2_xlsx, live
     (st.import_dir / "ca1.csv").write_bytes(CA1)
@@ -176,7 +176,7 @@ def test_avi_page(st, monkeypatch):
     monkeypatch.setattr(webapp, "get_settings", lambda: st)
     fake = FakeAvi()
     monkeypatch.setattr(webapp, "AVI_CLIENT", None)
-    import certwatch.collectors.avi as mod
+    import certwatch.fontes.avi as mod
     monkeypatch.setattr(mod, "fetch", lambda settings, client=None, with_ca=True: ORIG_FETCH(settings, fake.client(), with_ca))
     (st.import_dir / "avi.csv").write_bytes(script_file([
         ("vs-portal", "portal.exemplo.pt", "2026-01-01 00:00:00", "2027-05-01 12:00:00", "ff", "DigiCert Global G2", "x")]))

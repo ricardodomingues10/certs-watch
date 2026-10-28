@@ -1,0 +1,96 @@
+{% extends "base.html" %}
+{% block title %}Donos{% endblock %}
+{% block crumb %}Inventário{% endblock %}
+{% block page_title %}Donos <small>{{ total - sem|length }} de {{ total }} certificados com dono</small>{% endblock %}
+{% block lede %}Que equipa e que pessoa respondem por cada certificado. O dono é atribuído aqui (ou na página do certificado); sem isso, o Atalaia sugere o grupo do pedido mais recente no SMAX.{% endblock %}
+{% block content %}
+{% for n in notas %}<p class="note" role="status">{{ n }}</p>{% endfor %}
+{% for e in erros %}<p class="note bad" role="alert">{{ e }}</p>{% endfor %}
+
+<p class="note warn small"><b>Os avisos aos donos ainda não são enviados.</b> Cada equipa já diz para onde iriam (email e canal do Teams); nada é enviado sozinho até isso ser ligado. Os endereços do Teams são segredos: ficam no ficheiro <span class="mono">secrets/teams_webhooks</span> e aqui só aparece a chave ({{ hooks_n }} configurada{{ 's' if hooks_n != 1 }}).</p>
+
+<section class="card flush" aria-labelledby="h-eq">
+  <h2 id="h-eq">Equipas <small>{{ stats|length }}</small></h2>
+  <div class="scroll"><table>
+    <thead><tr><th>Equipa</th><th>Certificados</th><th>A expirar em 30 dias</th><th class="opt">Grupo no SMAX</th><th class="opt">Avisos iriam para</th><th><span class="sr">Ações</span></th></tr></thead>
+    <tbody>
+    {% for x in stats %}{% set t = x.t %}
+    <tr>
+      <td><b>{{ t.name }}</b>{% if t.notes %}<div class="small muted">{{ t.notes }}</div>{% endif %}</td>
+      <td><a href="/certificados?dono={{ t.id }}">{{ x.n }}</a> <span class="small muted">({{ x.atribuidos }} atribuídos)</span><div class="small"><a href="/calendario.ics?equipa={{ t.id }}">calendário (.ics)</a></div></td>
+      <td>{% if x.expirados %}<span class="pn-pill t-x">{{ x.expirados }} expirados</span> {% endif %}{% if x.a30 %}<span class="pn-pill t-a">{{ x.a30 }}</span>{% elif not x.expirados %}<span class="muted">—</span>{% endif %}</td>
+      <td class="opt small">{{ t.smax_group or '—' }}</td>
+      <td class="opt small">{% if t.email %}<span class="mono">{{ t.email }}</span>{% endif %}{% if t.teams_key %}<div>Teams: <span class="mono">{{ t.teams_key }}</span> {% if x.teams_ok %}<span class="tag tag-ok">configurado</span>{% else %}<span class="tag tag-run" title="A chave não está em secrets/teams_webhooks">sem endereço</span>{% endif %}</div>{% endif %}{% if not t.email and not t.teams_key %}<span class="muted">—</span>{% endif %}</td>
+      <td class="actions"><details class="ow-edit"><summary>Editar</summary>
+        <form method="post" action="/donos/equipa" class="stack ow-form">
+          <input type="hidden" name="csrf" value="{{ csrf }}"><input type="hidden" name="id" value="{{ t.id }}">
+          <label>Nome<input type="text" name="nome" value="{{ t.name }}" required maxlength="128"></label>
+          <label>Email da equipa<input type="email" name="email" value="{{ t.email }}" maxlength="254"></label>
+          <label>Grupo no SMAX<input type="text" name="grupo" value="{{ t.smax_group }}" maxlength="256"></label>
+          <label>Chave do Teams<input type="text" name="teams" value="{{ t.teams_key }}" maxlength="64"></label>
+          <label>Notas<input type="text" name="notas" value="{{ t.notes }}" maxlength="500"></label>
+          <button class="small-btn">Guardar</button>
+        </form>
+        <form method="post" action="/donos/equipa/{{ t.id }}/apagar"><input type="hidden" name="csrf" value="{{ csrf }}"><button class="small-btn us-del" data-confirm="Apagar a equipa {{ t.name }}? Os certificados dela ficam sem equipa.">Apagar a equipa</button></form>
+      </details></td>
+    </tr>
+    {% else %}
+    <tr><td colspan="6"><div class="empty"><b>Ainda não há equipas</b>Crie a primeira abaixo. Se os pedidos do SMAX já têm grupos, use o mesmo nome em «Grupo no SMAX» para o Atalaia ligar os pedidos à equipa.</div></td></tr>
+    {% endfor %}
+    </tbody>
+  </table></div>
+  <details class="pad ow-new"{{ ' open' if not stats }}><summary>Nova equipa</summary>
+    <form method="post" action="/donos/equipa" class="ow-grid">
+      <input type="hidden" name="csrf" value="{{ csrf }}">
+      <label>Nome<input type="text" name="nome" required maxlength="128" placeholder="Sistemas Centrais"></label>
+      <label>Email da equipa<input type="email" name="email" maxlength="254" placeholder="sistemas@exemplo.pt"></label>
+      <label>Grupo no SMAX<input type="text" name="grupo" maxlength="256" placeholder="o nome do grupo nos pedidos"></label>
+      <label>Chave do Teams<input type="text" name="teams" maxlength="64" placeholder="sistemas"></label>
+      <button class="primary">Criar a equipa</button>
+    </form>
+  </details>
+</section>
+
+{% if smax_only %}
+<section class="card" aria-labelledby="h-smax">
+  <h2 id="h-smax">Grupos do SMAX sem equipa</h2>
+  <p class="small muted">Estes grupos aparecem nos pedidos, mas ainda não correspondem a nenhuma equipa. Crie a equipa com o mesmo «Grupo no SMAX» para os certificados ficarem ligados a ela.</p>
+  <ul class="ow-groups">{% for g, n in smax_only %}<li><b>{{ g }}</b> <span class="muted">{{ n }} certificado{{ 's' if n != 1 }}</span></li>{% endfor %}</ul>
+</section>
+{% endif %}
+
+<section class="card" aria-labelledby="h-bloco">
+  <h2 id="h-bloco">Atribuir em bloco</h2>
+  <p class="small muted">Por padrão de nomes, por exemplo <span class="mono">*.exemplo.local</span> ou <span class="mono">*intranet*</span> (vários separados por espaços). Primeiro vê quais; só muda ao confirmar.</p>
+  {% if equipas %}
+  <form method="post" action="/donos/atribuir" class="ow-grid">
+    <input type="hidden" name="csrf" value="{{ csrf }}">
+    <label>Padrão<input type="text" name="padrao" value="{{ f.padrao }}" required placeholder="*.exemplo.local"></label>
+    <label>Equipa<select name="equipa" required><option value="">Escolher</option>{% for t in equipas %}<option value="{{ t.id }}" {{ 'selected' if f.equipa == t.id|string }}>{{ t.name }}</option>{% endfor %}</select></label>
+    <label>Pessoa (opcional)<input type="text" name="pessoa" value="{{ f.pessoa }}" maxlength="128"></label>
+    <label class="ow-check"><input type="checkbox" name="so_sem" value="1" {{ 'checked' if f.so_sem or not f }}> Não mexer nos já atribuídos</label>
+    <button name="acao" value="previa">Ver quais</button>
+  </form>
+  {% if previa %}
+  <div class="ow-prev">
+    <p><b>{{ previa.n }}</b> certificado{{ 's' if previa.n != 1 }} ficaria{{ 'm' if previa.n != 1 }} com a equipa <b>{{ previa.equipa }}</b>:</p>
+    <p class="small mono">{{ previa.rows|map(attribute='cn')|join(', ') or '—' }}{% if previa.n > previa.rows|length %} e mais {{ previa.n - previa.rows|length }}{% endif %}</p>
+    {% if previa.n %}<form method="post" action="/donos/atribuir"><input type="hidden" name="csrf" value="{{ csrf }}">
+      {% for k in ['padrao', 'equipa', 'pessoa', 'so_sem'] %}<input type="hidden" name="{{ k }}" value="{{ f[k] }}">{% endfor %}
+      <button class="primary" name="acao" value="aplicar">Atribuir os {{ previa.n }}</button></form>{% endif %}
+  </div>
+  {% endif %}
+  {% else %}<p class="small">Crie primeiro uma equipa.</p>{% endif %}
+</section>
+
+<section class="card flush" aria-labelledby="h-sem">
+  <h2 id="h-sem">Sem dono <small>{{ sem|length }}</small></h2>
+  {% if sem %}
+  <div class="scroll"><table class="compact">
+    <thead><tr><th>Certificado</th><th>Prazo</th><th class="opt">Emissor</th></tr></thead>
+    <tbody>{% for r in sem[:50] %}<tr><td><a href="/certificados/detalhe?cn={{ r.cn|urlencode }}#dono" class="mono">{{ r.common_name }}</a></td><td>{{ r.dias|ndias }}</td><td class="opt small">{{ r.live_issuer or r.issuers|join(', ') or '—' }}</td></tr>{% endfor %}</tbody>
+  </table></div>
+  {% if sem|length > 50 %}<p class="small pad"><a href="/certificados?dono=sem">Ver os {{ sem|length }}</a></p>{% endif %}
+  {% else %}<p class="pn-empty">Todos os certificados têm dono.</p>{% endif %}
+</section>
+{% endblock %}

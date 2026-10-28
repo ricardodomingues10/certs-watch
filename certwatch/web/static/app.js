@@ -439,7 +439,7 @@ document.addEventListener("DOMContentLoaded", () => {
   document.querySelectorAll("[data-toasts] .toast").forEach(armToast);
   const body = document.body;
   if (body.dataset.role !== "leitura") return;
-  const ALLOWED = ["/tema", "/painel/disposicao", "/conta/palavra-passe", "/sair"];
+  const ALLOWED = ["/tema", "/painel/disposicao", "/conta/palavra-passe", "/conta/calendario", "/sair"];
   document.addEventListener("submit", (e) => {
     const f = e.target;
     if ((f.getAttribute("method") || "get").toLowerCase() !== "post") return;

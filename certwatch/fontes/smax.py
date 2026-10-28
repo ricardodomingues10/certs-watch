@@ -35,6 +35,33 @@ LAYOUT_EXTRA = ",AffectsServiceComponent,EmsCreationTime"   # Application ID (su
 _ENV_CODES = {"NAME1_C": "DEV", "NAME2_C": "TST", "NAME3_C": "SIT", "NAME4_C": "UAT", "NAME5_C": "PRE", "NAME6_C": "PRD"}
 
 
+# ------------------------------------------------------------------ o que esta fonte faz e que chamadas faz
+FONTE = {
+    "id": "smax", "nome": "SMAX (pedidos)", "tipo": "API REST", "estado": "em uso",
+    "para": "Ler os pedidos de renovação, as fases e os comentários; criar, comentar, fechar e reabrir pedidos.",
+    "config": ["CERTWATCH_SMAX_URL", "CERTWATCH_SMAX_TENANT", "CERTWATCH_SMAX_ENTITY", "secrets/smax_user",
+               "secrets/smax_password", "CERTWATCH_SMAX_CREATE_ENABLED", "CERTWATCH_SMAX_UPDATE_ENABLED"],
+    "chamadas": [
+        {"metodo": "POST", "endereco": "/auth/authentication-endpoint/authenticate/login?TENANTID=", "para": "obter o token (utilizador de integração)", "acesso": "leitura", "estado": "em uso", "onde": "fontes/smax.py · login"},
+        {"metodo": "GET", "endereco": "/rest/{tenant}/ems/{entidade}?filter=…&layout=…", "para": "ler os pedidos de certificados", "acesso": "leitura", "estado": "em uso", "onde": "fontes/smax.py · fetch_tickets"},
+        {"metodo": "GET", "endereco": "/rest/{tenant}/ems/{entidade}/{id}", "para": "ler um pedido (antes de fechar ou reabrir)", "acesso": "leitura", "estado": "em uso", "onde": "fontes/smax.py · fetch_ticket"},
+        {"metodo": "GET", "endereco": "/rest/{tenant}/collaboration/comments/{entidade}/{id}", "para": "ler os comentários dos pedidos abertos", "acesso": "leitura", "estado": "em uso", "onde": "fontes/smax.py · fetch_comments"},
+        {"metodo": "GET", "endereco": "/rest/{tenant}/ems/Person/{id}", "para": "o nome de quem comentou", "acesso": "leitura", "estado": "em uso", "onde": "fontes/smax.py · fetch_comments"},
+        {"metodo": "GET", "endereco": "/rest/{tenant}/ces/attachment/{id}", "para": "descarregar as imagens dos comentários", "acesso": "leitura", "estado": "em uso", "onde": "fontes/smax.py · download_file"},
+        {"metodo": "POST", "endereco": "/rest/{tenant}/ems/bulk (CREATE)", "para": "criar pedidos de renovação", "acesso": "escrita", "estado": "em uso (com CERTWATCH_SMAX_CREATE_ENABLED)", "onde": "ticket_create.py"},
+        {"metodo": "POST", "endereco": "/rest/{tenant}/ems/bulk (UPDATE)", "para": "fechar ou reabrir um pedido", "acesso": "escrita", "estado": "em uso (com CERTWATCH_SMAX_UPDATE_ENABLED)", "onde": "fontes/smax.py · change_phase"},
+        {"metodo": "POST", "endereco": "/rest/{tenant}/collaboration/comments/{entidade}/{id}", "para": "deixar o comentário ao fechar ou reabrir", "acesso": "escrita", "estado": "em uso (com CERTWATCH_SMAX_UPDATE_ENABLED)", "onde": "fontes/smax.py · add_comment"},
+    ],
+}
+
+
+def estado(settings: Settings) -> tuple[bool, str]:
+    if not configured(settings):
+        return False, "Defina CERTWATCH_SMAX_URL, CERTWATCH_SMAX_TENANT e os segredos smax_user e smax_password."
+    w = [x for x, on in (("criar", settings.smax_create_enabled), ("fechar/reabrir", settings.smax_update_enabled)) if on]
+    return True, "leitura" + (" e " + ", ".join(w) if w else "")
+
+
 class SmaxError(RuntimeError):
     pass
 

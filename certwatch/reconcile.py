@@ -210,7 +210,7 @@ def find_api_file(settings: Settings) -> Path | None:
 
 def read_api_file(path: Path, settings: Settings) -> tuple[list[dict], dict]:
     """Lê a exportação da lista de APIs da CMDB (CSV/TSV/Excel, cabeçalhos "[API secrets] : Display Label"...)."""
-    from .collectors.ucmdb import parse_api_url
+    from .fontes.ucmdb import parse_api_url
     tz = ZoneInfo(settings.timezone)
     headers, rows = read_table(path)
     normed = [norm_header(h) for h in headers]

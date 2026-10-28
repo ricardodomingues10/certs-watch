@@ -27,7 +27,7 @@ from datetime import datetime, timezone
 
 import httpx
 
-from .collectors.ucmdb import UcmdbError, UcmdbSession
+from .fontes.ucmdb import UcmdbError, UcmdbSession
 from .config import Settings
 
 DENIED = ("permission", "permiss", "authoriz", "not allowed", "denied", "forbidden", "access")

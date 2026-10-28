@@ -21,6 +21,33 @@ from ..trust import ssl_context_for_api
 log = logging.getLogger(__name__)
 
 
+# ------------------------------------------------------------------ o que esta fonte faz e que chamadas faz
+FONTE = {
+    "id": "ucmdb", "nome": "UCMDB (CMDB)", "tipo": "API REST", "estado": "em uso",
+    "para": "Ler os certificados e as APIs da CMDB (por TQL) e, com a escrita ligada, criar e atualizar certificados.",
+    "config": ["CERTWATCH_UCMDB_URL", "CERTWATCH_UCMDB_TQL", "CERTWATCH_UCMDB_TQL_APIS", "secrets/ucmdb_user",
+               "secrets/ucmdb_password", "CERTWATCH_UCMDB_WRITE"],
+    "chamadas": [
+        {"metodo": "POST", "endereco": "/rest-api/authenticate", "para": "obter o token (utilizador e palavra-passe dos segredos)", "acesso": "leitura", "estado": "em uso", "onde": "fontes/ucmdb.py · UcmdbSession"},
+        {"metodo": "POST", "endereco": "/rest-api/topology", "para": "correr a TQL dos certificados e a das APIs", "acesso": "leitura", "estado": "em uso", "onde": "fontes/ucmdb.py · fetch_topology"},
+        {"metodo": "GET", "endereco": "/rest-api/topology/result/{id}/{página}", "para": "ler as páginas de um resultado grande", "acesso": "leitura", "estado": "em uso", "onde": "fontes/ucmdb.py · UcmdbSession"},
+        {"metodo": "DELETE", "endereco": "/rest-api/topology/result/{id}", "para": "libertar o resultado no servidor", "acesso": "leitura", "estado": "em uso", "onde": "fontes/ucmdb.py · UcmdbSession"},
+        {"metodo": "POST", "endereco": "/rest-api/topologyQuery", "para": "ler atributos extra dos CIs (enriquecer)", "acesso": "leitura", "estado": "em uso", "onde": "fontes/ucmdb.py · enrich_cis"},
+        {"metodo": "GET", "endereco": "/rest-api/dataModel/ci/{id}", "para": "ler um certificado antes e depois de o editar", "acesso": "leitura", "estado": "em uso", "onde": "ucmdb_write.py"},
+        {"metodo": "GET", "endereco": "/rest-api/classModel/citypes/{tipo}", "para": "saber os atributos do tipo de CI", "acesso": "leitura", "estado": "em uso", "onde": "fontes/ucmdb.py · class_attributes"},
+        {"metodo": "POST", "endereco": "/rest-api/dataModel", "para": "criar um certificado novo", "acesso": "escrita", "estado": "em uso (com CERTWATCH_UCMDB_WRITE)", "onde": "ucmdb_write.py · apply"},
+        {"metodo": "PUT", "endereco": "/rest-api/dataModel/ci/{id}", "para": "atualizar os campos que mudaram", "acesso": "escrita", "estado": "em uso (com CERTWATCH_UCMDB_WRITE)", "onde": "ucmdb_write.py · apply"},
+        {"metodo": "DELETE", "endereco": "/rest-api/dataModel/ci/{id}", "para": "apagar o certificado de teste do diagnóstico de permissões", "acesso": "escrita", "estado": "só no diagnóstico", "onde": "ucmdb_access.py"},
+    ],
+}
+
+
+def estado(settings: Settings) -> tuple[bool, str]:
+    if not settings.ucmdb_url or not settings.ucmdb_tql:
+        return False, "Defina CERTWATCH_UCMDB_URL e CERTWATCH_UCMDB_TQL."
+    return True, ("escrita ligada" if settings.ucmdb_write else "só leitura")
+
+
 class UcmdbError(RuntimeError):
     pass
 

@@ -462,6 +462,54 @@ Depois pré-visualiza-se e envia-se:
 
 Configuração no `.env`: `CERTWATCH_SMTP_HOST`, `_PORT`, `_SECURITY` (starttls/ssl/none), `_FROM` e `_USER`. A password vai no segredo `secrets/smtp_password`. Este ficheiro tem de existir, nem que seja vazio (`touch secrets/smtp_password`). `CERTWATCH_REPORT_ALLOWED_DOMAINS` limita os destinatários aos domínios da organização. Os envios ficam registados no relatório e na auditoria.
 
+## 7.5 Donos, regras de pedidos, calendário e 47 dias
+
+**Donos** (Inventário → Donos). Cada certificado pode ter uma equipa dona e uma pessoa responsável.
+- Atribui-se na página do certificado (cartão **Dono**) ou em bloco, por padrão de nomes (`*.exemplo.local`). Em bloco, a página mostra primeiro quais certificados mudam e só aplica ao confirmar.
+- Sem dono atribuído, o Atalaia sugere o grupo do pedido mais recente no SMAX (etiqueta «SMAX»). Se uma equipa tiver o mesmo «Grupo no SMAX», a sugestão fica ligada a essa equipa.
+- Cada equipa diz para onde iriam os avisos: email e canal do Teams. **Os avisos ainda não são enviados.** Os endereços dos Workflows do Teams são segredos: vão no ficheiro `secrets/teams_webhooks` (JSON `{"chave": "https://..."}`, dono UID 10001, modo 400), lido em `/run/secrets/teams_webhooks`. Na equipa guarda-se só a chave. O `docker-compose.yml` ainda não monta este ficheiro, para não obrigar a criá-lo já; passa a montá-lo na versão que ligar os avisos.
+- A lista de certificados filtra por dono e a exportação CSV tem as colunas «Equipa dona», «Pessoa responsável» e «Dono vem de».
+
+**Regras de pedidos** (Renovar → Regras de pedidos). Uma regra diz quando um certificado ou API deve ter um pedido aberto: quantos dias antes, tipo, âmbito, renovação, emissor, equipa e grupo do SMAX. Há três modelos para começar.
+- As regras são criadas **desligadas**.
+- **Ativar** não abre nada no SMAX. A regra passa a mostrar, aqui e no Painel («Pedidos que as regras ativas abririam»), os pedidos que abriria hoje. Daqui abre-se o rascunho, que se revê antes de criar, como em «Criar pedidos para os selecionados».
+- A execução automática pela execução diária fica para uma versão seguinte.
+
+**Calendário de expirações (.ics).** Em Certificados → **Calendário (.ics)**, em cada equipa (Donos) ou em **A minha conta**.
+- Cada certificado e segredo de API aparece num dia inteiro, com o emissor, o dono e o pedido. Tem lembretes 30 e 7 dias antes.
+- Pode descarregar-se para importar uma vez.
+- Também se pode criar um **link pessoal para subscrever** («Adicionar calendário» → «Da Internet» no Outlook). Fica guardado só o hash do link, que aparece uma única vez e é tapado no registo de acessos. Deixa de valer se for apagado, substituído ou a conta for desativada.
+- O Outlook no computador vai buscar o calendário a partir do posto. O Outlook na web e o do telemóvel vão buscá-lo a partir da cloud da Microsoft, por isso só funcionam se o Atalaia for acessível da internet. Numa rede interna use o Outlook no computador ou o ficheiro descarregado.
+
+**Preparar os 47 dias** (Renovar). A redução da validade dos certificados públicos (CA/Browser Forum, ballot SC-081):
+
+| Desde | Validade máxima | Reutilização da validação do domínio |
+|---|---|---|
+| 15-03-2026 | 200 dias | 200 dias |
+| 15-03-2027 | 100 dias | 100 dias |
+| 15-03-2029 | 47 dias | 10 dias |
+
+A página separa os certificados em:
+- CA pública de renovação manual;
+- renovação automática;
+- CA interna (as de `CERTWATCH_IMPORT_ISSUERS`, que não são afetadas);
+- emissor desconhecido.
+
+Para os de renovação manual, calcula as renovações por ano e as horas por equipa em cada fase (as horas por renovação são configuráveis). Mostra também a lista desses certificados e o que falta fazer: donos, regras, canais das equipas, calendários, renovação automática e validação do domínio.
+
+## 7.6 Fontes e chamadas
+
+Cada sistema com que o Atalaia Cert fala tem o seu ficheiro em `certwatch/fontes/`:
+- `ucmdb.py`, `smax.py`, `avi.py`, `ct.py`, `ssllabs.py`, `servidores.py`, `email.py`, `ca.py`, `azure.py`, `teams.py`, `dns.py` e `acme.py`;
+- cada um tem no topo um dicionário `FONTE` com as chamadas que faz: método, endereço, para quê, se lê, escreve ou envia, se está em uso ou planeada, e a função onde está;
+- a página **Sistema → Fontes e chamadas** lê esses dicionários e mostra tudo, incluindo se a fonte está configurada neste servidor (sem nunca mostrar segredos).
+
+As fontes **planeadas** já têm o ficheiro e a lista de chamadas, mas as chamadas ainda não estão implementadas:
+- `teams.py`: o envio de avisos;
+- `dns.py`: o CAA;
+- `acme.py`: a renovação automática e o ARI;
+- `azure.py` e `ca.py`: a leitura pela API em vez de ficheiro.
+
 ## 8. Classificação
 
 - **Tipo**: API (está na lista de APIs) · Wildcard · Endereço IP · Hostname · Autoridade (CA) · Outro.

@@ -593,3 +593,51 @@ class UserPref(Base):
     key: Mapped[str] = mapped_column(String(64))
     value: Mapped[dict] = mapped_column(JSON, default=dict)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+class Team(Base):
+    """Equipa dona de certificados. Os avisos (email e Teams) ainda não são enviados sozinhos: a equipa só diz para onde
+    iriam. O endereço do Teams é um segredo e fica em secrets/teams_webhooks; aqui fica só a chave."""
+    __tablename__ = "teams"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    name: Mapped[str] = mapped_column(String(128), unique=True)
+    email: Mapped[str] = mapped_column(String(254), default="")            # lista de distribuição da equipa
+    smax_group: Mapped[str] = mapped_column(String(256), default="")       # grupo com este nome nos pedidos do SMAX
+    teams_key: Mapped[str] = mapped_column(String(64), default="")         # chave em secrets/teams_webhooks
+    notes: Mapped[str] = mapped_column(Text, default="")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+class CertOwner(Base):
+    """Dono atribuído a um certificado (pelo nome normalizado, o mesmo do inventário)."""
+    __tablename__ = "cert_owners"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    cn_norm: Mapped[str] = mapped_column(String(512), unique=True, index=True)
+    team_id: Mapped[int | None] = mapped_column(ForeignKey("teams.id", ondelete="SET NULL"), nullable=True, index=True)
+    person: Mapped[str] = mapped_column(String(128), default="")
+    person_email: Mapped[str] = mapped_column(String(254), default="")
+    updated_by: Mapped[str] = mapped_column(String(254), default="")
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+class TicketRule(Base):
+    """Regra para abrir pedidos sozinho. Nesta versão nenhuma regra corre sozinha: uma regra ativa aparece no Painel
+    com os pedidos que abriria, e alguém confirma."""
+    __tablename__ = "ticket_rules"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    name: Mapped[str] = mapped_column(String(128))
+    enabled: Mapped[bool] = mapped_column(Boolean, default=False)
+    days: Mapped[int] = mapped_column(Integer, default=30)                 # quando faltam N dias ou menos
+    kind: Mapped[str] = mapped_column(String(16), default="certificado")   # certificado | api | todos
+    scope: Mapped[str] = mapped_column(String(16), default="todos")        # externo | interno | todos
+    renewal: Mapped[str] = mapped_column(String(16), default="manual")     # manual | todos
+    issuer_contains: Mapped[str] = mapped_column(String(128), default="")
+    team_id: Mapped[int | None] = mapped_column(ForeignKey("teams.id", ondelete="SET NULL"), nullable=True)
+    smax_group: Mapped[str] = mapped_column(String(256), default="")       # vazio = o grupo do SMAX da equipa dona
+    created_by: Mapped[str] = mapped_column(String(254), default="")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    updated_by: Mapped[str] = mapped_column(String(254), default="")
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)

@@ -29,7 +29,7 @@ from sqlalchemy.orm import Session
 
 from .cmdb_final import (OUTPUT_COLUMNS, CmdbTable, load_column_overrides, parse_day, plan_columns, format_value,
                          unpack_state)
-from .collectors.ucmdb import UcmdbError, UcmdbSession
+from .fontes.ucmdb import UcmdbError, UcmdbSession
 from .config import Settings
 from .db import session_scope, utcnow
 from .models import AuditLog, FinalRun, UcmdbWrite
@@ -408,7 +408,7 @@ def labels_of(attrs: list[dict]) -> dict[str, str]:
 def api_model(us: UcmdbSession, settings: Settings) -> dict:
     """Tipo de CI e atributos da lista de APIs, a partir dos CIs do TQL das APIs."""
     from collections import Counter
-    from .collectors.ucmdb import (APP_KEY, LOCATION_KEY, _is_date, _internal, class_attributes, date_attributes,
+    from .fontes.ucmdb import (APP_KEY, LOCATION_KEY, _is_date, _internal, class_attributes, date_attributes,
                                    detect_api_fields, enrich_cis, pick_expiry)
     if not settings.ucmdb_tql_apis:
         raise WriteError("Defina CERTWATCH_UCMDB_TQL_APIS (a lista de APIs) para incluir segredos do Azure.")
@@ -838,7 +838,7 @@ def api_type_report(settings: Settings, client: httpx.Client | None = None) -> d
     """Só leitura: os atributos do tipo de CI das APIs (modelo de classes + o que as APIs têm) e o que o Atalaia Cert
     envia ao criar uma API. Para escolher CERTWATCH_APIS_FIELD_EXPIRY e CERTWATCH_APIS_CREATE_DEFAULTS."""
     from collections import Counter
-    from .collectors.ucmdb import SENSITIVE_KEY, class_attributes, enrich_cis, safe_properties
+    from .fontes.ucmdb import SENSITIVE_KEY, class_attributes, enrich_cis, safe_properties
     if not settings.ucmdb_tql_apis:
         raise WriteError("Defina CERTWATCH_UCMDB_TQL_APIS (a lista de APIs).")
     with UcmdbSession(settings, client) as us:

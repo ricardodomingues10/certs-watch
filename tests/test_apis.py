@@ -5,7 +5,7 @@ from datetime import datetime, timedelta, timezone
 import httpx
 from sqlalchemy import select
 
-from certwatch.collectors.ucmdb import describe_tql, fetch_apis, parse_api_url
+from certwatch.fontes.ucmdb import describe_tql, fetch_apis, parse_api_url
 from certwatch.db import session_scope, utcnow
 from certwatch.evaluator import evaluate
 from certwatch.jobs import ingest_apis
@@ -106,7 +106,7 @@ REAL = [
 
 
 def test_real_api_secret_list(env):
-    from certwatch.collectors.ucmdb import parse_apis
+    from certwatch.fontes.ucmdb import parse_apis
     from certwatch.normalize import split_api_name
     records, fields = parse_apis(REAL, env)
     assert fields["validade"] == "secret_expiration_date" and fields["expirado"] == "secret_expired"
@@ -134,7 +134,7 @@ def test_real_api_secret_list(env):
 
 def test_api_page_views_and_export(env):
     from fastapi.testclient import TestClient
-    from certwatch.collectors.ucmdb import parse_apis
+    from certwatch.fontes.ucmdb import parse_apis
     from certwatch.web.app import app
     records, fields = parse_apis(REAL, env)
     records[1]["cmdb_expired"] = True                                    # CMDB desatualizada
@@ -247,7 +247,7 @@ def test_api_file_fallback(env, tmp_path):
 
 
 def test_portuguese_data_attributes_are_not_internal(env):
-    from certwatch.collectors.ucmdb import detect_api_fields, _layout_from
+    from certwatch.fontes.ucmdb import detect_api_fields, _layout_from
     cis = [{"ucmdbId": "a1", "properties": {"display_label": "X", "data_allow_auto_discovery": True,
                                             "data_expiracao": "24-01-2027 13:00:00", "scml_expirado": False}}]
     assert detect_api_fields(cis, env)["validade"] == "data_expiracao"
@@ -256,7 +256,7 @@ def test_portuguese_data_attributes_are_not_internal(env):
 
 
 def test_class_model_shapes():
-    from certwatch.collectors.ucmdb import expiry_candidates, type_attributes
+    from certwatch.fontes.ucmdb import expiry_candidates, type_attributes
     nested = {"classModelClass": {"name": "api_secret", "attributes": {"attribute": [
         {"name": "create_time", "displayName": "Create Time", "attributeType": "date"},
         {"name": "scml_data_expiracao", "displayName": "Data de expiração", "attributeType": "date"},

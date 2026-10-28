@@ -1,0 +1,68 @@
+{% extends "base.html" %}
+{% block title %}Regras de pedidos{% endblock %}
+{% block crumb %}Renovar{% endblock %}
+{% block page_title %}Regras para abrir pedidos <small>{{ regras|selectattr('r.enabled')|list|length }} ativa{{ 's' if regras|selectattr('r.enabled')|list|length != 1 }} de {{ regras|length }}</small>{% endblock %}
+{% block lede %}Cada regra diz quando um certificado deve ter um pedido de renovação aberto: quantos dias antes, para que certificados e com que grupo do SMAX.{% endblock %}
+{% block content %}
+{% for n in notas %}<p class="note" role="status">{{ n }}</p>{% endfor %}
+{% for e in erros %}<p class="note bad" role="alert">{{ e }}</p>{% endfor %}
+
+<div class="ru-how">
+  <div><b>Nada abre sozinho.</b> Nesta versão nenhuma regra cria pedidos no SMAX por si.</div>
+  <div><b>Ativar</b> põe a regra a contar: o Painel passa a mostrar os pedidos que ela abriria hoje, e aqui pode abrir o rascunho deles.</div>
+  <div><b>Mais tarde</b> as regras ativas podem passar a correr na execução diária, sem mudar nada aqui.</div>
+</div>
+
+{% for x in regras %}{% set r = x.r %}
+<section class="card ru-card{{ ' is-on' if r.enabled }}" aria-labelledby="ru-{{ r.id }}">
+  <div class="ru-head">
+    <div>
+      <h2 id="ru-{{ r.id }}">{{ r.name }} {% if r.enabled %}<span class="tag tag-ok">ativa</span>{% else %}<span class="tag tag-off">desligada</span>{% endif %}</h2>
+      <p class="small">Abrir pedido quando {{ x.desc }}. Grupo no SMAX: <b>{{ r.smax_group or 'o da equipa dona' }}</b>.</p>
+      <p class="small muted">Criada por {{ r.created_by or '—' }}; alterada por {{ r.updated_by or '—' }} em {{ r.updated_at|dt }}.</p>
+    </div>
+    <div class="ru-acts">
+      <form method="post" action="/pedidos/regras/{{ r.id }}/{{ 'desativar' if r.enabled else 'ativar' }}"><input type="hidden" name="csrf" value="{{ csrf }}"><button class="small-btn{{ '' if r.enabled else ' primary' }}">{{ 'Desligar' if r.enabled else 'Ativar' }}</button></form>
+      <a class="button small-btn" href="/pedidos/regras?editar={{ r.id }}#editar">Editar</a>
+      <form method="post" action="/pedidos/regras/{{ r.id }}/apagar"><input type="hidden" name="csrf" value="{{ csrf }}"><button class="small-btn us-del" data-confirm="Apagar a regra «{{ r.name }}»?">Apagar</button></form>
+    </div>
+  </div>
+  <div class="ru-today">
+    <b>Hoje abriria {{ x.matches|length }} pedido{{ 's' if x.matches|length != 1 }}</b>{% if x.grupos %} <span class="small muted">· {{ x.grupos|join(', ') }}</span>{% endif %}
+    {% if x.matches %}
+    <ul class="ru-list">{% for m in x.matches[:12] %}<li><span class="{{ 'mono' if m.tipo != 'API' }}">{{ m.nome }}</span> <span class="pn-pill {{ 't-x' if m.dias < 0 else 't-r' if m.dias <= 7 else 't-a' if m.dias <= 20 else 't-n' }}">{{ 'expirou' if m.dias < 0 else m.dias|ndias }}</span>{% if m.dono %} <span class="small muted">{{ m.dono.equipa }}</span>{% endif %}</li>{% endfor %}
+      {% if x.matches|length > 12 %}<li class="muted">e mais {{ x.matches|length - 12 }}</li>{% endif %}</ul>
+    {% if r.enabled and can_create and x.criaveis %}
+    <form method="post" action="/pedidos/novo"><input type="hidden" name="csrf" value="{{ csrf }}"><input type="hidden" name="next" value="/pedidos/regras">
+      {% for cn in x.criaveis %}<input type="hidden" name="cn" value="{{ cn }}">{% endfor %}
+      <button class="small-btn">Abrir o rascunho dos {{ x.criaveis|length }} pedidos</button> <span class="small muted">Revê-se antes de criar no SMAX.{% if x.criaveis|length < x.matches|length %} As APIs pedem-se à mão.{% endif %}</span></form>
+    {% endif %}
+    {% endif %}
+  </div>
+</section>
+{% else %}
+<section class="card"><div class="empty"><b>Ainda não há regras</b>Comece por um modelo ou crie a sua abaixo.</div></section>
+{% endfor %}
+
+<section class="card" id="editar" aria-labelledby="h-nova">
+  <h2 id="h-nova">{{ 'Editar «' ~ ed.name ~ '»' if ed else 'Nova regra' }}</h2>
+  {% if not ed %}
+  <div class="ru-tpl"><span class="small muted">Modelos:</span>
+    {% for t in TEMPLATES %}<form method="post" action="/pedidos/regras"><input type="hidden" name="csrf" value="{{ csrf }}"><input type="hidden" name="modelo" value="{{ loop.index0 }}"><button class="small-btn">{{ t.name }}</button></form>{% endfor %}
+  </div>
+  {% endif %}
+  <form method="post" action="/pedidos/regras" class="ow-grid">
+    <input type="hidden" name="csrf" value="{{ csrf }}">{% if ed %}<input type="hidden" name="id" value="{{ ed.id }}">{% endif %}
+    <label>Nome<input type="text" name="nome" required maxlength="128" value="{{ ed.name if ed else '' }}" placeholder="Externos a 30 dias"></label>
+    <label>Abrir quando faltam (dias)<input type="number" name="dias" min="1" max="365" required value="{{ ed.days if ed else 30 }}"></label>
+    <label>Para<select name="tipo">{% for k, v in KINDS.items() %}<option value="{{ k }}" {{ 'selected' if ed and ed.kind == k }}>{{ v }}</option>{% endfor %}</select></label>
+    <label>Âmbito<select name="ambito">{% for k, v in SCOPES.items() %}<option value="{{ k }}" {{ 'selected' if ed and ed.scope == k }}>{{ v }}</option>{% endfor %}</select></label>
+    <label>Renovação<select name="renovacao">{% for k, v in RENEWALS.items() %}<option value="{{ k }}" {{ 'selected' if ed and ed.renewal == k }}>{{ v }}</option>{% endfor %}</select></label>
+    <label>Emissor contém (opcional)<input type="text" name="emissor" maxlength="128" value="{{ ed.issuer_contains if ed else '' }}" placeholder="DigiCert"></label>
+    <label>Só da equipa (opcional)<select name="equipa"><option value="">Qualquer equipa</option>{% for t in equipas %}<option value="{{ t.id }}" {{ 'selected' if ed and ed.team_id == t.id }}>{{ t.name }}</option>{% endfor %}</select></label>
+    <label>Grupo no SMAX (opcional)<input type="text" name="grupo" maxlength="256" value="{{ ed.smax_group if ed else '' }}" placeholder="vazio = o da equipa dona"></label>
+    <button class="primary">{{ 'Guardar a regra' if ed else 'Criar a regra (desligada)' }}</button>
+  </form>
+  {% if ed %}<p class="small"><a href="/pedidos/regras">Cancelar</a></p>{% endif %}
+</section>
+{% endblock %}

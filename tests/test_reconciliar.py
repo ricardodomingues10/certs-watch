@@ -56,7 +56,7 @@ class FakeWithApis(FakeUcmdb):
 
 @pytest.fixture()
 def setup(env, tmp_path, monkeypatch):
-    from certwatch.collectors.ucmdb import parse_apis
+    from certwatch.fontes.ucmdb import parse_apis
     from certwatch.jobs import ingest_apis
     imp = tmp_path / "import"
     imp.mkdir()

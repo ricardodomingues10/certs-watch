@@ -26,6 +26,22 @@ GOOD_GRADES = ("A+", "A", "A-")
 GRADE_ORDER = ("A+", "A", "A-", "B", "C", "D", "E", "F", "M", "T")   # do melhor para o pior
 
 
+# ------------------------------------------------------------------ o que esta fonte faz e que chamadas faz
+FONTE = {
+    "id": "ssllabs", "nome": "SSL Labs (avaliação externa)", "tipo": "API REST pública", "estado": "em uso (opcional)",
+    "para": "A nota A–F de cada nome público, vista da internet.",
+    "config": ["CERTWATCH_SSLLABS_EMAIL", "HTTPS_PROXY"],
+    "chamadas": [
+        {"metodo": "POST", "endereco": "https://api.ssllabs.com/api/v4/register", "para": "registar o email da organização (uma vez)", "acesso": "leitura", "estado": "em uso", "onde": "fontes/ssllabs.py · register"},
+        {"metodo": "GET", "endereco": "https://api.ssllabs.com/api/v4/analyze?host=…&fromCache=on", "para": "pedir e ler a avaliação de cada nome", "acesso": "leitura", "estado": "em uso", "onde": "fontes/ssllabs.py · assess"},
+    ],
+}
+
+
+def estado(settings: Settings) -> tuple[bool, str]:
+    return (True, settings.ssllabs_email) if settings.ssllabs_email else (False, "Defina CERTWATCH_SSLLABS_EMAIL para ligar.")
+
+
 class SslLabsError(RuntimeError):
     pass
 

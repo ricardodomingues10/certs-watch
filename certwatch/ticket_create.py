@@ -28,7 +28,7 @@ from sqlalchemy import select, update
 from sqlalchemy.orm import Session
 
 from .classify import is_auto_renew
-from .collectors import smax
+from .fontes import smax
 from .config import Settings
 from .db import as_utc, session_scope, utcnow
 from .models import AuditLog, SmaxTicket, TicketBatch, TicketDraft

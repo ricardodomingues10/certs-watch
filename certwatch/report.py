@@ -14,11 +14,7 @@ import html
 from html.parser import HTMLParser
 import io
 import re
-import smtplib
-import ssl
 from datetime import date, datetime, timedelta
-from email.message import EmailMessage
-from email.utils import formatdate, make_msgid
 from zoneinfo import ZoneInfo
 
 from sqlalchemy.orm import Session
@@ -32,8 +28,9 @@ _EMAIL = re.compile(r"^[A-Za-z0-9.!#$%&'*+/=?^_`{|}~-]+@[A-Za-z0-9-]+(\.[A-Za-z0
 MAX_TO = 20
 
 
-class ReportError(RuntimeError):
-    pass
+from .fontes.email import EmailError, build_message, send, smtp_problems  # noqa: E402,F401
+
+ReportError = EmailError        # o mesmo erro para o relatório e para o envio
 
 
 # ------------------------------------------------------------------ dados
@@ -613,57 +610,4 @@ def parse_recipients(value: str, settings: Settings) -> list[str]:
     return out
 
 
-def smtp_problems(settings: Settings) -> list[str]:
-    p = []
-    if not settings.smtp_host:
-        p.append("CERTWATCH_SMTP_HOST não definido")
-    if not settings.smtp_from:
-        p.append("CERTWATCH_SMTP_FROM não definido")
-    if settings.smtp_security not in ("starttls", "ssl", "none"):
-        p.append("CERTWATCH_SMTP_SECURITY tem de ser starttls, ssl ou none")
-    if settings.smtp_user and not settings.smtp_password:
-        p.append("CERTWATCH_SMTP_USER definido mas falta o segredo smtp_password")
-    return p
-
-
-def build_message(settings: Settings, to: list[str], subject: str, html_body: str,
-                  attachment: tuple[str, bytes] | list[tuple[str, bytes]] | None) -> EmailMessage:
-    msg = EmailMessage()
-    msg["From"] = settings.smtp_from
-    msg["To"] = ", ".join(to)
-    msg["Subject"] = subject
-    msg["Date"] = formatdate(localtime=True)
-    msg["Message-ID"] = make_msgid(domain=settings.smtp_from.rsplit("@", 1)[-1] if "@" in settings.smtp_from else None)
-    text = re.sub(r"<(br|/p|/tr|/div)\s*/?>", "\n", html_body)
-    text = html.unescape(re.sub(r"<[^>]+>", " ", text))
-    msg.set_content(re.sub(r"[ \t]+", " ", re.sub(r"\n\s*\n+", "\n\n", text)).strip())
-    msg.add_alternative(html_body, subtype="html")
-    for name, data in ([attachment] if isinstance(attachment, tuple) else (attachment or [])):
-        msg.add_attachment(data, maintype="application",
-                           subtype="vnd.openxmlformats-officedocument.spreadsheetml.sheet", filename=name)
-    return msg
-
-
-def send(settings: Settings, messages: list[EmailMessage], smtp_factory=None) -> None:
-    problems = smtp_problems(settings)
-    if problems:
-        raise ReportError("Email não configurado: " + "; ".join(problems) + ".")
-    from .trust import build_bundle
-    ctx = ssl.create_default_context(cafile=build_bundle(settings))
-    try:
-        if smtp_factory is not None:
-            server = smtp_factory(settings)
-        elif settings.smtp_security == "ssl":
-            server = smtplib.SMTP_SSL(settings.smtp_host, settings.smtp_port, timeout=30, context=ctx)
-        else:
-            server = smtplib.SMTP(settings.smtp_host, settings.smtp_port, timeout=30)
-        with server:
-            if settings.smtp_security == "starttls" and smtp_factory is None:
-                server.starttls(context=ctx)
-            if settings.smtp_user:
-                server.login(settings.smtp_user, settings.smtp_password or "")
-            for m in messages:
-                server.send_message(m)
-    except (smtplib.SMTPException, OSError, ssl.SSLError) as exc:
-        detail = str(exc).replace(settings.smtp_password or "\0", "***")
-        raise ReportError(f"O servidor de email recusou ou não respondeu: {type(exc).__name__}: {detail}"[:500]) from exc
+# O envio (SMTP) está em fontes/email.py; estes nomes continuam aqui para quem já os usa.

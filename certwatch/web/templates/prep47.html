@@ -1,0 +1,82 @@
+{% extends "base.html" %}
+{% block title %}Preparar os 47 dias{% endblock %}
+{% block crumb %}Renovar{% endblock %}
+{% block page_title %}Preparar os 47 dias{% endblock %}
+{% block lede %}Os certificados públicos vão durar cada vez menos: 200 dias desde março de 2026, 100 em 2027 e 47 em 2029. Aqui está o que isso muda para os certificados da organização e quanto trabalho de renovação traz a cada equipa.{% endblock %}
+{% block content %}
+<section class="card p47-time" aria-label="Calendário das mudanças">
+  <ol class="p47-steps">
+    {% for ph in a.phases %}
+    <li class="{{ 'is-now' if ph.atual else 'is-past' if ph.passada else '' }}">
+      <i aria-hidden="true"></i>
+      <b>{{ ph.dias }} dias</b>
+      <span>{{ ph.nome }}</span>
+      <span class="small muted">{{ ph.renov|string|replace('.', ',') }} renovações por ano · validação do domínio {{ ph.validacao }} dias</span>
+      {% if ph.atual %}<span class="p47-here">estamos aqui</span>{% endif %}
+    </li>
+    {% endfor %}
+  </ol>
+  {% if a.proxima %}<p class="p47-next">Faltam <b>{{ a.dias_ate }} dias</b> para a validade máxima descer para <b>{{ a.proxima.dias }} dias</b> ({{ a.proxima.nome }}).</p>{% endif %}
+</section>
+
+<div class="p47-tiles">
+  <a class="p47-tile is-hot" href="#manuais"><b>{{ a.classes.manual }}</b><span>{{ CLASSES.manual }}</span><small>são estes que dão trabalho</small></a>
+  <div class="p47-tile"><b>{{ a.classes.auto }}</b><span>{{ CLASSES.auto }}</span><small>{{ a.pct_auto if a.pct_auto is not none else '—' }}{{ ' %' if a.pct_auto is not none }} dos públicos</small></div>
+  <div class="p47-tile"><b>{{ a.classes.interna }}</b><span>{{ CLASSES.interna }}</span><small>não são afetados pela regra dos navegadores</small></div>
+  <div class="p47-tile"><b>{{ a.classes.desconhecida }}</b><span>{{ CLASSES.desconhecida }}</span><small>verificar no servidor ou na CMDB</small></div>
+</div>
+
+<section class="card" aria-labelledby="h-carga">
+  <div class="pn-card-h"><h2 id="h-carga">Renovações por ano dos {{ a.n_manual }} certificados públicos de renovação manual</h2>
+    <form method="get" class="p47-h"><label>Horas por renovação <input type="number" name="horas" min="0.25" max="40" step="0.25" value="{{ horas }}"></label><button class="small-btn">Recalcular</button></form></div>
+  <div class="p47-bars">
+    {% set maxr = a.renov_total[47] or 1 %}
+    {% for ph in a.phases[1:] %}
+    <div class="p47-bar"><span>{{ ph.dias }} dias</span>
+      <svg viewBox="0 0 100 10" preserveAspectRatio="none" aria-hidden="true"><rect x="0" y="0" width="100" height="10" rx="3" class="p47-bg"/><rect x="0" y="0" width="{{ (100 * a.renov_total[ph.dias] / maxr)|round(1) if maxr else 0 }}" height="10" rx="3" class="p47-fg {{ 'is-now' if ph.atual }}"/></svg>
+      <b>{{ a.renov_total[ph.dias] }}</b></div>
+    {% endfor %}
+  </div>
+  <p class="small">Hoje: cerca de <b>{{ a.horas_hoje }} horas</b> por ano a renovar à mão. Em 2029, com 47 dias: cerca de <b>{{ a.horas_2029 }} horas</b> por ano ({{ horas|string|replace('.', ',') }} h por renovação: pedido, CSR, emissão, instalação e verificação). Conta só os de renovação manual; os automáticos não dão trabalho.</p>
+  {% if a.equipas %}
+  <div class="scroll"><table class="compact">
+    <thead><tr><th>Equipa</th><th class="num">Certificados</th><th class="num">Renovações/ano com 200 dias</th><th class="num">com 100 dias</th><th class="num">com 47 dias</th><th class="num">Horas/ano em 2029</th></tr></thead>
+    <tbody>{% for t in a.equipas %}<tr>
+      <td>{% if t.equipa_id %}<a href="/certificados?dono={{ t.equipa_id }}&renovacao=manual">{{ t.equipa }}</a>{% else %}{{ t.equipa }}{% endif %}</td>
+      <td class="num">{{ t.n }}</td><td class="num">{{ t.renov[200] }}</td><td class="num">{{ t.renov[100] }}</td><td class="num"><b>{{ t.renov[47] }}</b></td><td class="num">{{ t.horas }}</td></tr>{% endfor %}</tbody>
+  </table></div>
+  {% endif %}
+</section>
+
+<section class="card" aria-labelledby="h-fazer47">
+  <h2 id="h-fazer47">O que fazer</h2>
+  <ul class="p47-checks">
+    {% for c in checks %}
+    <li class="{{ 'is-ok' if c.ok else 'is-info' if c.ok is none else 'is-todo' }}">
+      <i aria-hidden="true">{{ '✓' if c.ok else 'i' if c.ok is none else '!' }}</i>
+      <span><b>{{ c.t }}</b><span class="small muted">{{ c.d }}</span></span>
+      <a class="small" href="{{ c.href }}">{{ c.acao }}</a>
+    </li>
+    {% endfor %}
+  </ul>
+</section>
+
+<section class="card flush" id="manuais" aria-labelledby="h-man">
+  <h2 id="h-man">Certificados públicos de renovação manual <small>{{ a.n_manual }}</small></h2>
+  {% if a.mais_longos and a.proxima %}<p class="small pad">{{ a.mais_longos|length }} destes têm hoje mais de {{ a.proxima.dias }} dias de validade: a próxima renovação depois de {{ a.proxima.nome }} já sai com no máximo {{ a.proxima.dias }} dias.</p>{% endif %}
+  {% if a.manual %}
+  <div class="scroll"><table>
+    <thead><tr><th>Certificado</th><th>Prazo</th><th class="opt">Validade atual</th><th>Dono</th><th class="opt">Emissor</th><th class="opt">Instalado em</th></tr></thead>
+    <tbody>{% for r in a.manual[:100] %}<tr>
+      <td><a href="/certificados/detalhe?cn={{ r.cn|urlencode }}" class="mono">{{ r.common_name }}</a></td>
+      <td>{{ r.dias|ndias }}</td>
+      <td class="opt small">{{ r.vida_dias|ndias }}</td>
+      <td class="small">{% if r.dono %}{{ r.dono.equipa or '—' }}{% if r.dono.origem == 'smax' %} <span class="tag tag-run">SMAX</span>{% endif %}{% else %}<a href="/certificados/detalhe?cn={{ r.cn|urlencode }}#dono" class="muted">sem dono</a>{% endif %}</td>
+      <td class="opt small">{{ r.live_issuer or r.issuers|join(', ') }}</td>
+      <td class="opt small">{{ r.instalado_em|map(attribute='host')|unique|list|length or '—' }}</td></tr>{% endfor %}</tbody>
+  </table></div>
+  {% if a.manual|length > 100 %}<p class="small pad"><a href="/certificados?renovacao=manual">Ver todos</a></p>{% endif %}
+  {% else %}<p class="pn-empty">Nenhum certificado público de renovação manual.</p>{% endif %}
+</section>
+<p class="small muted">Fonte: CA/Browser Forum, ballot SC-081 (Baseline Requirements). A Let's Encrypt vai mais depressa: 64 dias a partir de fevereiro de 2027 e 45 dias a partir de fevereiro de 2028. Uma CA é «interna» quando é uma das de <span class="mono">CERTWATCH_IMPORT_ISSUERS</span>.</p>
+{% endblock %}

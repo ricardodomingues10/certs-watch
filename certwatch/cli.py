@@ -65,7 +65,7 @@ def main(argv: list[str] | None = None) -> int:
     a = p.parse_args(argv)
 
     if a.cmd == "smax-test":
-        from .collectors import smax
+        from .fontes import smax
         st = get_settings()
         print(f"URL: {st.smax_url or '(vazio)'}  tenant: {st.smax_tenant or '(vazio)'}  entidade: {st.smax_entity}")
         print(f"utilizador: {'(vazio)' if not st.smax_user else st.smax_user[:2] + '…' + f' ({len(st.smax_user)} caracteres)'}"
@@ -95,14 +95,14 @@ def main(argv: list[str] | None = None) -> int:
         return 0
 
     if a.cmd == "ssllabs-register":
-        from .collectors import ssllabs
+        from .fontes import ssllabs
         with ssllabs.client(get_settings()) as cl:
             print(json.dumps(ssllabs.register(cl, a.nome, a.apelido, a.email, a.organizacao), ensure_ascii=False))
         print(f"Defina CERTWATCH_SSLLABS_EMAIL={a.email} no .env e reinicie (docker compose up -d).")
         return 0
 
     if a.cmd == "ssllabs-test":
-        from .collectors import ssllabs
+        from .fontes import ssllabs
         st = get_settings()
         if not st.ssllabs_email:
             print("Defina primeiro CERTWATCH_SSLLABS_EMAIL no .env.", file=sys.stderr)
@@ -115,7 +115,7 @@ def main(argv: list[str] | None = None) -> int:
 
     if a.cmd == "ct-test":
         from dataclasses import replace
-        from .collectors.ct import FETCHERS, SOURCE_LABELS, _client
+        from .fontes.ct import FETCHERS, SOURCE_LABELS, _client
         st = replace(get_settings(), ct_domains=[a.domain])
         client = _client(st)
         ok = False
@@ -133,7 +133,7 @@ def main(argv: list[str] | None = None) -> int:
     if a.cmd == "trust-fetch":
         return _trust_fetch(a.target)
     if a.cmd == "inspect-tql":
-        from .collectors.ucmdb import describe_tql
+        from .fontes.ucmdb import describe_tql
         print(json.dumps(describe_tql(get_settings(), a.tql), ensure_ascii=False, indent=2, default=str))
         return 0
 

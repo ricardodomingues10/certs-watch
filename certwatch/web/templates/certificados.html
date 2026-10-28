@@ -4,7 +4,7 @@
 {% block crumb %}Inventário{% endblock %}
 {% block page_title %}Certificados <small>{{ rows|length }} de {{ total }}</small>{% endblock %}
 {% block lede %}Um certificado por nome, de todas as origens: CMDB, lista de APIs e servidores adicionados à mão. A data que conta é a do servidor quando ele responde; senão usa-se a da CMDB. Passe o rato sobre o tipo e o âmbito para ver o que significam.{% endblock %}
-{% block actions %}<a class="button" href="/certificados/exportar{{ '?' ~ export_qs if export_qs }}">Exportar esta vista (CSV)</a>{% endblock %}
+{% block actions %}<a class="button" href="/calendario.ics{{ '?equipa=' ~ dono if dono and dono.isdigit() }}" title="Cada expiração num dia do calendário, com lembretes 30 e 7 dias antes. Para subscrever, use A minha conta.">Calendário (.ics)</a> <a class="button" href="/certificados/exportar{{ '?' ~ export_qs if export_qs }}">Exportar esta vista (CSV)</a>{% endblock %}
 {% block content %}
 
 <form class="filters" method="get">
@@ -34,6 +34,12 @@
     <option value="">Com ou sem pedido SMAX</option>
     {% for k, l in ticket_filters.items() %}<option value="{{ k }}" {{ 'selected' if pedido == k }}>{{ l }}</option>{% endfor %}
   </select>{% endif %}
+  <select id="f-dono" name="dono" aria-label="Dono">
+    <option value="">Qualquer dono</option>
+    <option value="sem" {{ 'selected' if dono == 'sem' }}>Sem dono</option>
+    <option value="smax" {{ 'selected' if dono == 'smax' }}>Dono só sugerido pelo SMAX</option>
+    {% for t in equipas %}<option value="{{ t.id }}" {{ 'selected' if dono == t.id|string }}>{{ t.name }}</option>{% endfor %}
+  </select>
   <select id="f-dias" name="dias" aria-label="Prazo">
     <option value="">Qualquer prazo</option>
     {% for v, l in [('ativos','Não expirados'),('7','Expiram em 7 dias'),('20','Expiram em 20 dias'),('30','Expiram em 30 dias'),('90','Expiram em 90 dias'),('-1','Já expirados')] %}
@@ -41,14 +47,14 @@
     {% endfor %}
   </select>
   <button>Filtrar</button>
-  {% if q or dias or estado or tipo or ambito or renovacao or pedido or servido %}<a href="/certificados">limpar filtros</a>{% endif %}
+  {% if q or dias or estado or tipo or ambito or renovacao or pedido or servido or dono %}<a href="/certificados">limpar filtros</a>{% endif %}
 </form>
 
 {% if create_on %}
 <form method="post" action="/pedidos/novo" id="selecao">
 <input type="hidden" name="csrf" value="{{ csrf }}">
 <input type="hidden" name="next" value="/certificados{{ '?' ~ export_qs if export_qs }}">
-{% for k, v in [('q', q), ('dias', dias), ('estado', estado), ('tipo', tipo), ('ambito', ambito), ('renovacao', renovacao), ('pedido', pedido), ('servido', servido)] %}<input type="hidden" name="{{ k }}" value="{{ v }}">{% endfor %}
+{% for k, v in [('q', q), ('dias', dias), ('estado', estado), ('tipo', tipo), ('ambito', ambito), ('renovacao', renovacao), ('pedido', pedido), ('servido', servido), ('dono', dono)] %}<input type="hidden" name="{{ k }}" value="{{ v }}">{% endfor %}
 <div class="selbar">
   <span>Pedidos SMAX: <b data-sel-count>0</b> selecionado(s)</span>
   <span class="grow"></span>
@@ -59,7 +65,7 @@
 <div class="card flush scroll">
 <table>
   <thead>
-    <tr>{% if create_on %}<th class="th-check"><input type="checkbox" data-check-all aria-label="Selecionar todos"></th>{% endif %}<th class="th-state">Estado</th><th>Certificado</th><th class="opt">Tipo</th><th class="opt">Âmbito</th><th class="opt-s">Situação</th><th>Prazo</th>{% if smax_on %}<th>Pedido SMAX</th>{% endif %}<th class="opt">Emissor</th><th class="opt" title="{{ AUTO_RENEW_HELP['auto'] }}">Renovação automática</th></tr>
+    <tr>{% if create_on %}<th class="th-check"><input type="checkbox" data-check-all aria-label="Selecionar todos"></th>{% endif %}<th class="th-state">Estado</th><th>Certificado</th><th class="opt">Tipo</th><th class="opt">Âmbito</th><th class="opt-s">Situação</th><th>Prazo</th>{% if smax_on %}<th>Pedido SMAX</th>{% endif %}<th class="opt">Dono</th><th class="opt">Emissor</th><th class="opt" title="{{ AUTO_RENEW_HELP['auto'] }}">Renovação automática</th></tr>
   </thead>
   <tbody>
   {% for r in rows %}
@@ -76,11 +82,12 @@
       <td class="opt-s">{{ r.summary }}{% if r.findings > 1 %} <span class="muted small">(+{{ r.findings - 1 }})</span>{% endif %}</td>
       <td>{{ days(r.dias) }} <div class="small muted opt-s">{{ (r.live_not_after or r.cmdb_valid_to)|dt }} · {{ r.fonte_data }}</div></td>
       {% if smax_on %}<td>{{ ticket_cell(r.smax, r.dias) }}</td>{% endif %}
+      <td class="small opt">{% if r.dono %}{{ r.dono.equipa or '—' }}{% if r.dono.pessoa %}<div class="muted">{{ r.dono.pessoa }}</div>{% endif %}{% if r.dono.origem == 'smax' %}<span class="tag tag-run" title="Do pedido {{ r.dono.pedido }} no SMAX">SMAX</span>{% endif %}{% else %}<a href="/certificados/detalhe?cn={{ r.cn|urlencode }}#dono" class="muted">sem dono</a>{% endif %}</td>
       <td class="small opt">{{ r.live_issuer or r.issuers|join(', ') or '—' }}</td>
       <td class="opt">{% if r.renovacao == 'auto' %}<span class="tag tag-ok" title="{{ AUTO_RENEW_HELP['auto'] }} Detetado em: {{ r.renovacao_fonte }}.">Sim</span>{% else %}<span class="muted" title="{{ AUTO_RENEW_HELP['manual'] }}">Não</span>{% endif %}</td>
     </tr>
   {% else %}
-    <tr><td colspan="10" class="muted">Sem resultados.</td></tr>
+    <tr><td colspan="11" class="muted">Sem resultados.</td></tr>
   {% endfor %}
   </tbody>
 </table>

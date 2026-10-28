@@ -422,7 +422,7 @@ def build_cmdb_table(cis: list[dict], settings: Settings, tql_attrs: set[str] | 
 def fetch_cmdb_table(settings: Settings, client=None) -> tuple[CmdbTable, list[dict]]:
     """Lê o TQL dos certificados e, se faltarem atributos ao layout, completa-os pela REST API.
     Devolve a tabela e os registos no formato da ingestão (para atualizar também a CMDB do Atalaia Cert)."""
-    from .collectors.ucmdb import UcmdbError, UcmdbSession
+    from .fontes.ucmdb import UcmdbError, UcmdbSession
     if not settings.ucmdb_tql:
         raise FinalError("Defina CERTWATCH_UCMDB_TQL no ficheiro .env")
     notes: list[str] = []
@@ -1339,7 +1339,7 @@ def apply_selection(session: Session, run: FinalRun, shown: list[int], chosen: s
 # ------------------------------------------------------------------ verificação no servidor
 def make_live_lookup(session: Session, settings: Settings) -> LiveLookup:
     """Certificado apresentado em host:443: usa o scan do Atalaia Cert se for recente, senão liga-se na hora."""
-    from .scanner import scan_endpoint, summarize
+    from .fontes.servidores import scan_endpoint, summarize
     from .trust import build_bundle
     max_age = timedelta(hours=settings.final_live_max_age_h)
 
@@ -1431,7 +1431,7 @@ AVI_API_ACTOR = "API do AVI"
 def store_avi_api(session: Session, settings: Settings, today: date, client=None) -> tuple[FinalInput, dict]:
     """Lê os certificados do AVI pela API e guarda-os como o ficheiro do AVI (o mesmo formato do script).
     O ficheiro da diretoria import/ não é tocado."""
-    from .collectors import avi as avi_api
+    from .fontes import avi as avi_api
     res = avi_api.fetch(settings, client, with_ca=False)
     if not res.vs:
         raise avi_api.AviError("A API do AVI não devolveu nenhum certificado.")
@@ -1513,7 +1513,7 @@ def generate(run_id: int, settings: Settings, fetch: Callable | None = None,
             avi_note = ""
             if (AVI in settings.final_sources and use(AVI) and settings.avi_source in ("api", "auto")
                     and settings.avi_url):
-                from .collectors.avi import AviError
+                from .fontes.avi import AviError
                 try:
                     store_avi_api(s, settings, today)
                 except AviError as exc:

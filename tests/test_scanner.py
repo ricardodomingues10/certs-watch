@@ -1,7 +1,7 @@
 import socket
 from datetime import timedelta
 
-from certwatch.scanner import scan_endpoint, summarize
+from certwatch.fontes.servidores import scan_endpoint, summarize
 from certwatch.trust import build_bundle
 from tests.pki import NOW, TLSServer, make_cert, make_weak_leaf
 

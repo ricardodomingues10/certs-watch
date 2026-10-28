@@ -32,6 +32,28 @@ FIELDS = "name,certificate,type"
 MAX_PAGES = 500
 
 
+# ------------------------------------------------------------------ o que esta fonte faz e que chamadas faz
+FONTE = {
+    "id": "avi", "nome": "AVI (balanceador)", "tipo": "API REST", "estado": "em uso (ou ficheiro)",
+    "para": "Ler os certificados dos virtual services e das CAs do controlador AVI, no mesmo formato do ficheiro do script.",
+    "config": ["CERTWATCH_AVI_URL", "CERTWATCH_AVI_TENANT", "CERTWATCH_AVI_ENDPOINT", "CERTWATCH_AVI_ENDPOINT_CA",
+               "secrets/avi_user", "secrets/avi_password", "CERTWATCH_AVI_SOURCE"],
+    "chamadas": [
+        {"metodo": "POST", "endereco": "/login", "para": "abrir a sessão (cookie e token CSRF)", "acesso": "leitura", "estado": "em uso", "onde": "fontes/avi.py · AviSession"},
+        {"metodo": "GET", "endereco": "/api/sslkeyandcertificate?type=SSL_CERTIFICATE_TYPE_VIRTUALSERVICE", "para": "certificados dos virtual services (paginado)", "acesso": "leitura", "estado": "em uso", "onde": "fontes/avi.py · fetch"},
+        {"metodo": "GET", "endereco": "/api/sslkeyandcertificate?type=SSL_CERTIFICATE_TYPE_CA", "para": "certificados das CAs", "acesso": "leitura", "estado": "em uso", "onde": "fontes/avi.py · fetch"},
+        {"metodo": "POST", "endereco": "/logout", "para": "fechar a sessão", "acesso": "leitura", "estado": "em uso", "onde": "fontes/avi.py · AviSession"},
+        {"metodo": "TLS", "endereco": "controlador:443", "para": "diagnosticar a ligação (DNS, porta, certificado do controlador)", "acesso": "leitura", "estado": "só no diagnóstico", "onde": "fontes/avi.py · diagnose"},
+        {"metodo": "PUT", "endereco": "/api/sslkeyandcertificate/{uuid}", "para": "instalar o certificado renovado (renovação automática)", "acesso": "escrita", "estado": "planeado", "onde": "—"},
+    ],
+}
+
+
+def estado(settings: Settings) -> tuple[bool, str]:
+    falta = configured(settings)
+    return (not falta), (falta or f"API ({'em uso' if settings.avi_source == 'api' else 'configurada; a reconciliação usa o ficheiro'})")
+
+
 class AviError(RuntimeError):
     pass
 

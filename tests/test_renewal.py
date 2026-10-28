@@ -11,7 +11,7 @@ from sqlalchemy import select
 
 from certwatch import cmdb_final as cf
 from certwatch import renewal as rn
-from certwatch.collectors import smax
+from certwatch.fontes import smax
 from certwatch.db import session_scope, utcnow
 from certwatch.jobs import ingest_cmdb
 from certwatch.models import FinalRun, Renewal, SmaxFile, SmaxTicket

@@ -54,7 +54,7 @@ def test_created_but_filtered_by_tql_is_flagged(env):
         s.flush()
         ids = [w.id for w in s.scalars(select(UcmdbWrite))]
     fake.cis["c9"] = ci("c9", "visivel.exemplo.pt")
-    from certwatch.collectors.ucmdb import UcmdbSession
+    from certwatch.fontes.ucmdb import UcmdbSession
     with UcmdbSession(st, fake.client()) as us:
         uw.check_created_in_tql(us, st, ids)
     with session_scope() as s:

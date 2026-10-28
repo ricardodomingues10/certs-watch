@@ -121,7 +121,7 @@ def test_navigation_and_theme(env):
     assert [i["label"] for i in tree["sistema"]["items"] if i["on"]] == ["AVI pela API"]
     assert nav_tree("/cert/abc", {})[1]["on"] and nav_tree("/", {})[0]["on"]
     groups = {g["key"]: [i["label"] for i in g["items"]] for g in nav_tree("/", {})}
-    assert groups["hoje"] == ["Painel"] and groups["inventario"] == ["Certificados", "APIs e segredos", "Servidores"]
+    assert groups["hoje"] == ["Painel"] and groups["inventario"] == ["Certificados", "APIs e segredos", "Servidores", "Donos"]
     assert groups["vigilancia"] == ["Testes", "Na internet"] and not any("Alertas" in v for v in groups.values())
     with TestClient(app) as c:
         page = c.get("/certificados", auth=AUTH).text

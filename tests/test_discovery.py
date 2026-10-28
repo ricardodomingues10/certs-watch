@@ -4,7 +4,7 @@ from datetime import timedelta
 import httpx
 import pytest
 
-from certwatch.collectors.ct import fetch_all
+from certwatch.fontes.ct import fetch_all
 from certwatch.db import session_scope, utcnow
 from certwatch.discovery import DiscoveryError, classify_ct, ingest_ct
 from certwatch.jobs import ingest_cmdb

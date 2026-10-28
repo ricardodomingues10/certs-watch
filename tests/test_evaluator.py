@@ -8,7 +8,7 @@ from certwatch.db import session_scope, utcnow
 from certwatch.evaluator import evaluate
 from certwatch.jobs import _store_outcome, ingest_cmdb
 from certwatch.models import Endpoint, Finding
-from certwatch.scanner import scan_endpoint
+from certwatch.fontes.servidores import scan_endpoint
 from certwatch.trust import build_bundle
 from tests.pki import NOW, TLSServer, make_weak_leaf
 

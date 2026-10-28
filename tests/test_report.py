@@ -13,7 +13,7 @@ from certwatch import report as rp
 from certwatch.db import session_scope, utcnow
 from certwatch.jobs import _store_outcome, ingest_cmdb
 from certwatch.models import EmailReport, Endpoint
-from certwatch.scanner import ScanOutcome
+from certwatch.fontes.servidores import ScanOutcome
 
 AUTH = ("admin", "teste-admin-123")
 NOW = utcnow()

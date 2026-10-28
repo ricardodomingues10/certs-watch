@@ -26,6 +26,25 @@ USER_AGENT = "AtalaiaCert/0.21 (certificate monitoring for the domain owner)"
 MAX_PAGES = 20
 
 
+# ------------------------------------------------------------------ o que esta fonte faz e que chamadas faz
+FONTE = {
+    "id": "ct", "nome": "Certificate Transparency (internet)", "tipo": "API REST pública", "estado": "em uso",
+    "para": "Encontrar os certificados públicos emitidos para os domínios da organização.",
+    "config": ["CERTWATCH_CT_DOMAINS", "CERTWATCH_CT_SOURCES", "secrets/certspotter_api_key", "secrets/ctlogs_api_key", "HTTPS_PROXY"],
+    "chamadas": [
+        {"metodo": "GET", "endereco": "https://crt.sh/?q=%.{domínio}&output=json", "para": "certificados de cada domínio e subdomínios", "acesso": "leitura", "estado": "em uso", "onde": "fontes/ct.py · fetch_crtsh"},
+        {"metodo": "GET", "endereco": "https://api.certspotter.com/v1/issuances?domain=…&include_subdomains=true", "para": "o mesmo, pelo Cert Spotter (SSLMate)", "acesso": "leitura", "estado": "em uso", "onde": "fontes/ct.py · fetch_certspotter"},
+        {"metodo": "GET", "endereco": "https://api.ctlogs.dev/v1/subdomains/{domínio}", "para": "o mesmo, pelo ctlogs.dev", "acesso": "leitura", "estado": "em uso", "onde": "fontes/ct.py · fetch_ctlogs"},
+    ],
+}
+
+
+def estado(settings: Settings) -> tuple[bool, str]:
+    if not settings.ct_domains:
+        return False, "Defina CERTWATCH_CT_DOMAINS (os domínios da organização)."
+    return True, ", ".join(settings.ct_sources)
+
+
 class CtError(RuntimeError):
     pass
 

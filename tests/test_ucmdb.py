@@ -4,7 +4,7 @@ import httpx
 import pytest
 from sqlalchemy import select
 
-from certwatch.collectors.ucmdb import UcmdbError, fetch_certificates
+from certwatch.fontes.ucmdb import UcmdbError, fetch_certificates
 from certwatch.db import session_scope
 from certwatch.jobs import IngestAborted, ingest_cmdb
 from certwatch.models import CmdbRecord, Endpoint

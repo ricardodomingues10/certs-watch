@@ -7,7 +7,7 @@ import pytest
 from sqlalchemy import select
 
 from certwatch.classify import is_auto_renew
-from certwatch.collectors import ssllabs
+from certwatch.fontes import ssllabs
 from certwatch.db import session_scope, utcnow
 from certwatch.evaluator import evaluate, expiry_severity
 from certwatch.external import external_targets, run_ssllabs

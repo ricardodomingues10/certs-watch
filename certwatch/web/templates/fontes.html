@@ -1,0 +1,40 @@
+{% extends "base.html" %}
+{% block title %}Fontes e chamadas{% endblock %}
+{% block crumb %}Sistema{% endblock %}
+{% block page_title %}Fontes e chamadas{% endblock %}
+{% block lede %}Cada sistema com que o Atalaia Cert fala, como fala (API, ficheiro, TLS, email) e cada chamada que faz. Cada fonte tem o seu ficheiro em <span class="mono">certwatch/fontes/</span>.{% endblock %}
+{% block content %}
+<div class="fo-sum">
+  <span class="fo-pill"><b>{{ fontes|length }}</b> fontes</span>
+  <span class="fo-pill"><b>{{ fontes|selectattr('ligada')|list|length }}</b> ligadas aqui</span>
+  <span class="fo-pill"><b>{{ totals.em_uso }}</b> chamadas em uso</span>
+  <span class="fo-pill"><b>{{ totals.escrita }}</b> de escrita</span>
+  <span class="fo-pill p-plan"><b>{{ totals.planeadas }}</b> planeadas</span>
+</div>
+<nav class="rc-chipbar" aria-label="Ir para a fonte">{% for f in fontes %}<a class="rc-fchip" href="#f-{{ f.id }}">{{ f.nome.split(' (')[0] }}</a>{% endfor %}</nav>
+{% for f in fontes %}
+<section class="card flush fo-card" id="f-{{ f.id }}" aria-labelledby="h-{{ f.id }}">
+  <div class="fo-head">
+    <div>
+      <h2 id="h-{{ f.id }}">{{ f.nome }} <span class="tag tag-off">{{ f.tipo }}</span> <span class="tag {{ 'tag-run' if 'planead' in f.estado and not f.estado.startswith('em uso') else 'tag-acc' }}">{{ f.estado }}</span></h2>
+      <p class="small">{{ f.para }}</p>
+    </div>
+    <div class="fo-state {{ 'is-on' if f.ligada else 'is-off' }}"><i aria-hidden="true"></i><span><b>{{ 'Ligada' if f.ligada else 'Não ligada' }}</b><span class="small muted">{{ f.detalhe }}</span></span></div>
+  </div>
+  <div class="scroll"><table class="fo-table">
+    <thead><tr><th>Método</th><th>Endereço</th><th>Para quê</th><th>Acesso</th><th>Estado</th><th class="opt">Código</th></tr></thead>
+    <tbody>{% for c in f.chamadas %}
+      <tr class="{{ 'faded' if c.estado == 'planeado' }}">
+        <td><span class="fo-m m-{{ c.metodo|lower }}">{{ c.metodo }}</span></td>
+        <td class="mono small">{{ c.endereco }}</td>
+        <td class="small">{{ c.para }}</td>
+        <td><span class="tag {{ 'tag-err' if c.acesso == 'escrita' else 'tag-off' }}">{{ c.acesso }}</span></td>
+        <td class="small">{{ c.estado }}</td>
+        <td class="opt mono small">{{ c.onde }}</td>
+      </tr>{% endfor %}
+    </tbody>
+  </table></div>
+  <p class="small muted fo-cfg">Configuração: {% for x in f.config %}<span class="mono">{{ x }}</span>{{ ', ' if not loop.last }}{% endfor %} · <span class="mono">{{ f.modulo }}</span></p>
+</section>
+{% endfor %}
+{% endblock %}
