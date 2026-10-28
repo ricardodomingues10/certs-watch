@@ -29,7 +29,7 @@ ROLE_HELP = {
     "operador": "Tudo menos gerir utilizadores: criar pedidos, atualizar a CMDB, executar, decidir alertas.",
     "leitura": "Vê todas as páginas, mas não altera nada.",
 }
-STATUS = {"convidado": "Convite enviado", "ativo": "Ativo", "desativado": "Desativado"}
+STATUS = {"convidado": "Convite enviado", "pendente": "À espera de aprovação", "ativo": "Ativo", "desativado": "Desativado"}
 EMAIL_RE = re.compile(r"^[A-Za-z0-9.!#$%&'*+/=?^_`{|}~-]+@[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?(?:\.[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?)+$")
 
 _N, _R, _P = 2 ** 14, 8, 1          # scrypt: ~16 MB e ~50 ms por verificação
@@ -127,6 +127,8 @@ def invite(session: Session, settings: Settings, email: str, name: str, role: st
     if email == norm_email(settings.admin_user):
         raise UserError("Esse nome está reservado para a conta de recurso do servidor.")
     u = by_email(session, email)
+    if u is not None and u.status == "pendente":
+        raise UserError(f"{email} já pediu acesso: aprove o pedido em «Pedidos de acesso».")
     if u is not None and u.status != "convidado":
         raise UserError(f"{email} já tem conta ({STATUS[u.status].lower()}). Para lhe dar uma palavra-passe nova use «Enviar link».")
     if u is None:
@@ -158,10 +160,81 @@ def email_message(settings: Settings, user: User, link: str, by: str, client: st
                  f"os segredos de APIs da organização. O seu papel é <b>{e(ROLES[user.role])}</b>: {e(ROLE_HELP[user.role])}</p>")
     else:
         subject = "Definir a palavra-passe do Atalaia Cert"
-        intro = f"<p>Olá {who},</p><p>{e(by)} pediu um link para definir uma palavra-passe nova no {app}.</p>"
+        intro = (f"<p>Olá {who},</p><p>{e(by)} pediu um link para definir uma palavra-passe nova no {app}.</p>" if by else
+                 f"<p>Olá {who},</p><p>Foi pedido, na página de entrada, um link para definir uma palavra-passe nova no {app}.</p>")
     body = (intro +
             f"<p>Para entrar, defina a sua palavra-passe neste link, válido durante {settings.invite_hours} horas e só uma vez:</p>"
             f"<p><a href=\"{e(link)}\">{e(link)}</a></p>"
-            f"<p>Depois entre em <a href=\"{e(base)}\">{e(base)}</a> com o seu email (<b>{e(user.email)}</b>) e essa palavra-passe.</p>"
+            f"<p>Depois entre em <a href=\"{e(base)}/entrar\">{e(base)}/entrar</a> com o seu email (<b>{e(user.email)}</b>) e essa palavra-passe.</p>"
             "<p>Se não esperava este email, ignore-o: sem definir a palavra-passe ninguém entra com esta conta.</p>")
     return build_message(settings, [user.email], subject, body, None)
+
+
+# ------------------------------------------------------------------ pedidos de acesso ("Criar conta")
+def signup_problems(settings: Settings, email: str) -> list[str]:
+    if not settings.signup:
+        return ["os pedidos de acesso estão desligados: peça um convite a quem gere os utilizadores"]
+    if not valid_email(email):
+        return ["o email não é válido"]
+    if settings.signup_domains and email.rsplit("@", 1)[-1] not in settings.signup_domains:
+        return ["só emails de " + ", ".join("@" + d for d in settings.signup_domains) + " podem pedir acesso"]
+    return []
+
+
+def request_access(session: Session, settings: Settings, email: str, name: str, note: str, password: str) -> User:
+    """Cria o pedido de acesso: a conta fica à espera de aprovação e sem papel até um administrador a aprovar."""
+    email = norm_email(email)
+    problems = signup_problems(settings, email)
+    if email == norm_email(settings.admin_user):
+        problems.append("esse nome está reservado")
+    if not name.strip():
+        problems.append("falta o nome")
+    problems += ["a palavra-passe " + x for x in password_problems(password, email, settings)]
+    if problems:
+        raise UserError("; ".join(problems))
+    u = by_email(session, email)
+    if u is not None:
+        if u.status == "pendente":
+            raise UserError("já existe um pedido de acesso com este email: está à espera de aprovação")
+        raise UserError("já existe uma conta com este email: entre, ou use «Esqueci-me da palavra-passe»")
+    u = User(email=email, name=name.strip()[:128], role="leitura", status="pendente", request_note=note.strip()[:500])
+    u.password_hash, u.password_set_at = hash_password(password), utcnow()
+    session.add(u)
+    session.flush()
+    return u
+
+
+def approve(user: User, role: str, by: str) -> None:
+    if role not in ROLES:
+        raise UserError("Escolha o papel antes de aprovar.")
+    user.role, user.status, user.approved_by, user.approved_at = role, "ativo", by, utcnow()
+
+
+def admin_emails(session: Session) -> list[str]:
+    return [u.email for u in session.scalars(select(User).where(User.role == "admin", User.status == "ativo"))]
+
+
+def notice_message(settings: Settings, to: list[str], subject: str, paragraphs: list[str]):
+    """Email curto (aviso de pedido de acesso, aprovação, teste). Os parágrafos já vêm escapados."""
+    from .report import build_message
+    return build_message(settings, to, subject, "".join(f"<p>{p}</p>" for p in paragraphs), None)
+
+
+# ------------------------------------------------------------------ sessões da página de entrada
+def open_session(session: Session, settings: Settings, username: str, ip: str = "") -> str:
+    from .models import LoginSession
+    token = secrets.token_urlsafe(32)
+    now = utcnow()
+    session.add(LoginSession(token_hash=token_hash(token), username=username, created_at=now, last_seen=now,
+                             expires_at=now + timedelta(days=7), ip=ip[:64]))
+    return token
+
+
+def close_sessions(session: Session, username: str | None = None, token: str | None = None) -> None:
+    from .models import LoginSession
+    q = session.query(LoginSession)
+    if token:
+        q = q.filter(LoginSession.token_hash == token_hash(token))
+    elif username:
+        q = q.filter(LoginSession.username == username)
+    q.delete()

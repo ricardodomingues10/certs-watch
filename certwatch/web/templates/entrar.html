@@ -1,0 +1,15 @@
+{% extends "_publico.html" %}
+{% block title %}Entrar{% endblock %}
+{% block body %}
+<h1>Entrar</h1>
+{% if nota %}<p class="note" role="status">{{ nota }}</p>{% endif %}
+{% if erro %}<p class="note bad" role="alert">{{ erro }}</p>{% endif %}
+<form method="post" action="/entrar" class="stack">
+  <input type="hidden" name="csrf" value="{{ csrf }}"><input type="hidden" name="next" value="{{ next }}">
+  <label>Email<input type="text" name="email" value="{{ email }}" required autocomplete="username" autocapitalize="none" spellcheck="false" {{ 'autofocus' if not email }}></label>
+  <label>Palavra-passe<input type="password" name="palavra" required autocomplete="current-password" {{ 'autofocus' if email }}></label>
+  <button class="primary">Entrar</button>
+</form>
+<p class="pub-links small"><a href="/recuperar">Esqueci-me da palavra-passe</a>{% if signup %} · <a href="/registar">Criar conta</a>{% endif %}</p>
+{% endblock %}
+{% block after %}<p class="small muted pub-foot">{% if signup %}Ainda não tem acesso? Crie conta: um administrador aprova o pedido e escolhe o seu papel.{% else %}Para ter acesso, peça um convite a quem gere os utilizadores do Atalaia Cert.{% endif %}</p>{% endblock %}

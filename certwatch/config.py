@@ -235,6 +235,9 @@ class Settings:
     public_url: str = ""                           # endereço da aplicação nos links dos convites (ex.: https://atalaia.exemplo.pt)
     invite_hours: int = 72                         # validade do link de convite ou de nova palavra-passe
     password_min: int = 12
+    session_hours: int = 12                        # sessão aberta na página de entrada: fecha ao fim de N horas sem uso
+    signup: bool = True                            # "Criar conta": pedido de acesso que um administrador aprova
+    signup_domains: tuple = ()                     # só emails destes domínios podem pedir acesso (vazio = qualquer)
 
     # Escrever na UCMDB pela REST API (criar e atualizar certificados em vez do certs_update.csv)
     ucmdb_write: bool = False
@@ -390,6 +393,9 @@ class Settings:
             public_url=_env("CERTWATCH_PUBLIC_URL", "").rstrip("/"),
             invite_hours=max(1, int(_env("CERTWATCH_INVITE_HOURS", "72"))),
             password_min=max(8, int(_env("CERTWATCH_PASSWORD_MIN", "12"))),
+            session_hours=max(1, int(_env("CERTWATCH_SESSION_HOURS", "12"))),
+            signup=_env("CERTWATCH_SIGNUP", "true").lower() == "true",
+            signup_domains=tuple(d.strip().lower().lstrip("@") for d in _env("CERTWATCH_SIGNUP_DOMAINS", "").split(",") if d.strip()),
             ucmdb_write=_env("CERTWATCH_UCMDB_WRITE", "false").lower() == "true",
             ucmdb_cert_type=_env("CERTWATCH_UCMDB_CERT_TYPE", "digital_certificate"),
             smax_files_max=int(_env("CERTWATCH_SMAX_FILES_MAX", "200")),

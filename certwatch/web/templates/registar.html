@@ -1,0 +1,29 @@
+{% extends "_publico.html" %}
+{% block title %}Criar conta{% endblock %}
+{% block body %}
+{% if done %}
+<h1>Pedido enviado</h1>
+<p>O seu pedido de acesso ficou registado. Um administrador vai aprová-lo e escolher o seu papel; depois entra com o seu email e a palavra-passe que escolheu.</p>
+<p><a class="button" href="/entrar">Voltar à entrada</a></p>
+{% elif not signup %}
+<h1>Criar conta</h1>
+<p>Os pedidos de acesso estão desligados nesta instalação. Peça um convite a quem gere os utilizadores do Atalaia Cert.</p>
+<p><a class="button" href="/entrar">Voltar à entrada</a></p>
+{% else %}
+<h1>Criar conta</h1>
+<p class="muted">O acesso só fica ativo depois de um administrador aprovar o pedido e escolher o seu papel.</p>
+{% for e in erros %}<p class="note bad" role="alert">Não foi possível criar o pedido: {{ e }}.</p>{% endfor %}
+<form method="post" action="/registar" class="stack">
+  <input type="hidden" name="csrf" value="{{ csrf }}">
+  <label>Nome<input type="text" name="nome" value="{{ f.nome }}" required maxlength="128" autocomplete="name"></label>
+  <label>Email de trabalho<input type="email" name="email" value="{{ f.email }}" required maxlength="254" autocomplete="username"{% if domains %} placeholder="nome@{{ domains[0] }}"{% endif %}></label>
+  {% if domains %}<p class="small muted">Só emails de {% for d in domains %}@{{ d }}{{ ', ' if not loop.last }}{% endfor %}.</p>{% endif %}
+  <label>Equipa e para que precisa<input type="text" name="equipa" value="{{ f.equipa }}" maxlength="500" placeholder="ex.: Sistemas Centrais, renovar os certificados dos servidores web"></label>
+  <label>Palavra-passe<input type="password" name="palavra" required minlength="{{ password_min }}" autocomplete="new-password"></label>
+  <label>Repetir a palavra-passe<input type="password" name="confirmar" required minlength="{{ password_min }}" autocomplete="new-password"></label>
+  <p class="small muted">Pelo menos {{ password_min }} caracteres, sem o seu nome de utilizador. Uma frase com várias palavras é mais fácil de lembrar e mais segura.</p>
+  <button class="primary">Pedir acesso</button>
+</form>
+<p class="pub-links small">Já tem conta? <a href="/entrar">Entrar</a></p>
+{% endif %}
+{% endblock %}

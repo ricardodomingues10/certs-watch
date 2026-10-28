@@ -1,39 +1,23 @@
-{% from "_atalaia.html" import atalaia %}<!doctype html>
-<html lang="pt-PT" data-palette="{{ palette or 'consola' }}">
-<head>
-  <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
-  <meta name="referrer" content="no-referrer">
-  <title>{{ 'Convite' if info and info.kind == 'convite' else 'Palavra-passe' }} · Atalaia Cert</title>
-  <link rel="icon" href="/static/atalaia-icone.svg" type="image/svg+xml">
-  <link rel="stylesheet" href="/static/style.css">
-  <script src="/static/app.js" defer></script>
-</head>
-<body class="pub">
-<main class="pub-main">
-  <div class="pub-brand">{{ atalaia("p", "pub-logo", "parado") }}<span><b>Atalaia</b> <span class="mono">Cert</span>{% if client.name %}<small>{{ client.name }}</small>{% endif %}</span></div>
-  <section class="card pub-card">
-    {% if done %}
-    <h1>Palavra-passe definida</h1>
-    <p>Já pode entrar. Quando o navegador pedir, use o seu email <b class="mono">{{ info.email }}</b> e a palavra-passe que acabou de definir.</p>
-    <p><a class="button primary" href="/">Entrar no Atalaia Cert</a></p>
-    {% elif not info %}
-    <h1>Este link já não vale</h1>
-    <p>O link expirou, já foi usado ou foi substituído por outro mais recente. Peça um novo a quem gere os utilizadores do Atalaia Cert.</p>
-    {% else %}
-    <h1>{{ 'Bem-vindo ao Atalaia Cert' if info.kind == 'convite' else 'Palavra-passe nova' }}</h1>
-    <p>{% if info.name %}{{ info.name }}, defina{% else %}Defina{% endif %} a palavra-passe da conta <b class="mono">{{ info.email }}</b>{% if info.kind == 'convite' %} ({{ info.role|lower }}){% endif %}.</p>
-    {% for e in erros %}<p class="note bad" role="alert">A palavra-passe {{ e }}.</p>{% endfor %}
-    <form method="post" action="/convite/{{ token }}" class="stack">
-      <input type="hidden" name="csrf" value="{{ csrf }}">
-      <input type="hidden" name="username" value="{{ info.email }}" autocomplete="username">
-      <label>Palavra-passe<input type="password" name="palavra" required minlength="{{ password_min }}" autocomplete="new-password" autofocus></label>
-      <label>Repetir<input type="password" name="confirmar" required minlength="{{ password_min }}" autocomplete="new-password"></label>
-      <p class="small muted">Pelo menos {{ password_min }} caracteres, sem o seu nome de utilizador. Uma frase com várias palavras é mais fácil de lembrar e mais segura.</p>
-      <button class="primary">Definir a palavra-passe</button>
-    </form>
-    {% endif %}
-  </section>
-</main>
-</body>
-</html>
+{% extends "_publico.html" %}
+{% block title %}{{ 'Convite' if info and info.kind == 'convite' else 'Palavra-passe' }}{% endblock %}
+{% block body %}{% if done %}
+<h1>Palavra-passe definida</h1>
+<p>Já pode entrar com o seu email <b class="mono">{{ info.email }}</b> e a palavra-passe que acabou de definir.</p>
+<p><a class="button primary" href="/entrar">Entrar no Atalaia Cert</a></p>
+{% elif not info %}
+<h1>Este link já não vale</h1>
+<p>O link expirou, já foi usado ou foi substituído por outro mais recente. Peça um novo a quem gere os utilizadores do Atalaia Cert.</p>
+{% else %}
+<h1>{{ 'Bem-vindo ao Atalaia Cert' if info.kind == 'convite' else 'Palavra-passe nova' }}</h1>
+<p>{% if info.name %}{{ info.name }}, defina{% else %}Defina{% endif %} a palavra-passe da conta <b class="mono">{{ info.email }}</b>{% if info.kind == 'convite' %} ({{ info.role|lower }}){% endif %}.</p>
+{% for e in erros %}<p class="note bad" role="alert">A palavra-passe {{ e }}.</p>{% endfor %}
+<form method="post" action="/convite/{{ token }}" class="stack">
+  <input type="hidden" name="csrf" value="{{ csrf }}">
+  <input type="hidden" name="username" value="{{ info.email }}" autocomplete="username">
+  <label>Palavra-passe<input type="password" name="palavra" required minlength="{{ password_min }}" autocomplete="new-password" autofocus></label>
+  <label>Repetir<input type="password" name="confirmar" required minlength="{{ password_min }}" autocomplete="new-password"></label>
+  <p class="small muted">Pelo menos {{ password_min }} caracteres, sem o seu nome de utilizador. Uma frase com várias palavras é mais fácil de lembrar e mais segura.</p>
+  <button class="primary">Definir a palavra-passe</button>
+</form>
+{% endif %}
+{% endblock %}

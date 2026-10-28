@@ -4,6 +4,7 @@ from __future__ import annotations
 import csv
 import json
 import logging
+from html import escape as html_escape
 import io
 import re
 import time
@@ -46,7 +47,8 @@ from ..collectors.smax import ticket_url
 from ..tickets import TICKET_HELP, TICKET_ORDER, TICKET_STATES, TICKET_VIEWS, comment_files, filter_tickets, ticket_list, tickets_by_label, link as ticket_link, tickets_by_endpoint
 from ..trust import local_trust_files
 from ..normalize import norm_label, split_api_name, is_ip, is_valid_hostname, norm_host, norm_issuer
-from .security import check_csrf, current_user, forget_logins, require_admin, security_middleware
+from .security import (SESSION_COOKIE, check_csrf, check_login, clear_failures, current_user, forget_logins, note_failure,
+                       require_admin, security_middleware, too_many)
 from .. import users as us
 from ..models import User, UserPref
 
@@ -150,13 +152,14 @@ def nav_counts() -> dict:
     """Contadores da navegação lateral (cache de 30 s para não pesar em cada página)."""
     if _NAV_CACHE["data"] is not None and time.monotonic() - _NAV_CACHE["at"] < 30:
         return _NAV_CACHE["data"]
-    data = {"alertas": 0, "alertas_altos": 0, "ct_por_triar": 0, "reconc_dif": 0}
+    data = {"alertas": 0, "alertas_altos": 0, "ct_por_triar": 0, "reconc_dif": 0, "pedidos_acesso": 0}
     try:
         settings = get_settings()
         with session_scope() as s:
             sevs = [f.severity for f in s.scalars(select(Finding).where(Finding.status == "aberto"))]
             data["alertas"] = len(sevs)
             data["alertas_altos"] = sum(1 for x in sevs if x in ("alta", "critica"))
+            data["pedidos_acesso"] = s.scalar(select(func.count()).select_from(User).where(User.status == "pendente")) or 0
             if s.scalar(select(CtCert.id).limit(1)) is not None:
                 data["ct_por_triar"] = sum(1 for r in classify_ct(s, settings)
                                            if r["state"] != "na_cmdb" and r["ct"].triage == "por_triar" and not r["expired"])
@@ -188,7 +191,7 @@ NAV_GROUPS = [
     ("cmdb", "CMDB", [("/cmdb-final", "Atualizar a CMDB", "reconc_dif"), ("/ucmdb/certificado", "Editar um certificado", None),
                       ("/cmdb/historico", "Histórico de alterações", None)]),
     ("sistema", "Sistema", [("/jobs", "Execuções e auditoria", None), ("/cmdb-final/permissoes", "Ligação à UCMDB", None),
-                            ("/cmdb-final/avi", "AVI pela API", None), ("/utilizadores", "Utilizadores", None),
+                            ("/cmdb-final/avi", "AVI pela API", None), ("/utilizadores", "Utilizadores", "pedidos_acesso"),
                             ("/testes/como-funciona", "Como funciona", None)]),
 ]
 _NAV_ALIASES = {"/cert/": "/certificados", "/reconciliacao": "/cmdb-final"}
@@ -279,8 +282,14 @@ def render(request: Request, name: str, user: str, **ctx):
     if role != "admin":
         for g in tree:
             g["items"] = [i for i in g["items"] if i["href"] != "/utilizadores"]
+    else:
+        for g in tree:
+            for i in g["items"]:
+                if i["href"] == "/utilizadores" and i["n"]:
+                    i["hot"] = True
     return templates.TemplateResponse(request, name, {"user": user, "csrf": request.state.csrf, "nav": counts,
                                                       "navtree": tree, "role": role, "ROLES": us.ROLES,
+                                                      "via": getattr(request.state, "via", ""),
                                                       "palette": palette_of(request), "PALETTES": PALETTES,
                                                       "client": {"name": get_settings().client_name,
                                                                  "logo": client_logo() is not None,
@@ -439,9 +448,11 @@ def _users_page(request: Request, user: str, notas: list | None = None, erros: l
     now = utcnow()
     order = {"ativo": 0, "convidado": 1, "desativado": 2}
     with session_scope() as s:
-        rows = sorted((_user_row(u, now) for u in s.scalars(select(User))),
-                      key=lambda r: (order.get(r["status"], 9), r["email"]))
-    r = render(request, "utilizadores.html", user, rows=rows, ROLE_HELP=us.ROLE_HELP, STATUS=us.STATUS,
+        allu = [(_user_row(u, now), u) for u in s.scalars(select(User))]
+        pend = sorted(({**r, "note": u.request_note, "created_at": u.created_at} for r, u in allu if r["status"] == "pendente"),
+                      key=lambda r: r["created_at"] or now)
+        rows = sorted((r for r, _ in allu if r["status"] != "pendente"), key=lambda r: (order.get(r["status"], 9), r["email"]))
+    r = render(request, "utilizadores.html", user, rows=rows, pend=pend, signup=st.signup, signup_domains=st.signup_domains, ROLE_HELP=us.ROLE_HELP, STATUS=us.STATUS,
                smtp_problems=rp.smtp_problems(st), notas=notas or [], erros=erros or [], link=link,
                admin_user=st.admin_user, admin_on=bool(st.admin_password), me=user, invite_hours=st.invite_hours,
                public_url=st.public_url, password_min=st.password_min)
@@ -505,7 +516,7 @@ def users_action(request: Request, uid: int, acao: str, csrf: str = Form(""), pa
                  user: str = Depends(require_admin)):
     check_csrf(request, csrf)
     st = get_settings()
-    if acao not in ("papel", "desativar", "ativar", "link", "apagar"):
+    if acao not in ("papel", "desativar", "ativar", "link", "apagar", "aprovar", "recusar"):
         raise HTTPException(404)
     try:
         with session_scope() as s:
@@ -513,7 +524,18 @@ def users_action(request: Request, uid: int, acao: str, csrf: str = Form(""), pa
             if u is None:
                 raise HTTPException(404, "Utilizador não encontrado")
             email = u.email
-            if acao == "link":
+            if acao in ("aprovar", "recusar") and u.status != "pendente":
+                raise us.UserError(f"{email} já não está à espera de aprovação.")
+            if acao == "aprovar":
+                us.approve(u, papel, user)
+                audit(s, user, "utilizador.aprovar", email, papel=papel)
+                nota = f"{email} foi aprovado como {us.ROLES[papel].lower()}."
+                aprovado = {"email": email, "name": u.name, "role": papel}
+            elif acao == "recusar":
+                s.delete(u)
+                audit(s, user, "utilizador.recusar", email)
+                nota = f"O pedido de acesso de {email} foi recusado."
+            elif acao == "link":
                 if u.status == "desativado":
                     raise us.UserError(f"{email} está desativado: ative a conta antes de enviar um link.")
             elif acao == "papel":
@@ -526,6 +548,7 @@ def users_action(request: Request, uid: int, acao: str, csrf: str = Form(""), pa
             elif acao == "desativar":
                 _guard_admin_change(s, st, u, user, True)
                 u.status, u.token_hash, u.token_expires = "desativado", "", None
+                us.close_sessions(s, username=email)
                 audit(s, user, "utilizador.desativar", email)
                 nota = f"{email} foi desativado: deixa de conseguir entrar."
             elif acao == "ativar":
@@ -535,6 +558,7 @@ def users_action(request: Request, uid: int, acao: str, csrf: str = Form(""), pa
             else:
                 _guard_admin_change(s, st, u, user, True)
                 s.query(UserPref).filter(UserPref.username == email).delete()
+                us.close_sessions(s, username=email)
                 s.delete(u)
                 audit(s, user, "utilizador.apagar", email)
                 nota = f"{email} foi apagado."
@@ -544,12 +568,188 @@ def users_action(request: Request, uid: int, acao: str, csrf: str = Form(""), pa
     if acao == "link":
         notas, erros, link = _deliver_link(request, email, user)
         return _users_page(request, user, notas=notas, erros=erros, link=link)
-    return _users_page(request, user, notas=[nota])
+    erros = []
+    if acao == "aprovar" and not rp.smtp_problems(st):
+        e = html_escape
+        base = us.base_url(st, str(request.base_url))
+        msg = us.notice_message(st, [email], "O seu acesso ao Atalaia Cert foi aprovado", [
+            f"Olá {e(aprovado['name'] or email)},",
+            f"{e(user)} aprovou o seu acesso ao Atalaia Cert com o papel <b>{e(us.ROLES[aprovado['role']])}</b>: {e(us.ROLE_HELP[aprovado['role']])}",
+            f"Entre em <a href=\"{e(base)}/entrar\">{e(base)}/entrar</a> com o seu email e a palavra-passe que escolheu."])
+        try:
+            rp.send(st, [msg])
+            nota += " Foi avisado por email."
+        except rp.ReportError as exc:
+            erros.append(f"O aviso por email não foi enviado: {exc}")
+    return _users_page(request, user, notas=[nota], erros=erros)
+
+
+@app.post("/utilizadores/testar-email")
+def users_test_email(request: Request, csrf: str = Form(""), para: str = Form(""), user: str = Depends(require_admin)):
+    """Manda um email de teste pelo mesmo caminho dos convites e mostra o erro exato do servidor de email."""
+    check_csrf(request, csrf)
+    st = get_settings()
+    para = us.norm_email(para)
+    if not us.valid_email(para):
+        return _users_page(request, user, erros=["Escreva um email válido para o teste."], status_code=400)
+    if rp.smtp_problems(st):
+        return _users_page(request, user, erros=["O email não está configurado: " + "; ".join(rp.smtp_problems(st)) +
+                                                 ". Preencha CERTWATCH_SMTP_* no .env e reinicie."], status_code=400)
+    msg = us.notice_message(st, [para], "Teste de envio do Atalaia Cert",
+                            [f"Este é um email de teste enviado por {html_escape(user)} a partir de Utilizadores.",
+                             "Se o recebeu, os convites e os avisos de pedidos de acesso também chegam."])
+    with session_scope() as s:
+        audit(s, user, "utilizador.teste_email", para)
+    try:
+        rp.send(st, [msg])
+    except rp.ReportError as exc:
+        return _users_page(request, user, erros=[f"O email de teste não foi enviado. {exc}"])
+    return _users_page(request, user, notas=[f"Email de teste enviado para {para} (servidor {st.smtp_host}:{st.smtp_port}, de {st.smtp_from}). "
+                                             "Se não chegar em poucos minutos, veja a pasta de spam e se o servidor de email aceita reencaminhar para esse domínio."])
 
 
 def _public(request: Request, name: str, **ctx):
     return templates.TemplateResponse(request, name, {"csrf": request.state.csrf, "palette": palette_of(request),
                                                       "client": {"name": get_settings().client_name}, **ctx})
+
+
+def _client_ip(request: Request) -> str:
+    return request.client.host if request.client else ""
+
+
+def _login_page(request: Request, erro: str = "", nota: str = "", email: str = "", nxt: str = "/", status_code: int = 200):
+    st = get_settings()
+    r = _public(request, "entrar.html", erro=erro, nota=nota, email=email, next=safe_next(nxt, "/"), signup=st.signup,
+                smtp_ok=not rp.smtp_problems(st))
+    r.status_code = status_code
+    return r
+
+
+@app.get("/entrar")
+def login_page(request: Request, next: str = "/"):
+    return _login_page(request, nxt=next)
+
+
+@app.post("/entrar")
+def login(request: Request, csrf: str = Form(""), email: str = Form(""), palavra: str = Form(""), next: str = Form("/")):
+    check_csrf(request, csrf)
+    st = get_settings()
+    who = f"{email.strip().lower()}|{_client_ip(request)}"
+    if too_many(who):
+        return _login_page(request, erro="Demasiadas tentativas falhadas. Tente daqui a 15 minutos.", email=email, nxt=next, status_code=429)
+    username = email.strip() if email.strip() == st.admin_user else us.norm_email(email)
+    found = check_login(username, palavra)
+    if found is None:
+        note_failure(who)
+        with session_scope() as s:
+            u = us.by_email(s, username)
+            pending = u is not None and u.status == "pendente" and u.password_hash and us.verify_password(palavra, u.password_hash)
+        if pending:
+            return _login_page(request, nota="O seu pedido de acesso ainda está à espera de aprovação. Quando um administrador o aprovar, recebe um email.",
+                               email=email, nxt=next, status_code=403)
+        return _login_page(request, erro="Email ou palavra-passe errados.", email=email, nxt=next, status_code=401)
+    clear_failures(who)
+    with session_scope() as s:
+        token = us.open_session(s, st, found[1], _client_ip(request))
+        audit(s, found[1], "sessao.entrar", found[1])
+    r = RedirectResponse(safe_next(next, "/"), status_code=303)
+    r.set_cookie(SESSION_COOKIE, token, max_age=7 * 86400, httponly=True, samesite="strict", secure=st.cookie_secure, path="/")
+    return r
+
+
+@app.post("/sair")
+def logout(request: Request, csrf: str = Form(""), user: str = Depends(current_user)):
+    check_csrf(request, csrf)
+    token = request.cookies.get(SESSION_COOKIE)
+    if token:
+        with session_scope() as s:
+            us.close_sessions(s, token=token)
+            audit(s, user, "sessao.sair", user)
+    forget_logins()
+    r = RedirectResponse("/entrar", status_code=303)
+    r.delete_cookie(SESSION_COOKIE, path="/")
+    return r
+
+
+def _signup_page(request: Request, erros=None, done=False, form=None, status_code: int = 200):
+    st = get_settings()
+    r = _public(request, "registar.html", erros=erros or [], done=done, f=form or {}, signup=st.signup,
+                domains=st.signup_domains, password_min=st.password_min)
+    r.status_code = status_code
+    return r
+
+
+@app.get("/registar")
+def signup_page(request: Request):
+    return _signup_page(request)
+
+
+@app.post("/registar")
+def signup(request: Request, csrf: str = Form(""), email: str = Form(""), nome: str = Form(""), equipa: str = Form(""),
+           palavra: str = Form(""), confirmar: str = Form("")):
+    """Criar conta: fica um pedido de acesso, sem papel, até um administrador o aprovar."""
+    check_csrf(request, csrf)
+    st = get_settings()
+    form = {"email": email, "nome": nome, "equipa": equipa}
+    key = "registar|" + _client_ip(request)
+    if too_many(key):
+        return _signup_page(request, erros=["demasiados pedidos a partir deste endereço: tente mais tarde"], form=form, status_code=429)
+    note_failure(key)                                     # conta cada pedido, para travar automatismos
+    if palavra != confirmar:
+        return _signup_page(request, erros=["as duas palavras-passe não são iguais"], form=form, status_code=400)
+    try:
+        with session_scope() as s:
+            u = us.request_access(s, st, email, nome, equipa, palavra)
+            audit(s, u.email, "utilizador.pedido_acesso", u.email, equipa=u.request_note[:200])
+            admins, info = us.admin_emails(s), {"email": u.email, "name": u.name, "note": u.request_note}
+    except us.UserError as exc:
+        return _signup_page(request, erros=[str(exc)], form=form, status_code=400)
+    invalidate_nav()
+    if admins and not rp.smtp_problems(st):
+        e = html_escape
+        base = us.base_url(st, str(request.base_url))
+        msg = us.notice_message(st, admins, f"Pedido de acesso ao Atalaia Cert: {info['email']}", [
+            f"{e(info['name'])} (<b>{e(info['email'])}</b>) pediu acesso ao Atalaia Cert.",
+            f"Equipa e motivo: {e(info['note']) or '—'}",
+            f"Para aprovar e escolher o papel, ou recusar: <a href=\"{e(base)}/utilizadores\">{e(base)}/utilizadores</a>."])
+        try:
+            rp.send(st, [msg])
+        except rp.ReportError:
+            logging.getLogger(__name__).warning("Aviso de pedido de acesso não enviado aos administradores")
+    return _signup_page(request, done=True)
+
+
+@app.get("/recuperar")
+def recover_page(request: Request):
+    return _public(request, "recuperar.html", done=False, erro="", smtp_ok=not rp.smtp_problems(get_settings()))
+
+
+@app.post("/recuperar")
+def recover(request: Request, csrf: str = Form(""), email: str = Form("")):
+    """Esqueci-me da palavra-passe: se a conta existe e está ativa, manda um link por email. A resposta é sempre a
+    mesma, para não revelar que contas existem."""
+    check_csrf(request, csrf)
+    st = get_settings()
+    smtp_ok = not rp.smtp_problems(st)
+    key = "recuperar|" + _client_ip(request)
+    if too_many(key):
+        return _public(request, "recuperar.html", done=False, erro="Demasiados pedidos a partir deste endereço: tente mais tarde.", smtp_ok=smtp_ok)
+    note_failure(key)
+    if smtp_ok:
+        msg = None
+        with session_scope() as s:
+            u = us.by_email(s, email)
+            if u is not None and u.status == "ativo":
+                token = us.issue_token(u, "reposicao", st)
+                link = us.link_for(st, str(request.base_url), token)
+                msg = us.email_message(st, u, link, "", st.client_name, us.base_url(st, str(request.base_url)))
+                audit(s, u.email, "utilizador.recuperar", u.email)
+        if msg is not None:
+            try:
+                rp.send(st, [msg])
+            except rp.ReportError:
+                logging.getLogger(__name__).warning("Link de recuperação não enviado")
+    return _public(request, "recuperar.html", done=True, erro="", smtp_ok=smtp_ok)
 
 
 @app.get("/convite/{token}")
@@ -581,6 +781,7 @@ def invite_set(request: Request, token: str, csrf: str = Form(""), palavra: str 
             return r
         kind = u.token_kind
         us.set_password(u, palavra)
+        us.close_sessions(s, username=u.email)
         audit(s, u.email, "utilizador.palavra_passe", u.email, origem=kind)
     forget_logins()
     return _public(request, "convite.html", info=info, token="", done=True, erros=[], password_min=st.password_min)
@@ -618,9 +819,14 @@ def account_password(request: Request, csrf: str = Form(""), atual: str = Form("
         if erros:
             return _account(request, user, erros=erros, status_code=400)
         us.set_password(u, nova)
+        us.close_sessions(s, username=user)
         audit(s, user, "utilizador.palavra_passe", user, origem="conta")
     forget_logins()
-    return _account(request, user, notas=["Palavra-passe alterada. O navegador vai pedir a nova na próxima página."])
+    if getattr(request.state, "via", "") == "sessao":
+        r = _login_page(request, nota="Palavra-passe alterada. Entre com a nova.", email=user)
+        r.delete_cookie(SESSION_COOKIE, path="/")
+        return r
+    return _account(request, user, notas=["Palavra-passe alterada."])
 
 
 # ------------------------------------------------------------------ disposição do Painel

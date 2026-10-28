@@ -555,7 +555,7 @@ class User(Base):
     email: Mapped[str] = mapped_column(String(254), unique=True, index=True)     # em minúsculas; é o nome de utilizador
     name: Mapped[str] = mapped_column(String(128), default="")
     role: Mapped[str] = mapped_column(String(16), default="operador")            # admin | operador | leitura
-    status: Mapped[str] = mapped_column(String(16), default="convidado")         # convidado | ativo | desativado
+    status: Mapped[str] = mapped_column(String(16), default="convidado")         # convidado | pendente | ativo | desativado
     password_hash: Mapped[str] = mapped_column(String(256), default="")
     token_hash: Mapped[str] = mapped_column(String(64), default="", index=True)  # sha256 do link de convite/reposição
     token_expires: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
@@ -565,6 +565,22 @@ class User(Base):
     invited_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     password_set_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     last_seen: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    request_note: Mapped[str] = mapped_column(Text, default="")                  # pedido de acesso: equipa e motivo
+    approved_by: Mapped[str] = mapped_column(String(254), default="")
+    approved_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
+class LoginSession(Base):
+    """Sessão aberta na página de entrada: o cookie leva um código aleatório; aqui fica só o sha256."""
+    __tablename__ = "login_sessions"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    token_hash: Mapped[str] = mapped_column(String(64), unique=True, index=True)
+    username: Mapped[str] = mapped_column(String(254), index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    last_seen: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    ip: Mapped[str] = mapped_column(String(64), default="")
 
 
 class UserPref(Base):

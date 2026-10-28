@@ -15,6 +15,33 @@
 </section>
 {% endif %}
 
+{% if pend %}
+<section class="card flush us-pend" aria-labelledby="h-pend">
+  <h2 id="h-pend">Pedidos de acesso <small>{{ pend|length }} à espera de aprovação</small></h2>
+  <p class="small muted pad">Pessoas que criaram conta na página de entrada. Só entram depois de aprovadas; escolha o papel de cada uma.</p>
+  <div class="scroll"><table>
+    <thead><tr><th>Pessoa</th><th>Equipa e motivo</th><th class="opt">Pedido</th><th>Papel e decisão</th></tr></thead>
+    <tbody>
+    {% for r in pend %}
+    <tr>
+      <td><b>{{ r.name }}</b><div class="mono small">{{ r.email }}</div></td>
+      <td class="small">{{ r.note or '—' }}</td>
+      <td class="opt small">{{ r.created_at|dtt if r.created_at else '—' }}</td>
+      <td><div class="us-acts us-approve">
+        <form method="post" action="/utilizadores/{{ r.id }}/aprovar" class="us-role">
+          <input type="hidden" name="csrf" value="{{ csrf }}">
+          <select name="papel" required aria-label="Papel de {{ r.email }}"><option value="" selected disabled>Escolher o papel</option>{% for k, v in ROLES.items() %}<option value="{{ k }}">{{ v }}</option>{% endfor %}</select>
+          <button class="small-btn primary">Aprovar</button>
+        </form>
+        <form method="post" action="/utilizadores/{{ r.id }}/recusar"><input type="hidden" name="csrf" value="{{ csrf }}"><button class="small-btn us-del" data-confirm="Recusar o pedido de {{ r.email }}? O pedido é apagado.">Recusar</button></form>
+      </div></td>
+    </tr>
+    {% endfor %}
+    </tbody>
+  </table></div>
+</section>
+{% endif %}
+
 <section class="card" aria-labelledby="h-convidar">
   <h2 id="h-convidar">Convidar uma pessoa</h2>
   {% if smtp_problems %}<p class="note warn small">O email não está configurado ({{ smtp_problems|join('; ') }}). O convite cria o link e mostra-o aqui, para o enviar à mão.</p>{% endif %}
@@ -26,8 +53,25 @@
     <button class="primary">Enviar convite</button>
   </form>
   <dl class="us-roles">{% for k, v in ROLES.items() %}<dt>{{ v }}</dt><dd>{{ ROLE_HELP[k] }}</dd>{% endfor %}</dl>
+  <p class="small muted">{% if signup %}Também se pode pedir acesso na página de entrada, em «Criar conta»{% if signup_domains %} (só emails de {% for d in signup_domains %}@{{ d }}{{ ', ' if not loop.last }}{% endfor %}){% endif %}: o pedido aparece aqui para aprovar.{% else %}«Criar conta» está desligado (CERTWATCH_SIGNUP=false): só entra quem for convidado.{% endif %}</p>
   {% if not public_url %}<p class="small muted">Os links usam o endereço por onde está a usar a aplicação. Para fixar outro, defina <span class="mono">CERTWATCH_PUBLIC_URL</span> no .env.</p>{% endif %}
 </section>
+
+<details class="card us-mail"{{ ' open' if smtp_problems }}>
+  <summary><h2 class="inline-h">Envio de email</h2> <span class="tag {{ 'tag-err' if smtp_problems else 'tag-ok' }}">{{ 'não configurado' if smtp_problems else 'configurado' }}</span></summary>
+  {% if smtp_problems %}
+  <p>Os convites, os avisos de pedidos de acesso e os links de palavra-passe saem pelo mesmo servidor de email do relatório. Falta: {{ smtp_problems|join('; ') }}.</p>
+  <p class="small">No servidor, preencha no <span class="mono">.env</span> <span class="mono">CERTWATCH_SMTP_HOST</span>, <span class="mono">CERTWATCH_SMTP_PORT</span>, <span class="mono">CERTWATCH_SMTP_SECURITY</span> (starttls, ssl ou none) e <span class="mono">CERTWATCH_SMTP_FROM</span>; se o servidor pedir autenticação, <span class="mono">CERTWATCH_SMTP_USER</span> e a palavra-passe no ficheiro <span class="mono">secrets/smtp_password</span>. Depois <span class="mono">docker compose up -d</span>. Até lá, o link aparece aqui para o enviar à mão.</p>
+  {% else %}
+  <p class="small muted">Os convites saem pelo servidor de email configurado. Se não chegarem, mande um teste: a página mostra o erro exato do servidor de email.</p>
+  <form method="post" action="/utilizadores/testar-email" class="inline">
+    <input type="hidden" name="csrf" value="{{ csrf }}">
+    <label class="sr" for="test-para">Enviar o teste para</label>
+    <input id="test-para" type="email" name="para" required placeholder="o seu email" value="{{ me if '@' in me else '' }}">
+    <button class="small-btn">Enviar email de teste</button>
+  </form>
+  {% endif %}
+</details>
 
 <section class="card flush" aria-labelledby="h-pessoas">
   <h2 id="h-pessoas">Pessoas com acesso <small>{{ rows|length + (1 if admin_on else 0) }}</small></h2>

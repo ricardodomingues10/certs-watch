@@ -49,6 +49,7 @@
         {% if na %}<span class="badge {{ 'hot' if nh else 'warm' }}">{{ na if na < 100 else '99+' }}</span>{% endif %}
       </a>
       <a class="who{{ ' on' if p == '/conta' }}" href="/conta" title="A minha conta{% if role %}: {{ ROLES[role]|lower }}{% endif %}">{{ user }}</a>
+      {% if via == 'sessao' %}<form method="post" action="/sair" class="sair"><input type="hidden" name="csrf" value="{{ csrf }}"><button class="small-btn" title="Terminar a sessão">Sair</button></form>{% endif %}
       {% if client and client.logo %}<span class="client-logo logo-{{ client.style }} client-top" title="{{ client.name }}"><img src="/marca/logo" alt="{{ client.name or 'Cliente' }}"></span>
       {% elif client and client.name %}<span class="client-top client-top-name">{{ client.name }}</span>{% endif %}
     </header>

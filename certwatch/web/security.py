@@ -5,30 +5,96 @@ import hashlib
 import secrets
 import time
 from datetime import timedelta
+from urllib.parse import quote
 
 from fastapi import Depends, HTTPException, Request, status
 from fastapi.security import HTTPBasic, HTTPBasicCredentials
 
 from ..config import get_settings
 
-_basic = HTTPBasic(realm="Atalaia Cert")
+_basic = HTTPBasic(realm="Atalaia Cert", auto_error=False)   # basic authentication fica para scripts (curl -u)
 CSRF_COOKIE = "cw_csrf"
+SESSION_COOKIE = "cw_sessao"
 
 
 # Verificações bem-sucedidas guardadas 60 s (o scrypt demora ~50 ms; o navegador manda as credenciais em cada pedido).
 # Alterar, desativar ou apagar um utilizador limpa a cache, por isso as mudanças valem logo.
 _OK_CACHE: dict[str, tuple[float, str, str]] = {}
+_SESSION_CACHE: dict[str, tuple[float, str, str]] = {}
 _FAILS: dict[str, list[float]] = {}
 FAIL_LIMIT, FAIL_WINDOW = 10, 900          # 10 tentativas falhadas em 15 min bloqueiam esse utilizador nesse endereço
-READONLY_POST = {"/tema", "/painel/disposicao", "/conta/palavra-passe"}
+READONLY_POST = {"/tema", "/painel/disposicao", "/conta/palavra-passe", "/sair"}
 
 
 def forget_logins() -> None:
     _OK_CACHE.clear()
+    _SESSION_CACHE.clear()
 
 
-def _deny(msg: str = "Credenciais inválidas"):
-    raise HTTPException(status.HTTP_401_UNAUTHORIZED, msg, headers={"WWW-Authenticate": 'Basic realm="Atalaia Cert"'})
+def _deny(request: Request, msg: str = "Credenciais inválidas"):
+    """Sem sessão: uma página aberta no navegador vai para a página de entrada; o resto recebe 401."""
+    if request.method == "GET" and "text/html" in request.headers.get("accept", ""):
+        nxt = request.url.path + (f"?{request.url.query}" if request.url.query else "")
+        raise HTTPException(status.HTTP_303_SEE_OTHER, "Entre primeiro", headers={"Location": "/entrar?next=" + quote(nxt, safe="")})
+    raise HTTPException(status.HTTP_401_UNAUTHORIZED, msg)
+
+
+def too_many(key: str) -> bool:
+    now = time.monotonic()
+    return len([t for t in _FAILS.get(key, []) if now - t < FAIL_WINDOW]) >= FAIL_LIMIT
+
+
+def note_failure(key: str) -> None:
+    now = time.monotonic()
+    _FAILS[key] = [t for t in _FAILS.get(key, []) if now - t < FAIL_WINDOW] + [now]
+
+
+def clear_failures(key: str) -> None:
+    _FAILS.pop(key, None)
+
+
+def check_login(username: str, password: str) -> tuple[str, str] | None:
+    return _check(username, password)
+
+
+def _session_user(token: str) -> tuple[str, str] | None:
+    """(papel, utilizador) da sessão do cookie, se ainda vale (fecha ao fim de CERTWATCH_SESSION_HOURS sem uso)."""
+    from ..db import as_utc, session_scope, utcnow
+    from ..models import LoginSession, User
+    from ..users import token_hash
+    from sqlalchemy import select
+    key = token_hash(token)
+    hit = _SESSION_CACHE.get(key)
+    if hit and time.monotonic() - hit[0] < 30:
+        return hit[1], hit[2]
+    s = get_settings()
+    with session_scope() as db:
+        ls = db.scalar(select(LoginSession).where(LoginSession.token_hash == key))
+        if ls is None:
+            return None
+        now = utcnow()
+        if as_utc(ls.expires_at) < now or now - as_utc(ls.last_seen) > timedelta(hours=s.session_hours):
+            db.delete(ls)
+            return None
+        if ls.username == s.admin_user:
+            if not s.admin_password:
+                return None
+            role = "admin"
+        else:
+            u = db.scalar(select(User).where(User.email == ls.username))
+            if u is None or u.status != "ativo":
+                db.delete(ls)
+                return None
+            role = u.role
+            if u.last_seen is None or now - as_utc(u.last_seen) > timedelta(minutes=5):
+                u.last_seen = now
+        if now - as_utc(ls.last_seen) > timedelta(minutes=5):
+            ls.last_seen = now
+        name = ls.username
+    if len(_SESSION_CACHE) > 500:
+        _SESSION_CACHE.clear()
+    _SESSION_CACHE[key] = (time.monotonic(), role, name)
+    return role, name
 
 
 def _check(username: str, password: str) -> tuple[str, str] | None:
@@ -57,22 +123,28 @@ def _check(username: str, password: str) -> tuple[str, str] | None:
     return role, name
 
 
-def current_user(request: Request, credentials: HTTPBasicCredentials = Depends(_basic)) -> str:
-    who = f"{credentials.username.lower()}|{request.client.host if request.client else ''}"
-    now = time.monotonic()
-    recent = [t for t in _FAILS.get(who, []) if now - t < FAIL_WINDOW]
-    if len(recent) >= FAIL_LIMIT:
-        raise HTTPException(status.HTTP_429_TOO_MANY_REQUESTS, "Demasiadas tentativas falhadas. Tente daqui a 15 minutos.")
-    found = _check(credentials.username, credentials.password)
-    if found is None:
-        if not get_settings().admin_password and not _any_user():
-            raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, "Palavra-passe de administração não configurada")
-        recent.append(now)
-        _FAILS[who] = recent
-        _deny()
-    _FAILS.pop(who, None)
+def current_user(request: Request, credentials: HTTPBasicCredentials | None = Depends(_basic)) -> str:
+    found, via = None, ""
+    if credentials is not None:
+        who = f"{credentials.username.lower()}|{request.client.host if request.client else ''}"
+        if too_many(who):
+            raise HTTPException(status.HTTP_429_TOO_MANY_REQUESTS, "Demasiadas tentativas falhadas. Tente daqui a 15 minutos.")
+        found = _check(credentials.username, credentials.password)
+        if found is None:
+            if not get_settings().admin_password and not _any_user():
+                raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, "Palavra-passe de administração não configurada")
+            note_failure(who)
+            raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Credenciais inválidas")
+        clear_failures(who)
+        via = "basic"
+    else:
+        token = request.cookies.get(SESSION_COOKIE)
+        found = _session_user(token) if token and len(token) < 100 else None
+        via = "sessao"
+        if found is None:
+            _deny(request)
     role, name = found
-    request.state.user, request.state.role = name, role
+    request.state.user, request.state.role, request.state.via = name, role, via
     if role == "leitura" and request.method not in ("GET", "HEAD", "OPTIONS") and request.url.path not in READONLY_POST:
         raise HTTPException(status.HTTP_403_FORBIDDEN, "A sua conta é só de consulta: não pode alterar nada.")
     return name

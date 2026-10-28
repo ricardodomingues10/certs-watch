@@ -178,7 +178,9 @@ def test_atalaia_brand_and_logo(env, monkeypatch):
         assert "@keyframes atl-foco" in css and ".atalaia.atl-anim-parado" in css
         icon = c.get("/static/atalaia-icone.svg")
         assert icon.status_code == 200 and icon.headers["content-security-policy"] == SVG_CSP and "<script" not in icon.text
-        assert c.get("/certificados").headers["www-authenticate"] == 'Basic realm="Atalaia Cert"'
+        r = c.get("/certificados", headers={"Accept": "text/html"}, follow_redirects=False)       # sem sessão: página de entrada
+        assert r.status_code == 303 and r.headers["location"] == "/entrar?next=%2Fcertificados"
+        assert "www-authenticate" not in c.get("/certificados").headers                          # sem janela do navegador
         st = replace(config.get_settings(), logo_animation="auto")
         monkeypatch.setattr(webapp, "get_settings", lambda: st)
         assert 'class="atalaia atl-anim-auto' in c.get("/certificados", auth=AUTH).text

@@ -1193,3 +1193,12 @@ body.pub { min-height: 100vh; display: grid; place-items: center; padding: 24px 
   .pn-cell[class*="w-"] { grid-column: 1 / -1; }
   .pn-cell[class*="h-"] { height: auto; }
 }
+.sair { margin: 0; } .sair .small-btn { margin: 0; }
+.pub-brand { color: var(--ink); } .pub-brand:hover { text-decoration: none; }
+.pub-links { margin: 14px 0 0; }
+.pub-foot { margin: 0; text-align: center; }
+.us-pend { border-color: color-mix(in srgb, var(--warn) 45%, var(--line)); }
+.us-approve select:invalid { color: var(--muted); }
+.us-mail > summary { display: flex; align-items: center; gap: 10px; }
+.us-mail > summary .inline-h { margin: 0; }
+.us-mail form.inline { margin: 6px 0 0; }

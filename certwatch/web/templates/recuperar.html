@@ -1,0 +1,21 @@
+{% extends "_publico.html" %}
+{% block title %}Recuperar a palavra-passe{% endblock %}
+{% block body %}
+<h1>Esqueci-me da palavra-passe</h1>
+{% if erro %}<p class="note bad" role="alert">{{ erro }}</p>{% endif %}
+{% if not smtp_ok %}
+<p>O envio de email não está configurado nesta instalação. Peça a quem gere os utilizadores um link para definir uma palavra-passe nova.</p>
+<p><a class="button" href="/entrar">Voltar à entrada</a></p>
+{% elif done %}
+<p role="status">Se existir uma conta ativa com esse email, enviámos-lhe um link para definir uma palavra-passe nova. Veja também a pasta de spam.</p>
+<p><a class="button" href="/entrar">Voltar à entrada</a></p>
+{% else %}
+<p class="muted">Escreva o email da sua conta. Se a conta existir e estiver ativa, recebe um link para definir uma palavra-passe nova.</p>
+<form method="post" action="/recuperar" class="stack">
+  <input type="hidden" name="csrf" value="{{ csrf }}">
+  <label>Email<input type="email" name="email" required autocomplete="username" autofocus></label>
+  <button class="primary">Enviar o link</button>
+</form>
+<p class="pub-links small"><a href="/entrar">Voltar à entrada</a></p>
+{% endif %}
+{% endblock %}

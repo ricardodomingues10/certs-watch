@@ -1,0 +1,22 @@
+{#- Base das páginas que se abrem sem sessão: entrar, criar conta, recuperar a palavra-passe, convite. -#}
+{% from "_atalaia.html" import atalaia %}<!doctype html>
+<html lang="pt-PT" data-palette="{{ palette or 'consola' }}">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="referrer" content="no-referrer">
+  <title>{% block title %}Entrar{% endblock %} · Atalaia Cert</title>
+  <link rel="icon" href="/static/atalaia-icone.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="/static/style.css">
+  <script src="/static/app.js" defer></script>
+</head>
+<body class="pub">
+<main class="pub-main">
+  <a class="pub-brand" href="/entrar" aria-label="Atalaia Cert, entrar">{{ atalaia("p", "pub-logo", "parado") }}<span><b>Atalaia</b> <span class="mono">Cert</span>{% if client.name %}<small>{{ client.name }}</small>{% endif %}</span></a>
+  <section class="card pub-card">
+    {% block body %}{% endblock %}
+  </section>
+  {% block after %}{% endblock %}
+</main>
+</body>
+</html>

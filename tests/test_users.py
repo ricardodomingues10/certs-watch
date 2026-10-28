@@ -180,3 +180,129 @@ def test_panel_layout_per_user(web):
         assert s.scalar(select(UserPref)).username == "admin"
     web.post("/painel/disposicao", json={"reset": True}, headers={"X-CSRF-Token": csrf(web)}, auth=AUTH)
     assert re.findall(r'data-card="([a-z0-9]+)"', web.get("/", auth=AUTH).text)[0] == "cobertura"
+
+
+def login(c, email, pw, nxt="/"):
+    c.get("/entrar")
+    return c.post("/entrar", data={"csrf": csrf(c), "email": email, "palavra": pw, "next": nxt}, follow_redirects=False)
+
+
+def test_login_page_session_and_logout(web):
+    r = web.get("/certificados", headers={"Accept": "text/html"}, follow_redirects=False)
+    assert r.status_code == 303 and r.headers["location"] == "/entrar?next=%2Fcertificados"
+    page = web.get("/entrar?next=/certificados").text
+    assert "Entrar" in page and 'href="/registar"' in page and 'href="/recuperar"' in page
+    bad = login(web, "admin", "errada")
+    assert bad.status_code == 401 and "Email ou palavra-passe errados" in bad.text and "cw_sessao" not in bad.cookies
+    ok = login(web, "admin", "teste-admin-123", "/certificados")
+    assert ok.status_code == 303 and ok.headers["location"] == "/certificados"
+    token = ok.cookies["cw_sessao"]
+    with session_scope() as s:
+        from certwatch.models import LoginSession
+        ls = s.scalar(select(LoginSession))
+        assert ls.username == "admin" and ls.token_hash == us.token_hash(token) and token not in ls.token_hash
+    page = web.get("/certificados")                                                    # o cookie basta, sem basic auth
+    assert page.status_code == 200 and 'action="/sair"' in page.text
+    assert login(web, "//evil.example", "x", "https://evil.example").status_code == 401
+    web.post("/sair", data={"csrf": csrf(web)}, follow_redirects=False)
+    web.cookies.set("cw_sessao", token)                                                 # o código antigo já não vale
+    assert web.get("/certificados").status_code == 401
+
+
+def test_signup_needs_admin_approval(web, monkeypatch):
+    from certwatch.web import app as webapp
+    st = replace(config.get_settings(), smtp_host="smtp.exemplo.pt", smtp_from="atalaia@exemplo.pt", signup_domains=("scml.pt",))
+    monkeypatch.setattr(webapp, "get_settings", lambda: st)
+    sent = []
+    monkeypatch.setattr(webapp.rp, "send", lambda settings, msgs: sent.extend(msgs))
+    # há um administrador com email para receber o aviso
+    with session_scope() as s:
+        boss = User(email="chefe@scml.pt", name="Chefe", role="admin", status="ativo")
+        us.set_password(boss, PW)
+        s.add(boss)
+    web.get("/registar")
+    form = {"csrf": csrf(web), "nome": "Marta Lopes", "email": "marta@gmail.com", "equipa": "Sistemas Centrais",
+            "palavra": PW, "confirmar": PW}
+    r = web.post("/registar", data=form)
+    assert r.status_code == 400 and "só emails de @scml.pt" in r.text
+    r = web.post("/registar", data={**form, "email": "Marta@SCML.pt"})
+    assert r.status_code == 200 and "Pedido enviado" in r.text
+    assert sent and sent[-1]["To"] == "chefe@scml.pt" and "marta@scml.pt" in sent[-1]["Subject"]
+    with session_scope() as s:
+        u = us.by_email(s, "marta@scml.pt")
+        assert u.status == "pendente" and u.request_note == "Sistemas Centrais" and PW not in u.password_hash
+    assert web.post("/registar", data={**form, "email": "marta@scml.pt"}).status_code == 400         # já há pedido
+    wait = login(web, "marta@scml.pt", PW)
+    assert wait.status_code == 403 and "à espera de aprovação" in wait.text
+    assert web.get("/", auth=("marta@scml.pt", PW)).status_code == 401
+    # o administrador vê o pedido e aprova-o com um papel
+    page = web.get("/utilizadores", auth=AUTH).text
+    assert "Pedidos de acesso" in page and "Sistemas Centrais" in page
+    with session_scope() as s:
+        uid = us.by_email(s, "marta@scml.pt").id
+    assert web.post(f"/utilizadores/{uid}/aprovar", data={"csrf": csrf(web), "papel": ""}, auth=AUTH).status_code == 400
+    r = web.post(f"/utilizadores/{uid}/aprovar", data={"csrf": csrf(web), "papel": "operador"}, auth=AUTH)
+    assert r.status_code == 200 and "aprovado como operador" in r.text and "Foi avisado por email" in r.text
+    assert sent[-1]["To"] == "marta@scml.pt" and "aprovado" in sent[-1]["Subject"]
+    ok = login(web, "marta@scml.pt", PW)
+    assert ok.status_code == 303
+    with session_scope() as s:
+        u = us.by_email(s, "marta@scml.pt")
+        assert u.status == "ativo" and u.role == "operador" and u.approved_by == "admin"
+    # recusar apaga o pedido
+    web.post("/registar", data={**form, "email": "outro@scml.pt", "nome": "Outro"})
+    with session_scope() as s:
+        oid = us.by_email(s, "outro@scml.pt").id
+    web.post(f"/utilizadores/{oid}/recusar", data={"csrf": csrf(web)}, auth=AUTH)
+    with session_scope() as s:
+        assert us.by_email(s, "outro@scml.pt") is None
+
+
+def test_signup_can_be_turned_off(web, monkeypatch):
+    from certwatch.web import app as webapp
+    st = replace(config.get_settings(), signup=False)
+    monkeypatch.setattr(webapp, "get_settings", lambda: st)
+    assert 'href="/registar"' not in web.get("/entrar").text
+    r = web.post("/registar", data={"csrf": csrf(web), "nome": "X", "email": "x@exemplo.pt", "palavra": PW, "confirmar": PW})
+    assert r.status_code == 400 and "desligados" in r.text
+
+
+def test_recover_and_test_email(web, monkeypatch):
+    from certwatch.web import app as webapp
+    token, _ = invite(web, "ana@exemplo.pt")
+    accept(web, token)
+    st = replace(config.get_settings(), smtp_host="smtp.exemplo.pt", smtp_from="atalaia@exemplo.pt")
+    monkeypatch.setattr(webapp, "get_settings", lambda: st)
+    sent = []
+    monkeypatch.setattr(webapp.rp, "send", lambda settings, msgs: sent.extend(msgs))
+    web.get("/recuperar")
+    same = [web.post("/recuperar", data={"csrf": csrf(web), "email": e}).text for e in ("ana@exemplo.pt", "ninguem@exemplo.pt")]
+    assert all("Se existir uma conta ativa" in t for t in same)                       # não revela quem tem conta
+    assert len(sent) == 1 and sent[0]["To"] == "ana@exemplo.pt"
+    link = re.search(r'href="(http[^"]+/convite/[^"]+)"', sent[0].get_body(("html",)).get_content()).group(1)
+    assert "pedido, na página de entrada" in sent[0].get_body(("html",)).get_content()
+    new = link.rsplit("/", 1)[1]
+    assert accept(web, new, "outra frase bem comprida").status_code == 200
+    assert login(web, "ana@exemplo.pt", "outra frase bem comprida").status_code == 303
+    # teste de email: envia ou mostra o erro do servidor de email
+    r = web.post("/utilizadores/testar-email", data={"csrf": csrf(web), "para": "admin@exemplo.pt"}, auth=AUTH)
+    assert "Email de teste enviado para admin@exemplo.pt" in r.text and sent[-1]["To"] == "admin@exemplo.pt"
+
+    def boom(settings, msgs):
+        raise webapp.rp.ReportError("O servidor de email recusou ou não respondeu: SMTPRecipientsRefused")
+    monkeypatch.setattr(webapp.rp, "send", boom)
+    r = web.post("/utilizadores/testar-email", data={"csrf": csrf(web), "para": "admin@exemplo.pt"}, auth=AUTH)
+    assert "não foi enviado" in r.text and "SMTPRecipientsRefused" in r.text
+
+
+def test_disabling_closes_sessions(web):
+    token, _ = invite(web, "rui@exemplo.pt")
+    accept(web, token)
+    ok = login(web, "rui@exemplo.pt", PW)
+    sess = ok.cookies["cw_sessao"]
+    assert web.get("/certificados").status_code == 200
+    with session_scope() as s:
+        uid = us.by_email(s, "rui@exemplo.pt").id
+    web.post(f"/utilizadores/{uid}/desativar", data={"csrf": csrf(web)}, auth=AUTH)
+    web.cookies.set("cw_sessao", sess)
+    assert web.get("/certificados").status_code == 401
