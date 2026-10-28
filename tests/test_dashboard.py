@@ -89,13 +89,25 @@ def test_dashboard_page_and_evidence(env, monkeypatch):
     from certwatch.web.app import app
     with TestClient(app) as c:
         page = c.get("/", auth=AUTH).text
-        assert "Expiram sem pedido" in page and "semped.exemplo.pt" in page and "comped.exemplo.pt" not in page.split("Movimento nos pedidos")[0]
+        abrir = page.split('id="por-abrir"')[1].split('id="h-curso"')[0]          # o cartão Pedidos por abrir
+        assert "Pedidos por abrir" in page and "semped.exemplo.pt" in abrir and "comped.exemplo.pt" not in abrir
+        assert "O que está mal" in page and "O que está por fazer" in page and "Cobertura de pedidos" in page
+        assert "Testes nos servidores" in page and "Rede" in page and "Inventário" in page
+        assert "Prazos" in page and "certificados e APIs" in page
         assert "mudou de fase" in page and "CSR enviado à CA" in page and "pedido novo" in page
-        assert "Pedidos parados" in page and "2002" in page and "14 dias" in page
-        assert "Conformidade e evidência" in page and "Gestão de ativos" in page
+        assert "Pedidos parados há ≥" in page and "2002" in page and "parado 14 dias" in page
+        assert "Pedidos em curso" in page and "Conformidade e evidência" in page and "Gestão de ativos" in page
         assert 'name="cn" value="semped.exemplo.pt"' not in page or "Criar pedidos para os selecionados" in page
+        assert "Ver para" not in page                                               # sem filtro por equipa
         week = c.get("/?janela=168", auth=AUTH).text
         assert "7 dias" in week
+        # segunda vista: o mesmo trabalho por hoje, esta semana e este mês
+        work = c.get("/?vista=trabalho", auth=AUTH).text
+        assert 'aria-current="page">Por semana e mês' in work
+        for lane in ("Hoje", "Esta semana", "Este mês"):
+            assert f">{lane}</h2>" in work
+        assert "Abrir pedido: semped.exemplo.pt" in work and "Pedido 2002 sem movimento" in work
+        assert "Renovar o segredo: Pagamentos" in work
         csv = c.get("/painel/evidencia.csv", auth=AUTH)
         text = csv.content.decode("utf-8-sig")
         assert csv.status_code == 200 and text.splitlines()[0].startswith("Tipo;Nome;Expira")
@@ -137,6 +149,9 @@ def test_client_branding(env, tmp_path, monkeypatch):
         (brand / "logo.svg").write_text('<svg xmlns="http://www.w3.org/2000/svg"><script>alert(1)</script></svg>')
         page = c.get("/", auth=AUTH).text
         assert 'src="/marca/logo"' in page
+        top = page.split('class="topbar"')[1].split("</header>")[0]                             # barra de cima:
+        assert top.index('class="sino') < top.index('class="who"') < top.index("client-top")  # alertas, utilizador, logo
+        assert "/marca/logo" not in page.split('class="rail"')[1].split("</nav>")[0]           # já não está na coluna
         r = c.get("/marca/logo", auth=AUTH)
         assert r.status_code == 200 and r.headers["content-type"].startswith("image/svg+xml")
         assert "sandbox" in r.headers["content-security-policy"]                                # o SVG não corre scripts
@@ -154,6 +169,9 @@ def test_atalaia_brand_and_logo(env, monkeypatch):
         assert " · Atalaia Cert" in page and 'href="/static/atalaia-icone.svg"' in page
         assert page.count('<svg class="atalaia atl-anim-sempre') == 2                       # coluna e barra do telemóvel
         assert 'id="atl-feixe-r"' in page and 'id="atl-feixe-m"' in page                   # ids únicos por logótipo
+        assert '<span class="name"><i class="l1">A</i><i class="l2">t</i>' in page            # cada letra acende sozinha
+        css = c.get("/static/style.css").text
+        assert "@keyframes atl-letra" in css and "foco-pagina" not in css and '"Manrope"' in css
         head = page.split("<main>")[0]
         assert "<style" not in head and "<script>" not in head and 'class="atl-lt"' in head
         css = c.get("/static/style.css").text
@@ -166,9 +184,9 @@ def test_atalaia_brand_and_logo(env, monkeypatch):
         assert 'class="atalaia atl-anim-auto' in c.get("/certificados", auth=AUTH).text
 
 
-def test_busy_state_drives_the_page_beam(env):
-    """Enquanto há trabalho em curso (execuções na fila ou a correr, recentes), a página diz o quê e o foco varre a
-    página; /estado/ocupado diz quando acabou. Trabalho parado há mais de 2 h não conta (ex.: worker desligado)."""
+def test_busy_state_note(env):
+    """Enquanto há trabalho em curso (execuções na fila ou a correr, recentes), a barra de cima diz o quê;
+    /estado/ocupado diz quando acabou (já não há foco a varrer a página). Trabalho parado há mais de 2 h não conta (ex.: worker desligado)."""
     from certwatch.models import JobRun
     from certwatch.web import app as webapp
     with TestClient(webapp.app) as c:
@@ -184,7 +202,7 @@ def test_busy_state_drives_the_page_beam(env):
         assert 'data-ocupado="1"' in page and "Verificar servidores (a correr)" in page
         assert c.get("/estado/ocupado", auth=AUTH).json() == {"ocupado": ["Verificar servidores (a correr)"]}
         js = c.get("/static/app.js").text
-        assert "/estado/ocupado" in js and "foco-pagina" in js
+        assert "/estado/ocupado" in js and "foco-pagina" not in js
 
 
 def test_alert_bell_next_to_user(env):

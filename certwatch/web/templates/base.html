@@ -5,7 +5,8 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>{% block title %}Painel{% endblock %} · Atalaia Cert{% if client and client.name %} · {{ client.name }}{% endif %}</title>
   <link rel="icon" href="/static/atalaia-icone.svg" type="image/svg+xml">
-  <link rel="preload" href="/static/fonts/public-sans-latin-wght-normal.woff2" as="font" type="font/woff2" crossorigin>
+  <link rel="preload" href="/static/fonts/manrope-latin-wght-normal.woff2" as="font" type="font/woff2" crossorigin>
+  <link rel="preload" href="/static/fonts/bricolage-grotesque-latin-800-normal.woff2" as="font" type="font/woff2" crossorigin>
   <link rel="preload" href="/static/fonts/ibm-plex-mono-latin-500-normal.woff2" as="font" type="font/woff2" crossorigin>
   <link rel="stylesheet" href="/static/style.css">
   <script src="/static/app.js" defer></script>
@@ -21,16 +22,11 @@
     <label for="menu-toggle" class="menu-btn" aria-label="Abrir ou fechar o menu"><span></span><span></span><span></span></label>
   </header>
   <nav class="rail" aria-label="Navegação principal">
-    <a class="brand brand-tower" href="/" aria-label="Atalaia Cert, painel">
+    <a class="brand brand-tower atl-anim-{{ client.anim if client else 'sempre' }}" href="/" aria-label="Atalaia Cert, painel">
       {{ atalaia("r", "tower", client.anim if client else "sempre") }}
-      <span class="wordmark"><span class="name">Atalaia</span><span class="kind">Cert</span></span>
+      {#- cada letra num elemento: acende quando o foco da vigia lhe passa por cima (style.css, atl-letra) -#}
+      <span class="wordmark" aria-hidden="true"><span class="name">{% for ch in "Atalaia" %}<i class="l{{ loop.index }}">{{ ch }}</i>{% endfor %}</span><span class="kind">{% for ch in "Cert" %}<i class="l{{ loop.index }}">{{ ch }}</i>{% endfor %}</span></span>
     </a>
-    {% if client and (client.logo or client.name) %}
-    <div class="client" title="{{ client.name }}">
-      {% if client.logo %}<span class="client-logo logo-{{ client.style }}"><img src="/marca/logo" alt="{{ client.name or 'Cliente' }}"></span>{% endif %}
-      {% if client.name %}<span class="client-name">{{ client.name }}</span>{% endif %}
-    </div>
-    {% endif %}
     {% for g in navtree %}
     {% if g.label %}<h4>{{ g.label }}</h4>{% endif %}
     {% for i in g['items'] %}
@@ -44,7 +40,7 @@
         <input type="search" id="global-q" name="q" value="{{ request.query_params.get('q', '') if p == '/pesquisa' else '' }}"
                placeholder="Procurar certificado, servidor, emissor ou API" aria-label="Procurar">
       </form>
-      {% if busy %}<span class="ocupado" data-ocupado="{{ busy|length }}" role="status" title="A vigia varre a página com o foco enquanto isto corre">A trabalhar: <span>{{ busy|join(' · ') }}</span></span>{% endif %}
+      {% if busy %}<span class="ocupado" data-ocupado="{{ busy|length }}" role="status" title="Trabalho em curso no servidor">A trabalhar: <span>{{ busy|join(' · ') }}</span></span>{% endif %}
       {% set na = nav.alertas or 0 %}{% set nh = nav.alertas_altos or 0 %}
       <a class="sino{{ ' on' if p.startswith('/findings') }}" href="/findings"{% if p.startswith('/findings') %} aria-current="page"{% endif %}
          title="{{ na }} alerta{{ 's' if na != 1 }} aberto{{ 's' if na != 1 }}{% if nh %}, {{ nh }} alto{{ 's' if nh != 1 }} ou crítico{{ 's' if nh != 1 }}{% endif %}"
@@ -53,6 +49,8 @@
         {% if na %}<span class="badge {{ 'hot' if nh else 'warm' }}">{{ na if na < 100 else '99+' }}</span>{% endif %}
       </a>
       <span class="who">{{ user }}</span>
+      {% if client and client.logo %}<span class="client-logo logo-{{ client.style }} client-top" title="{{ client.name }}"><img src="/marca/logo" alt="{{ client.name or 'Cliente' }}"></span>
+      {% elif client and client.name %}<span class="client-top client-top-name">{{ client.name }}</span>{% endif %}
     </header>
     <main>
       <div class="page-head">

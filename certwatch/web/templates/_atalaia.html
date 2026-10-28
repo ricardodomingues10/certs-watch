@@ -1,14 +1,16 @@
 {#- Logótipo da Atalaia Cert: uma idosa de lenço preto vigia do alto de uma atalaia, de frente para nós, com a mão
-    direita a fazer de pala sobre os olhos e um foco na mão esquerda cujo feixe acompanha o olhar.
+    direita a fazer de pala sobre os olhos e um foco na mão esquerda. Na coluna do menu o feixe sai do desenho e sobe
+    pelo nome da aplicação, ao lado.
     SVG inline (sem <style> nem scripts): a animação está em style.css (classes atl-*), por isso respeita a CSP.
     uid torna únicos os id dos gradientes quando há mais do que um logótipo na página. -#}
 {% macro atalaia(uid, cls="", anim="sempre") -%}
 <svg class="atalaia atl-anim-{{ anim }} {{ cls }}" viewBox="-2 -10 124 122" role="img" aria-label="Atalaia Cert: uma idosa de lenço preto vigia do alto de uma atalaia com um foco na mão" focusable="false">
   <defs>
-    <linearGradient id="atl-feixe-{{ uid }}" gradientUnits="userSpaceOnUse" x1="85" y1="31" x2="85" y2="-30">
-      <stop offset="0" stop-color="#fff4c8" stop-opacity=".9"/>
-      <stop offset=".35" stop-color="#ffe9a0" stop-opacity=".45"/>
-      <stop offset=".75" stop-color="#ffe9a0" stop-opacity="0"/>
+    <linearGradient id="atl-feixe-{{ uid }}" gradientUnits="userSpaceOnUse" x1="85" y1="31" x2="85" y2="-149">
+      <stop offset="0" stop-color="#fff4c8" stop-opacity=".85"/>
+      <stop offset=".3" stop-color="#ffe9a0" stop-opacity=".42"/>
+      <stop offset=".62" stop-color="#ffe9a0" stop-opacity=".2"/>
+      <stop offset=".9" stop-color="#ffe9a0" stop-opacity="0"/>
     </linearGradient>
     <linearGradient id="atl-esbate-{{ uid }}" x1="0" y1="0" x2="0" y2="1">
       <stop offset=".8" stop-color="#fff"/><stop offset="1" stop-color="#fff" stop-opacity="0"/>
@@ -16,9 +18,9 @@
     <mask id="atl-base-{{ uid }}"><rect x="-2" y="-10" width="124" height="122" fill="url(#atl-esbate-{{ uid }})"/></mask>
   </defs>
   <g class="atl-vigia">
-    {#- o feixe do foco fica atrás da vigia: passa-lhe por trás da cabeça quando aponta para a esquerda -#}
+    {#- o feixe do foco (atrás da vigia e do nome, que fica por cima e "acende") -#}
     <g class="atl-ab atl-feixe"><g class="atl-lt">
-      <path d="M83.3 31 L86.7 31 L100 -30 L70 -30 Z" fill="url(#atl-feixe-{{ uid }})"/>
+      <path d="M83.3 31 L86.7 31 L106 -149 L64 -149 Z" fill="url(#atl-feixe-{{ uid }})"/>
       <circle cx="85" cy="31" r="3.2" fill="#fff4c8" opacity=".55"/>
     </g></g>
     {#- corpo: vestido preto, xaile pelos ombros e uma cruz de ouro -#}

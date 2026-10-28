@@ -182,6 +182,170 @@ def kpis(items: list[dict], stale: list[dict], activity: list[dict], nis: dict, 
     }
 
 
+PHASE_ORDER = ("Log", "Classify", "FirstLineSupport", "Escalate", "Approve", "Plan", "Build", "Test", "Execute",
+               "Implement", "Review", "Accept", "Validate")
+MESES = ("janeiro", "fevereiro", "março", "abril", "maio", "junho", "julho", "agosto", "setembro", "outubro",
+         "novembro", "dezembro")
+
+
+def _plural(n: int, one: str, many: str) -> str:
+    return f"{n} {one if n == 1 else many}"
+
+
+def deadline_buckets(inv: list[dict], snap: Snapshot, now: datetime) -> dict:
+    """Certificados e APIs por prazo: expirado, até 7 dias, 8 a 20, 21 a 90 e mais de 90 (sem data fica de fora).
+    Devolve também a posição de cada segmento numa barra de 0 a 1000 (SVG: a CSP não deixa usar style)."""
+    days = [r["dias"] for r in inv if r["dias"] is not None]
+    days += [days_left(a.expiry, now) for a in snap.apis if a.expiry is not None]
+    defs = [("expirado", "expirado", "expirados", lambda d: d < 0), ("7", "até 7 dias", "até 7 dias", lambda d: 0 <= d <= 7),
+            ("20", "8 a 20 dias", "8 a 20 dias", lambda d: 7 < d <= 20), ("90", "21 a 90 dias", "21 a 90 dias", lambda d: 20 < d <= 90),
+            ("mais", "mais de 90 dias", "mais de 90 dias", lambda d: d > 90)]
+    total = len(days)
+    out, x = [], 0.0
+    for key, one, many, test in defs:
+        n = sum(1 for d in days if test(d))
+        w = 1000 * n / total if total else 0
+        out.append({"key": key, "label": one if n == 1 else many, "n": n, "x": round(x, 1), "w": round(max(w - 6, 0), 1) if n else 0})
+        x += w
+    return {"total": total, "segs": out}
+
+
+def layer_summary(matrix: list) -> list[dict]:
+    """Por camada de testes: quantos servidores falham, têm atenção, passam ou ainda não foram testados nela
+    (o pior resultado dos testes dessa camada em cada servidor)."""
+    from .checks import CHECK_BY_ID, LAYERS, STATUS_RANK
+    out = []
+    for lid, label, question in LAYERS:
+        c = Counter()
+        for row in matrix:
+            worst = None
+            for cid, res in row.results.items():
+                cd = CHECK_BY_ID.get(cid)
+                if cd and cd.layer == lid and res.status != "na" and (worst is None or STATUS_RANK[res.status] > STATUS_RANK[worst]):
+                    worst = res.status
+            c[worst or "na"] += 1
+        state = "falha" if c["falha"] else "aviso" if c["aviso"] else "ok" if c["ok"] else "nt"
+        text = (_plural(c["falha"], "falha", "falham") if c["falha"] else _plural(c["aviso"], "com atenção", "com atenção") if c["aviso"]
+                else "todos passam" if c["ok"] and not c["nt"] else f"{c['ok']} passam" if c["ok"] else "por testar")
+        first = next((cd.id for cd in CHECK_BY_ID.values() if cd.layer == lid), "")
+        out.append({"id": lid, "label": label, "question": question, "state": state, "text": text,
+                    "falha": c["falha"], "aviso": c["aviso"], "ok": c["ok"], "nt": c["nt"], "teste": first})
+    return out
+
+
+def open_by_phase(rows: list[dict]) -> list[dict]:
+    """Pedidos abertos por fase do SMAX, pela ordem habitual das fases (as desconhecidas no fim)."""
+    c = Counter((r["t"].phase or "sem fase") for r in rows if r["aberto"])
+    order = {p.lower(): i for i, p in enumerate(PHASE_ORDER)}
+    return [{"fase": f, "n": n} for f, n in sorted(c.items(), key=lambda kv: (order.get(kv[0].lower(), 99), kv[0]))]
+
+
+def headline(k: dict, n_open_items: int) -> dict:
+    """A frase do topo do Painel: o que pede atenção, por ordem de gravidade."""
+    parts = []
+    if k["expirados_em_uso"]:
+        parts.append(_plural(k["expirados_em_uso"], "certificado expirado ainda em uso", "certificados expirados ainda em uso"))
+    if n_open_items:
+        parts.append(_plural(n_open_items, "pedido por abrir", "pedidos por abrir"))
+    if k["criticos"]:
+        parts.append(_plural(k["criticos"], "alerta crítico", "alertas críticos"))
+    if k["parados"]:
+        parts.append(_plural(k["parados"], "pedido parado", "pedidos parados"))
+    if k.get("atrasados"):
+        parts.append(_plural(k["atrasados"], "pedido com o certificado já expirado", "pedidos com o certificado já expirado"))
+    if not parts:
+        return {"partes": [], "fim": "Nada pede atenção agora: tudo o que expira em breve tem pedido em curso."}
+    fim = "" if k["expirados_em_uso"] else "Nenhum certificado expirado continua em uso."
+    return {"partes": parts, "fim": fim}
+
+
+def _tone(d: int | None) -> str:
+    if d is None:
+        return "n"
+    return "x" if d < 0 else "r" if d <= 7 else "a" if d <= 20 else "n"
+
+
+def _when(d: int) -> str:
+    if d < 0:
+        return f"expirou há {-d} {'dia' if d == -1 else 'dias'}"
+    return "hoje" if d == 0 else f"{d} {'dia' if d == 1 else 'dias'}"
+
+
+def work_queue(items: list[dict], nis: dict, k: dict, stale: list[dict], tcounts: dict, nav: dict,
+               stats: dict, fresh: list[dict], now: datetime, can_create: bool) -> dict:
+    """O trabalho do Painel em três colunas, por urgência: hoje (expirado ou até 2 dias, alertas críticos), esta
+    semana (até 7 dias, pedidos parados, CMDB e internet por rever) e este mês (o resto)."""
+    lanes: dict[str, list[dict]] = {"hoje": [], "semana": [], "mes": []}
+
+    def add(lane, quando, tom, titulo, detalhe, acao, href="", cn=None):
+        lanes[lane].append({"quando": quando, "tom": tom, "titulo": titulo, "detalhe": detalhe, "acao": acao,
+                            "href": href, "cn": cn})
+
+    for r in nis["expirados_em_uso"]:
+        add("hoje", _when(r["dias"]), "x", f"Substituir {r['cn']}", "Expirou e o servidor continua a apresentá-lo.",
+            "Ver o certificado", f"/certificados/detalhe?cn={r['cn']}")
+    if k["criticos"]:
+        add("hoje", _plural(k["criticos"], "crítico", "críticos"), "r", f"Decidir sobre {_plural(k['criticos'], 'alerta crítico', 'alertas críticos')}",
+            "Corrigir ou aceitar o risco, com justificação.", "Ver alertas", "/findings?sev=critica")
+    if tcounts.get("atrasados"):
+        n = tcounts["atrasados"]
+        add("hoje", _plural(n, "pedido", "pedidos"), "x", "Pedidos com o certificado já expirado",
+            "O pedido continua aberto e o certificado já expirou.", "Ver pedidos", "/pedidos?vista=atrasados")
+    if k["nao_instalados"]:
+        add("hoje", _plural(k["nao_instalados"], "certificado", "certificados"), "r", "Instalar certificados já renovados",
+            "Há certificado novo, mas o servidor ainda apresenta o antigo.", "Ver quais", "/findings?tipo=RENOVACAO_NAO_INSTALADA")
+    for it in items:
+        d = it["dias"]
+        lane = "hoje" if d <= 2 else "semana" if d <= 7 else "mes"
+        outra = it["pedido"] and it["pedido"].get("state") == "outra_data" and it["pedido"].get("main")
+        if it["tipo"] == "API":
+            add(lane, _when(d), _tone(d), f"Renovar o segredo: {it['nome']}",
+                f"{it['emissor'] or 'API'}; o pedido abre-se à mão no SMAX.", "Ver a API", it["url"])
+        elif outra:
+            m = it["pedido"]["main"]
+            add(lane, _when(d), _tone(d), f"Pedido {m['id']} com outra data",
+                f"O pedido refere outra data; {it['nome']} expira a {it['expira'].strftime('%d-%m-%Y') if it['expira'] else '—'}.",
+                "Ver o pedido", f"/pedidos/smax/{m['id']}")
+        else:
+            add(lane, _when(d), _tone(d), f"Abrir pedido: {it['nome']}",
+                f"Expira a {it['expira'].strftime('%d-%m-%Y') if it['expira'] else '—'}" + (f". Emissor {it['emissor']}." if it["emissor"] else "."),
+                "Criar pedido" if can_create and it["criar"] else "Ver o certificado", it["url"], it["criar"] if can_create else None)
+    for t in stale:
+        lane = "semana" if t["cert_dias"] is None or t["cert_dias"] <= 30 else "mes"
+        cert = f"{t['alvo']} expira em {t['cert_dias']} dias" if t["alvo"] and t["cert_dias"] is not None and t["cert_dias"] >= 0 else (t["alvo"] or "")
+        quem = " · ".join(x for x in (t["grupo"], t["responsavel"]) if x)
+        add(lane, f"parado {t['parado']} dias" if t["parado"] is not None else "parado", "a", f"Pedido {t['pedido']} sem movimento",
+            "; ".join(x for x in (cert, quem) if x) or "Sem atualização nem comentários.", "Ver o pedido", f"/pedidos/smax/{t['pedido']}")
+    if nav.get("reconc_dif"):
+        n = nav["reconc_dif"]
+        add("semana", _plural(n, "alteração", "alterações"), "n", f"Rever {_plural(n, 'alteração', 'alterações')} da CMDB",
+            f"Comparação #{nav.get('reconc_run')}. Nada é escrito sem confirmar.", "Rever", f"/cmdb-final/{nav.get('reconc_run')}")
+    if nav.get("ct_por_triar"):
+        n = nav["ct_por_triar"]
+        add("semana", f"{n} por triar", "n", "Triar certificados encontrados na internet",
+            "Nomes da organização que a CMDB não conhece.", "Triar", "/descoberta")
+    if tcounts.get("ja_renovado"):
+        n = tcounts["ja_renovado"]
+        add("mes", _plural(n, "pedido", "pedidos"), "n", "Fechar pedidos já renovados", "O certificado já foi renovado; o pedido pode fechar.",
+            "Ver pedidos", "/pedidos?vista=ja_renovado")
+    por_ver = stats["ep_total"] - stats["ep_verified"]
+    if por_ver:
+        add("mes", _plural(por_ver, "servidor", "servidores"), "n", "Verificar servidores ainda não verificados",
+            "Ainda não passaram pelos testes.", "Ver servidores", "/endpoints")
+    velhos = [f["fonte"] for f in fresh if f["velho"]]
+    if velhos:
+        add("mes", _plural(len(velhos), "fonte", "fontes"), "n", "Atualizar dados antigos",
+            ", ".join(velhos) + " lidos há mais de 48 h.", "Ver execuções", "/jobs")
+
+    def date_pt(d: datetime) -> str:
+        return f"{d.day} de {MESES[d.month - 1]}"
+    return {"lanes": [
+        {"id": "hoje", "titulo": "Hoje", "sub": "urgente", "itens": lanes["hoje"]},
+        {"id": "semana", "titulo": "Esta semana", "sub": f"até {date_pt(now + timedelta(days=7))}", "itens": lanes["semana"]},
+        {"id": "mes", "titulo": "Este mês", "sub": f"até {date_pt(now + timedelta(days=30))}", "itens": lanes["mes"]},
+    ], "total": sum(len(v) for v in lanes.values())}
+
+
 def evidence_rows(inv: list[dict], snap: Snapshot, session: Session, settings: Settings, now: datetime) -> list[list]:
     """Linhas do relatório de evidência: cada certificado e API, a data, o pedido e o estado dos testes."""
     by_label, comments = tickets_by_label(session), last_comments(session)

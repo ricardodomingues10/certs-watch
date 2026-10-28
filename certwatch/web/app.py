@@ -401,15 +401,18 @@ def _freshness(s) -> list[dict]:
 
 
 @app.get("/")
-def dashboard(request: Request, janela: int = 24, user: str = Depends(current_user)):
-    """Painel orientado à ação: o que expira sem pedido, o que se moveu, o que está parado, a conformidade."""
+def dashboard(request: Request, janela: int = 24, vista: str = "", user: str = Depends(current_user)):
+    """Painel: o que está mal, o que está por fazer e que pedidos abrir (vista Resumo), ou o mesmo trabalho
+    arrumado por hoje, esta semana e este mês (vista Trabalho)."""
     import certwatch.dashboard as db_
     now, settings = utcnow(), get_settings()
     janela = 168 if janela >= 168 else 24
+    vista = "trabalho" if vista == "trabalho" else ""
     with session_scope() as s:
         snap = load_snapshot(s)
         inv = build_inventory(s, settings, now, snap)
-        stats = dashboard_stats(inv, check_matrix(s, settings, now, snap), now)
+        matrix = check_matrix(s, settings, now, snap)
+        stats = dashboard_stats(inv, matrix, now)
         open_findings = list(s.scalars(select(Finding).where(Finding.status == "aberto")))
         items = db_.expiring_without_ticket(inv, snap, s, settings, now)
         activity = db_.ticket_activity(s, settings, now, janela)
@@ -418,14 +421,21 @@ def dashboard(request: Request, janela: int = 24, user: str = Depends(current_us
         nis = db_.nis2(inv, snap, s, settings, now, open_findings)
         fresh = _freshness(s)
         setup = setup_checklist(s, settings, stats)
-        _, tcounts = ticket_list(s, settings, "atrasados", inventory=inv)
+        open_rows, tcounts = ticket_list(s, settings, "abertos", inventory=inv)
+        prazos = db_.deadline_buckets(inv, snap, now)
     k = db_.kpis(items, stale, activity, nis, open_findings)
     k["atrasados"], k["ja_renovado"] = tcounts["atrasados"], tcounts["ja_renovado"]
     sev_counts = {sv: sum(1 for f in open_findings if f.severity == sv) for sv in SEVERITIES}
+    can_create = tc.can_create(settings)
+    nav = nav_counts()
+    stale_ids = {t["pedido"]: t["parado"] for t in stale}
+    trabalho = db_.work_queue(items, nis, k, stale, tcounts, nav, stats, fresh, now, can_create)
     return render(request, "dashboard.html", user, s=stats, items=items, activity=activity, stale=stale, nis=nis, k=k,
-                  janela=janela, fresh=fresh, sev_counts=sev_counts, setup=setup, smax_on=smax_configured(settings),
-                  can_create=tc.can_create(settings), limit=settings.dash_expiry_days, stale_days=settings.dash_stale_days,
-                  now=now)
+                  janela=janela, vista=vista, fresh=fresh, sev_counts=sev_counts, setup=setup, smax_on=smax_configured(settings),
+                  can_create=can_create, limit=settings.dash_expiry_days, stale_days=settings.dash_stale_days,
+                  now=now, prazos=prazos, camadas=db_.layer_summary(matrix), fases=db_.open_by_phase(open_rows),
+                  abertos=open_rows, stale_ids=stale_ids, frase=db_.headline(k, len(items)), trabalho=trabalho,
+                  nav_n=nav)
 
 
 @app.get("/painel/evidencia.csv")

@@ -128,8 +128,8 @@ def test_links_pages_filter_and_export(env, monkeypatch):
         det = c.get("/certificados/detalhe", params={"cn": "www.exemplo.pt"}, auth=auth).text
         assert "Pedidos no SMAX" in det and "0900" in det and "Sistemas" in det and "Pedido em curso" in det
         dash = c.get("/", auth=auth).text
-        assert "expiram em ≤ 20 dias sem pedido" in dash and "novo.exemplo.pt" in dash
-        assert "Movimento nos pedidos" in dash and "Pedidos parados" in dash
+        assert "Expiram nos próximos 20 dias" in dash and "novo.exemplo.pt" in dash
+        assert "Movimento nos pedidos" in dash and "Pedidos em curso" in dash
         csv_text = c.get("/certificados/exportar", auth=auth).content.decode("utf-8")
         head = csv_text.splitlines()[0]
         assert "Pedido SMAX" in head and "Link do pedido" in head
