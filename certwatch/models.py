@@ -544,3 +544,36 @@ class UcmdbWrite(Base):
     pedido_em: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
     feito_em: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
+
+
+class User(Base):
+    """Pessoa com acesso à aplicação (entra com o email e a palavra-passe, por basic authentication).
+    A palavra-passe nunca é guardada: só o hash scrypt. O link do convite também só fica em hash."""
+    __tablename__ = "users"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    email: Mapped[str] = mapped_column(String(254), unique=True, index=True)     # em minúsculas; é o nome de utilizador
+    name: Mapped[str] = mapped_column(String(128), default="")
+    role: Mapped[str] = mapped_column(String(16), default="operador")            # admin | operador | leitura
+    status: Mapped[str] = mapped_column(String(16), default="convidado")         # convidado | ativo | desativado
+    password_hash: Mapped[str] = mapped_column(String(256), default="")
+    token_hash: Mapped[str] = mapped_column(String(64), default="", index=True)  # sha256 do link de convite/reposição
+    token_expires: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    token_kind: Mapped[str] = mapped_column(String(16), default="")              # convite | reposicao
+    invited_by: Mapped[str] = mapped_column(String(254), default="")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    invited_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    password_set_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    last_seen: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
+class UserPref(Base):
+    """Preferências de cada pessoa (por exemplo, a disposição dos cartões do Painel)."""
+    __tablename__ = "user_prefs"
+    __table_args__ = (UniqueConstraint("username", "key", name="uq_user_pref"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    username: Mapped[str] = mapped_column(String(254), index=True)
+    key: Mapped[str] = mapped_column(String(64))
+    value: Mapped[dict] = mapped_column(JSON, default=dict)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)

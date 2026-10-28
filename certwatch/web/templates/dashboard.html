@@ -18,10 +18,20 @@
 
 {% block content %}
 {% set n_trab = trabalho.total %}
+<div class="pn-head">
 <nav class="pn-views" aria-label="Vista do painel">
   <a href="/" class="{{ 'on' if vista != 'trabalho' }}"{% if vista != 'trabalho' %} aria-current="page"{% endif %}>Resumo</a>
   <a href="/?vista=trabalho" class="{{ 'on' if vista == 'trabalho' }}"{% if vista == 'trabalho' %} aria-current="page"{% endif %}>Por semana e mês <span class="n">{{ n_trab }}</span></a>
 </nav>
+{% if vista != 'trabalho' %}
+{#- organizar os cartões: só com JavaScript e em ecrãs largos; a disposição fica guardada para cada pessoa -#}
+<div class="pn-arrange" data-pn-arrange hidden>
+  <span class="small muted" data-pn-hint hidden>Arraste pela pega para mudar de sítio e puxe o canto para mudar o tamanho. Fica guardado para si.</span>
+  <button type="button" class="small-btn" data-pn-reset hidden>Repor a disposição</button>
+  <button type="button" class="small-btn" data-pn-toggle aria-pressed="false">Organizar o painel</button>
+</div>
+{% endif %}
+</div>
 
 {% if vista == 'trabalho' %}
 {# ------------------------------------------------------------------ vista Trabalho: hoje, esta semana, este mês #}
@@ -71,188 +81,214 @@
 
 {% else %}
 {# ------------------------------------------------------------------ vista Resumo #}
-<div class="pn-top">
-  <a class="pn-hero" id="cobertura" href="#por-abrir">
-    <span class="pn-hero-k">Cobertura de pedidos</span>
-    {% set pct = nis.cobertura.pct %}
-    <svg class="pn-ring" viewBox="0 0 190 190" role="img" aria-label="{{ pct if pct is not none else 'sem dados' }} por cento com pedido">
-      <circle class="pn-ring-bg" cx="95" cy="95" r="78"/>
-      {% if pct %}<circle class="pn-ring-fg" cx="95" cy="95" r="78" stroke-dasharray="{{ (pct * 4.9009)|round(1) }} 490.1" transform="rotate(-90 95 95)"/>{% endif %}
-      <text x="95" y="106" text-anchor="middle">{{ pct if pct is not none else '—' }}{% if pct is not none %} %{% endif %}</text>
-    </svg>
-    {% if pct is not none %}
-    <span class="pn-hero-t">{{ 'Só ' if pct < 50 }}<b>{{ nis.cobertura.com_pedido }} de {{ nis.cobertura.total }}</b> certificados e APIs que expiram nos próximos 90 dias têm pedido em curso.</span>
-    {% else %}<span class="pn-hero-t">Nada expira nos próximos 90 dias.</span>{% endif %}
-    {% if items %}<span class="pn-hero-cta">Abrir os {{ items|length }} pedidos que faltam</span>{% endif %}
-  </a>
-  <section class="pn-card pn-summary" aria-label="Resumo">
-    <p class="pn-say" role="status">{% if frase.partes %}Há {% for p in frase.partes %}<b>{{ p }}</b>{{ ', ' if not loop.last and loop.revindex > 2 else ' e ' if loop.revindex == 2 else '' }}{% endfor %}. {% endif %}{{ frase.fim }}</p>
-    <div class="pn-prazos">
-      <div class="pn-prazos-h"><h2>Prazos</h2><span class="muted small">{{ prazos.total }} certificados e APIs</span></div>
-      {{ prazos_bar(prazos) }}
-      <div class="pn-prazos-n">{% for sg in prazos.segs %}<div><b class="n-{{ sg.key }}">{{ sg.n }}</b><span>{{ sg.label }}</span></div>{% endfor %}</div>
+{% set CARDS = {'cobertura': card_cobertura, 'resumo': card_resumo, 'mal': card_mal, 'fazer': card_fazer, 'abrir': card_abrir,
+                'curso': card_curso, 'testes': card_testes, 'movimento': card_movimento, 'meses': card_meses, 'nis2': card_nis2} %}
+{#- os cartões pela ordem e com o tamanho de cada pessoa (Organizar o painel); largura em colunas de 12 -#}
+<div class="pn-grid" data-pn-grid data-csrf="{{ csrf }}">
+{% for c in layout %}<div class="pn-cell w-{{ c.w }} h-{{ c.h }}" data-card="{{ c.id }}" data-w="{{ c.w }}" data-h="{{ c.h }}" data-label="{{ CARD_LABELS[c.id] }}">{{ CARDS[c.id]() }}</div>
+{% endfor %}</div>
+{% endif %}
+{% endblock %}
+
+{% macro prazos_bar(p) -%}
+<svg class="pn-bar" viewBox="0 0 1000 14" preserveAspectRatio="none" role="img" aria-label="{% for sg in p.segs %}{{ sg.label }}: {{ sg.n }}{{ '; ' if not loop.last }}{% endfor %}">
+  {% if not p.total %}<rect class="s-vazio" x="0" y="0" width="1000" height="14" rx="7"/>{% endif %}
+  {% for sg in p.segs %}{% if sg.n %}<rect class="s-{{ sg.key }}" x="{{ sg.x }}" y="0" width="{{ sg.w }}" height="14" rx="4"/>{% endif %}{% endfor %}
+</svg>
+{%- endmacro %}
+
+
+{#- ------------------------------------------------------------------ os cartões do Resumo -#}
+{% macro card_cobertura() -%}
+<a class="pn-hero" id="cobertura" href="#por-abrir">
+  <span class="pn-hero-k">Cobertura de pedidos</span>
+  {% set pct = nis.cobertura.pct %}
+  <svg class="pn-ring" viewBox="0 0 190 190" role="img" aria-label="{{ pct if pct is not none else 'sem dados' }} por cento com pedido">
+    <circle class="pn-ring-bg" cx="95" cy="95" r="78"/>
+    {% if pct %}<circle class="pn-ring-fg" cx="95" cy="95" r="78" stroke-dasharray="{{ (pct * 4.9009)|round(1) }} 490.1" transform="rotate(-90 95 95)"/>{% endif %}
+    <text x="95" y="106" text-anchor="middle">{{ pct if pct is not none else '—' }}{% if pct is not none %} %{% endif %}</text>
+  </svg>
+  {% if pct is not none %}
+  <span class="pn-hero-t">{{ 'Só ' if pct < 50 }}<b>{{ nis.cobertura.com_pedido }} de {{ nis.cobertura.total }}</b> certificados e APIs que expiram nos próximos 90 dias têm pedido em curso.</span>
+  {% else %}<span class="pn-hero-t">Nada expira nos próximos 90 dias.</span>{% endif %}
+  {% if items %}<span class="pn-hero-cta">Abrir os {{ items|length }} pedidos que faltam</span>{% endif %}
+</a>
+{%- endmacro %}
+{% macro card_resumo() -%}
+<section class="pn-card pn-summary" aria-label="Resumo">
+  <p class="pn-say" role="status">{% if frase.partes %}Há {% for p in frase.partes %}<b>{{ p }}</b>{{ ', ' if not loop.last and loop.revindex > 2 else ' e ' if loop.revindex == 2 else '' }}{% endfor %}. {% endif %}{{ frase.fim }}</p>
+  <div class="pn-prazos">
+    <div class="pn-prazos-h"><h2>Prazos</h2><span class="muted small">{{ prazos.total }} certificados e APIs</span></div>
+    {{ prazos_bar(prazos) }}
+    <div class="pn-prazos-n">{% for sg in prazos.segs %}<div><b class="n-{{ sg.key }}">{{ sg.n }}</b><span>{{ sg.label }}</span></div>{% endfor %}</div>
+  </div>
+  <div class="fresh" aria-label="Última leitura de cada fonte">
+    {% for f in fresh %}<span class="fresh-item {{ 'is-old' if f.velho }}" title="{{ f.quando|dtt if f.quando else 'nunca lida' }}"><i aria-hidden="true"></i>{{ f.fonte }} <b>{{ f.quando|ago }}</b></span>{% endfor %}
+  </div>
+</section>
+{%- endmacro %}
+{% macro card_mal() -%}
+{# ---- o que está mal #}
+{% set mal = [] %}
+{% if k.expirados_em_uso %}{% set _ = mal.append({'n': k.expirados_em_uso, 'tom': 'bad', 't': 'Expirados ainda em uso', 'd': nis.expirados_em_uso[:3]|map(attribute='cn')|join(', '), 'href': '/certificados/detalhe?cn=' ~ nis.expirados_em_uso[0].cn if k.expirados_em_uso == 1 else '/certificados'}) %}{% endif %}
+{% if k.criticos %}{% set _ = mal.append({'n': k.criticos, 'tom': 'bad', 't': 'Alertas críticos', 'd': 'corrigir ou aceitar o risco, com justificação', 'href': '/findings?sev=critica'}) %}{% endif %}
+{% set expsp = items|selectattr('dias', 'lt', 0)|list %}
+{% if expsp %}{% set _ = mal.append({'n': expsp|length, 'tom': 'bad', 't': 'Expirados sem pedido', 'd': expsp[:3]|map(attribute='nome')|join(', '), 'href': '#por-abrir'}) %}{% endif %}
+{% if k.atrasados %}{% set _ = mal.append({'n': k.atrasados, 'tom': 'bad', 't': 'Pedidos com o certificado já expirado', 'd': 'pedidos abertos com certificado já expirado', 'href': '/pedidos?vista=atrasados'}) %}{% endif %}
+{% if k.nao_instalados %}{% set _ = mal.append({'n': k.nao_instalados, 'tom': 'bad', 't': 'Renovados mas não instalados', 'd': 'o servidor ainda apresenta o certificado antigo', 'href': '/findings?tipo=RENOVACAO_NAO_INSTALADA'}) %}{% endif %}
+{% if s.ep_failing %}{% set _ = mal.append({'n': s.ep_failing, 'tom': '', 't': 'Servidores com falha nos testes', 'd': 'cada teste diz como se corrige', 'href': '/testes?estado=falha'}) %}{% endif %}
+{% set ncripto = nis.cripto.values()|sum %}
+{% if ncripto %}{% set _ = mal.append({'n': ncripto, 'tom': '', 't': 'Problemas de criptografia', 'd': 'chaves fracas, TLS antigo, cadeias inválidas ou autoassinados', 'href': '/findings'}) %}{% endif %}
+{% set bem = [] %}
+{% if not k.expirados_em_uso %}{% set _ = bem.append('expirados em uso') %}{% endif %}
+{% if not k.nao_instalados %}{% set _ = bem.append('renovados por instalar') %}{% endif %}
+{% if not ncripto %}{% set _ = bem.append('criptografia fraca e TLS antigo') %}{% endif %}
+{% if not k.criticos %}{% set _ = bem.append('alertas críticos') %}{% endif %}
+<section class="pn-card pn-col" aria-labelledby="h-mal">
+  <header class="pn-col-h"><span class="pn-ic ic-bad" aria-hidden="true"><svg viewBox="0 0 16 16" width="16" height="16" focusable="false"><path d="M8 4.5v4M8 11.2v.3" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/><path d="M7.1 1.9 1.4 12.3c-.4.7.1 1.6.9 1.6h11.4c.8 0 1.3-.9.9-1.6L8.9 1.9a1 1 0 0 0-1.8 0Z" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/></svg></span>
+    <h2 id="h-mal">O que está mal</h2><span class="pn-count {{ 'c-bad' if mal }}">{{ mal|length }}</span></header>
+  {% for r in mal %}
+  <a class="pn-row" href="{{ r.href }}"><b class="pn-n {{ 'bad' if r.tom == 'bad' }}">{{ r.n }}</b><span><b>{{ r.t }}</b><span class="small muted">{{ r.d }}</span></span>{{ chevron() }}</a>
+  {% else %}
+  <p class="pn-empty">Nada está mal neste momento.</p>
+  {% endfor %}
+  {% if mal and bem %}<p class="pn-foot"><b class="ok">Sem problemas:</b> {{ bem|join(', ') }}.</p>{% endif %}
+</section>
+
+{%- endmacro %}
+{% macro card_fazer() -%}
+{# ---- o que está por fazer #}
+{% set fazer = [] %}
+{% if nav_n.reconc_dif %}{% set _ = fazer.append({'n': nav_n.reconc_dif, 't': 'Rever alterações da CMDB', 'd': 'comparação #' ~ nav_n.reconc_run ~ '; nada é escrito sem confirmar', 'href': '/cmdb-final/' ~ nav_n.reconc_run}) %}{% endif %}
+{% if nav_n.ct_por_triar %}{% set _ = fazer.append({'n': nav_n.ct_por_triar, 't': 'Triar certificados na internet', 'd': 'nomes que a CMDB não conhece', 'href': '/descoberta'}) %}{% endif %}
+{% if stale %}{% set t0 = stale[0] %}{% set _ = fazer.append({'n': stale|length, 'warn': true, 't': 'Pedidos parados há ≥ ' ~ stale_days ~ ' dias', 'd': t0.pedido ~ (' · ' ~ t0.alvo if t0.alvo else '') ~ (' expira em ' ~ t0.cert_dias ~ ' dias' if t0.cert_dias is not none and t0.cert_dias >= 0 else ''), 'href': '/pedidos/smax/' ~ t0.pedido if stale|length == 1 else '/pedidos'}) %}{% endif %}
+{% if k.ja_renovado %}{% set _ = fazer.append({'n': k.ja_renovado, 't': 'Pedidos já renovados', 'd': 'pedidos abertos já renovados: podem ser fechados', 'href': '/pedidos?vista=ja_renovado'}) %}{% endif %}
+{% set porver = s.ep_total - s.ep_verified %}
+{% if porver %}{% set _ = fazer.append({'n': porver, 't': 'Verificar servidores', 'd': 'ainda não passaram pelos testes', 'href': '/endpoints'}) %}{% endif %}
+{% set velhos = fresh|selectattr('velho')|map(attribute='fonte')|list %}
+{% if velhos %}{% set _ = fazer.append({'n': velhos|length, 't': 'Fontes com dados antigos', 'd': velhos|join(', ') ~ ', lidas há mais de 48 h', 'href': '/jobs'}) %}{% endif %}
+{% set pend = setup|selectattr('ok', 'equalto', false)|list %}
+<section class="pn-card pn-col" aria-labelledby="h-fazer">
+  <header class="pn-col-h"><span class="pn-ic ic-warn" aria-hidden="true"><svg viewBox="0 0 16 16" width="16" height="16" focusable="false"><circle cx="8" cy="8" r="6" fill="none" stroke="currentColor" stroke-width="1.8"/><path d="M8 4.8V8l2.2 1.4" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg></span>
+    <h2 id="h-fazer">O que está por fazer</h2><span class="pn-count {{ 'c-warn' if fazer }}">{{ fazer|length }}</span></header>
+  {% for r in fazer %}
+  <a class="pn-row" href="{{ r.href }}"><b class="pn-n {{ 'warn' if r.warn }}">{{ r.n }}</b><span><b>{{ r.t }}</b><span class="small muted">{{ r.d }}</span></span>{{ chevron() }}</a>
+  {% else %}
+  <p class="pn-empty">Nada por fazer.</p>
+  {% endfor %}
+  {% if pend %}<p class="pn-foot"><b>Configuração por terminar:</b> {{ pend|map(attribute='title')|join('; ') }}.</p>{% endif %}
+</section>
+
+{%- endmacro %}
+{% macro card_abrir() -%}
+{# ---- pedidos por abrir #}
+<section class="pn-card pn-col" id="por-abrir" aria-labelledby="h-abrir">
+  <header class="pn-col-h"><span class="pn-ic ic-acc" aria-hidden="true"><svg viewBox="0 0 16 16" width="16" height="16" focusable="false"><path d="M2 5.5V4a1 1 0 0 1 1-1h10a1 1 0 0 1 1 1v1.5a2.5 2.5 0 0 0 0 5V12a1 1 0 0 1-1 1H3a1 1 0 0 1-1-1v-1.5a2.5 2.5 0 0 0 0-5Z" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"/><path d="M10 3v10" stroke="currentColor" stroke-width="1.4" stroke-dasharray="1.6 1.6"/></svg></span>
+    <h2 id="h-abrir">Pedidos por abrir</h2><span class="pn-count {{ 'c-acc' if items }}">{{ items|length }}</span></header>
+  {% if items %}
+  <form method="post" action="/pedidos/novo">
+    <input type="hidden" name="csrf" value="{{ csrf }}"><input type="hidden" name="next" value="/">
+    <p class="pn-sub small muted">Expiram nos próximos {{ limit }} dias, ou expiraram há até 30, sem pedido em curso.{% if not smax_on %} A leitura do SMAX não está ligada: sem ela todos aparecem "sem pedido" (README, secção 7).{% endif %}</p>
+    {% for it in items %}
+    {% if loop.index == 9 %}<details class="pn-more"><summary>Mais {{ items|length - 8 }}</summary>{% endif %}
+    <div class="pn-open">
+      {% if can_create and it.criar %}<input type="checkbox" name="cn" value="{{ it.criar }}" aria-label="Criar pedido para {{ it.nome }}">
+      {% else %}<span class="pn-kind">{{ 'API' if it.tipo == 'API' else '' }}</span>{% endif %}
+      <span class="pn-open-n"><a href="{{ it.url }}" class="{{ 'mono' if it.tipo != 'API' }}">{{ it.nome }}</a>
+        {% if it.auto %}<span class="tag tag-run" title="Devia ter sido renovado automaticamente">renovação automática falhou?</span>{% endif %}
+        {% if not it.confirmado %}<span class="tag tag-off" title="Data da CMDB, ainda não confirmada no servidor">só CMDB</span>{% endif %}
+        {% if it.pedido and it.pedido.main %}<span class="pn-ticket">{{ ticket_cell(it.pedido, it.dias) }}</span>{% endif %}
+        {% if it.nomes|length > 1 %}<span class="small muted">também {{ it.nomes[1:4]|join(', ') }}{% if it.nomes|length > 4 %} e mais {{ it.nomes|length - 4 }}{% endif %}</span>{% endif %}
+      </span>
+      {{ prazo(it.dias) }}
     </div>
-    <div class="fresh" aria-label="Última leitura de cada fonte">
-      {% for f in fresh %}<span class="fresh-item {{ 'is-old' if f.velho }}" title="{{ f.quando|dtt if f.quando else 'nunca lida' }}"><i aria-hidden="true"></i>{{ f.fonte }} <b>{{ f.quando|ago }}</b></span>{% endfor %}
-    </div>
-  </section>
-</div>
-
-<div class="pn-three">
-  {# ---- o que está mal #}
-  {% set mal = [] %}
-  {% if k.expirados_em_uso %}{% set _ = mal.append({'n': k.expirados_em_uso, 'tom': 'bad', 't': 'Expirados ainda em uso', 'd': nis.expirados_em_uso[:3]|map(attribute='cn')|join(', '), 'href': '/certificados/detalhe?cn=' ~ nis.expirados_em_uso[0].cn if k.expirados_em_uso == 1 else '/certificados'}) %}{% endif %}
-  {% if k.criticos %}{% set _ = mal.append({'n': k.criticos, 'tom': 'bad', 't': 'Alertas críticos', 'd': 'corrigir ou aceitar o risco, com justificação', 'href': '/findings?sev=critica'}) %}{% endif %}
-  {% set expsp = items|selectattr('dias', 'lt', 0)|list %}
-  {% if expsp %}{% set _ = mal.append({'n': expsp|length, 'tom': 'bad', 't': 'Expirados sem pedido', 'd': expsp[:3]|map(attribute='nome')|join(', '), 'href': '#por-abrir'}) %}{% endif %}
-  {% if k.atrasados %}{% set _ = mal.append({'n': k.atrasados, 'tom': 'bad', 't': 'Pedidos com o certificado já expirado', 'd': 'pedidos abertos com certificado já expirado', 'href': '/pedidos?vista=atrasados'}) %}{% endif %}
-  {% if k.nao_instalados %}{% set _ = mal.append({'n': k.nao_instalados, 'tom': 'bad', 't': 'Renovados mas não instalados', 'd': 'o servidor ainda apresenta o certificado antigo', 'href': '/findings?tipo=RENOVACAO_NAO_INSTALADA'}) %}{% endif %}
-  {% if s.ep_failing %}{% set _ = mal.append({'n': s.ep_failing, 'tom': '', 't': 'Servidores com falha nos testes', 'd': 'cada teste diz como se corrige', 'href': '/testes?estado=falha'}) %}{% endif %}
-  {% set ncripto = nis.cripto.values()|sum %}
-  {% if ncripto %}{% set _ = mal.append({'n': ncripto, 'tom': '', 't': 'Problemas de criptografia', 'd': 'chaves fracas, TLS antigo, cadeias inválidas ou autoassinados', 'href': '/findings'}) %}{% endif %}
-  {% set bem = [] %}
-  {% if not k.expirados_em_uso %}{% set _ = bem.append('expirados em uso') %}{% endif %}
-  {% if not k.nao_instalados %}{% set _ = bem.append('renovados por instalar') %}{% endif %}
-  {% if not ncripto %}{% set _ = bem.append('criptografia fraca e TLS antigo') %}{% endif %}
-  {% if not k.criticos %}{% set _ = bem.append('alertas críticos') %}{% endif %}
-  <section class="pn-card pn-col" aria-labelledby="h-mal">
-    <header class="pn-col-h"><span class="pn-ic ic-bad" aria-hidden="true"><svg viewBox="0 0 16 16" width="16" height="16" focusable="false"><path d="M8 4.5v4M8 11.2v.3" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/><path d="M7.1 1.9 1.4 12.3c-.4.7.1 1.6.9 1.6h11.4c.8 0 1.3-.9.9-1.6L8.9 1.9a1 1 0 0 0-1.8 0Z" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/></svg></span>
-      <h2 id="h-mal">O que está mal</h2><span class="pn-count {{ 'c-bad' if mal }}">{{ mal|length }}</span></header>
-    {% for r in mal %}
-    <a class="pn-row" href="{{ r.href }}"><b class="pn-n {{ 'bad' if r.tom == 'bad' }}">{{ r.n }}</b><span><b>{{ r.t }}</b><span class="small muted">{{ r.d }}</span></span>{{ chevron() }}</a>
-    {% else %}
-    <p class="pn-empty">Nada está mal neste momento.</p>
+    {% if loop.last and loop.length > 8 %}</details>{% endif %}
     {% endfor %}
-    {% if mal and bem %}<p class="pn-foot"><b class="ok">Sem problemas:</b> {{ bem|join(', ') }}.</p>{% endif %}
-  </section>
-
-  {# ---- o que está por fazer #}
-  {% set fazer = [] %}
-  {% if nav_n.reconc_dif %}{% set _ = fazer.append({'n': nav_n.reconc_dif, 't': 'Rever alterações da CMDB', 'd': 'comparação #' ~ nav_n.reconc_run ~ '; nada é escrito sem confirmar', 'href': '/cmdb-final/' ~ nav_n.reconc_run}) %}{% endif %}
-  {% if nav_n.ct_por_triar %}{% set _ = fazer.append({'n': nav_n.ct_por_triar, 't': 'Triar certificados na internet', 'd': 'nomes que a CMDB não conhece', 'href': '/descoberta'}) %}{% endif %}
-  {% if stale %}{% set t0 = stale[0] %}{% set _ = fazer.append({'n': stale|length, 'warn': true, 't': 'Pedidos parados há ≥ ' ~ stale_days ~ ' dias', 'd': t0.pedido ~ (' · ' ~ t0.alvo if t0.alvo else '') ~ (' expira em ' ~ t0.cert_dias ~ ' dias' if t0.cert_dias is not none and t0.cert_dias >= 0 else ''), 'href': '/pedidos/smax/' ~ t0.pedido if stale|length == 1 else '/pedidos'}) %}{% endif %}
-  {% if k.ja_renovado %}{% set _ = fazer.append({'n': k.ja_renovado, 't': 'Pedidos já renovados', 'd': 'pedidos abertos já renovados: podem ser fechados', 'href': '/pedidos?vista=ja_renovado'}) %}{% endif %}
-  {% set porver = s.ep_total - s.ep_verified %}
-  {% if porver %}{% set _ = fazer.append({'n': porver, 't': 'Verificar servidores', 'd': 'ainda não passaram pelos testes', 'href': '/endpoints'}) %}{% endif %}
-  {% set velhos = fresh|selectattr('velho')|map(attribute='fonte')|list %}
-  {% if velhos %}{% set _ = fazer.append({'n': velhos|length, 't': 'Fontes com dados antigos', 'd': velhos|join(', ') ~ ', lidas há mais de 48 h', 'href': '/jobs'}) %}{% endif %}
-  {% set pend = setup|selectattr('ok', 'equalto', false)|list %}
-  <section class="pn-card pn-col" aria-labelledby="h-fazer">
-    <header class="pn-col-h"><span class="pn-ic ic-warn" aria-hidden="true"><svg viewBox="0 0 16 16" width="16" height="16" focusable="false"><circle cx="8" cy="8" r="6" fill="none" stroke="currentColor" stroke-width="1.8"/><path d="M8 4.8V8l2.2 1.4" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg></span>
-      <h2 id="h-fazer">O que está por fazer</h2><span class="pn-count {{ 'c-warn' if fazer }}">{{ fazer|length }}</span></header>
-    {% for r in fazer %}
-    <a class="pn-row" href="{{ r.href }}"><b class="pn-n {{ 'warn' if r.warn }}">{{ r.n }}</b><span><b>{{ r.t }}</b><span class="small muted">{{ r.d }}</span></span>{{ chevron() }}</a>
-    {% else %}
-    <p class="pn-empty">Nada por fazer.</p>
+    {% if can_create %}<div class="pn-foot pn-foot-act"><button class="primary">Criar pedidos para os selecionados</button><span class="small muted">Abre um rascunho para rever antes de criar no SMAX. As APIs pedem-se à mão.</span></div>{% endif %}
+  </form>
+  {% else %}
+  <p class="pn-empty"><b>Nada por pedir.</b> Tudo o que expira nos próximos {{ limit }} dias tem pedido em curso.</p>
+  {% endif %}
+</section>
+{%- endmacro %}
+{% macro card_curso() -%}
+<section class="pn-card" aria-labelledby="h-curso">
+  <div class="pn-card-h"><h2 id="h-curso">Pedidos em curso</h2><span class="muted small">{{ abertos|length }} abertos no SMAX</span><a class="pn-link" href="/pedidos">Ver todos</a></div>
+  {% if fases %}
+  <ol class="pn-phases">{% for f in fases %}<li><i class="ph-{{ loop.index0 % 4 }}" aria-hidden="true"></i><b>{{ f.n }}</b><span>{{ f.fase }}</span></li>{% endfor %}
+    {% if k.ja_renovado %}<li><i class="ph-ok" aria-hidden="true"></i><b>{{ k.ja_renovado }}</b><span>já renovados: fechar</span></li>{% endif %}</ol>
+  <ul class="pn-tickets">
+    {% for r in abertos[:6] %}{% set t = r.t %}
+    <li><a href="/pedidos/smax/{{ t.id }}" class="ticket int">{{ t.id }}</a>
+      <span class="mono small">{{ t.endpoint or '—' }}</span>
+      {% if t.id in stale_ids %}<span class="pn-pill t-a">parado {{ stale_ids[t.id] }} dias</span>{% endif %}
+      {% if r.cert_expirado %}<span class="pn-pill t-x">certificado expirado</span>{% elif r.ja_renovado %}<span class="pn-pill t-ok">já renovado</span>{% endif %}
+      <span class="small muted pn-who">{{ t.phase or '—' }}{% if t.owner_person or t.owner_group %} · {{ t.owner_person or t.owner_group }}{% endif %}</span></li>
     {% endfor %}
-    {% if pend %}<p class="pn-foot"><b>Configuração por terminar:</b> {{ pend|map(attribute='title')|join('; ') }}.</p>{% endif %}
-  </section>
+  </ul>
+  {% if abertos|length > 6 %}<p class="small"><a href="/pedidos">Mais {{ abertos|length - 6 }} pedidos abertos</a></p>{% endif %}
+  {% else %}
+  <p class="pn-empty"><b>Nenhum pedido aberto.</b>{% if not smax_on %} A leitura do SMAX não está ligada.{% endif %}</p>
+  {% endif %}
+</section>
 
-  {# ---- pedidos por abrir #}
-  <section class="pn-card pn-col" id="por-abrir" aria-labelledby="h-abrir">
-    <header class="pn-col-h"><span class="pn-ic ic-acc" aria-hidden="true"><svg viewBox="0 0 16 16" width="16" height="16" focusable="false"><path d="M2 5.5V4a1 1 0 0 1 1-1h10a1 1 0 0 1 1 1v1.5a2.5 2.5 0 0 0 0 5V12a1 1 0 0 1-1 1H3a1 1 0 0 1-1-1v-1.5a2.5 2.5 0 0 0 0-5Z" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"/><path d="M10 3v10" stroke="currentColor" stroke-width="1.4" stroke-dasharray="1.6 1.6"/></svg></span>
-      <h2 id="h-abrir">Pedidos por abrir</h2><span class="pn-count {{ 'c-acc' if items }}">{{ items|length }}</span></header>
-    {% if items %}
-    <form method="post" action="/pedidos/novo">
-      <input type="hidden" name="csrf" value="{{ csrf }}"><input type="hidden" name="next" value="/">
-      <p class="pn-sub small muted">Expiram nos próximos {{ limit }} dias, ou expiraram há até 30, sem pedido em curso.{% if not smax_on %} A leitura do SMAX não está ligada: sem ela todos aparecem "sem pedido" (README, secção 7).{% endif %}</p>
-      {% for it in items %}
-      {% if loop.index == 9 %}<details class="pn-more"><summary>Mais {{ items|length - 8 }}</summary>{% endif %}
-      <div class="pn-open">
-        {% if can_create and it.criar %}<input type="checkbox" name="cn" value="{{ it.criar }}" aria-label="Criar pedido para {{ it.nome }}">
-        {% else %}<span class="pn-kind">{{ 'API' if it.tipo == 'API' else '' }}</span>{% endif %}
-        <span class="pn-open-n"><a href="{{ it.url }}" class="{{ 'mono' if it.tipo != 'API' }}">{{ it.nome }}</a>
-          {% if it.auto %}<span class="tag tag-run" title="Devia ter sido renovado automaticamente">renovação automática falhou?</span>{% endif %}
-          {% if not it.confirmado %}<span class="tag tag-off" title="Data da CMDB, ainda não confirmada no servidor">só CMDB</span>{% endif %}
-          {% if it.pedido and it.pedido.main %}<span class="pn-ticket">{{ ticket_cell(it.pedido, it.dias) }}</span>{% endif %}
-          {% if it.nomes|length > 1 %}<span class="small muted">também {{ it.nomes[1:4]|join(', ') }}{% if it.nomes|length > 4 %} e mais {{ it.nomes|length - 4 }}{% endif %}</span>{% endif %}
-        </span>
-        {{ prazo(it.dias) }}
+{%- endmacro %}
+{% macro card_testes() -%}
+<section class="pn-card" aria-labelledby="h-testes">
+  <div class="pn-card-h"><h2 id="h-testes">Testes nos servidores</h2><span class="muted small">{{ s.ep_total }} servidores, 13 testes em 7 camadas</span><a class="pn-link" href="/testes">Ver testes</a></div>
+  <ol class="pn-layers">
+    {% for c in camadas %}
+    <li><a class="pn-layer l-{{ c.state }}" href="/testes{{ '?teste=' ~ c.teste if c.state in ('falha', 'aviso') else '' }}" title="{{ c.question }}"><span class="pn-layer-b" aria-hidden="true"></span><b>{{ c.label }}</b><span>{{ c.text }}</span></a></li>
+    {% endfor %}
+  </ol>
+  {% if not s.ep_verified %}<p class="small muted mt">Nenhum servidor verificado ainda: cada camada fica verde, âmbar ou vermelha com o resultado. <a href="/jobs">Verificar agora</a></p>
+  {% elif s.ep_failing %}<p class="small mt"><a href="/testes?estado=falha">{{ s.ep_failing }} servidor{{ 'es' if s.ep_failing != 1 }} com falha</a> · {{ s.ep_verified }} de {{ s.ep_total }} verificados</p>
+  {% else %}<p class="small muted mt">{{ s.ep_verified }} de {{ s.ep_total }} servidores verificados, sem falhas.</p>{% endif %}
+</section>
+{%- endmacro %}
+{% macro card_movimento() -%}
+<section class="pn-card" id="movimento" aria-labelledby="h-mov">
+  <div class="pn-card-h"><h2 id="h-mov">Movimento nos pedidos</h2>
+    <span class="seg"><a href="/?janela=24#movimento" class="{{ 'on' if janela == 24 }}">24 h</a><a href="/?janela=168#movimento" class="{{ 'on' if janela == 168 }}">7 dias</a></span></div>
+  {% if activity %}
+  <ol class="feed">
+    {% for e in activity[:8] %}
+    <li class="feed-{{ e.tipo }}">
+      <span class="feed-when" title="{{ e.quando|dtt }}">{{ e.quando|ago }}</span>
+      <div class="feed-body">
+        <a href="/pedidos/smax/{{ e.pedido }}" class="mono">{{ e.pedido }}</a> <span class="muted mono small">{{ e.alvo }}</span>
+        <div class="small">{% if e.tipo == 'fase' %}mudou de fase: <b>{{ e.de or '—' }}</b> → <b>{{ e.para }}</b>
+          {% elif e.tipo == 'novo' %}pedido novo, fase <b>{{ e.para or '—' }}</b>
+          {% else %}<b>{{ e.autor or 'comentário' }}</b>: {{ e.texto }}{% endif %}</div>
       </div>
-      {% if loop.last and loop.length > 8 %}</details>{% endif %}
-      {% endfor %}
-      {% if can_create %}<div class="pn-foot pn-foot-act"><button class="primary">Criar pedidos para os selecionados</button><span class="small muted">Abre um rascunho para rever antes de criar no SMAX. As APIs pedem-se à mão.</span></div>{% endif %}
-    </form>
-    {% else %}
-    <p class="pn-empty"><b>Nada por pedir.</b> Tudo o que expira nos próximos {{ limit }} dias tem pedido em curso.</p>
-    {% endif %}
-  </section>
-</div>
+    </li>
+    {% endfor %}
+  </ol>
+  {% if activity|length > 8 %}<p class="small"><a href="/pedidos?vista=comentarios">Mais {{ activity|length - 8 }} no período</a></p>{% endif %}
+  {% else %}
+  <p class="pn-empty"><b>Sem movimento.</b> Nenhum pedido mudou de fase nem teve comentários {{ 'nas últimas 24 h' if janela == 24 else 'nos últimos 7 dias' }}.{% if not smax_on %} A leitura do SMAX não está ligada.{% endif %}</p>
+  {% endif %}
+</section>
 
-<div class="pn-two">
-  <section class="pn-card" aria-labelledby="h-curso">
-    <div class="pn-card-h"><h2 id="h-curso">Pedidos em curso</h2><span class="muted small">{{ abertos|length }} abertos no SMAX</span><a class="pn-link" href="/pedidos">Ver todos</a></div>
-    {% if fases %}
-    <ol class="pn-phases">{% for f in fases %}<li><i class="ph-{{ loop.index0 % 4 }}" aria-hidden="true"></i><b>{{ f.n }}</b><span>{{ f.fase }}</span></li>{% endfor %}
-      {% if k.ja_renovado %}<li><i class="ph-ok" aria-hidden="true"></i><b>{{ k.ja_renovado }}</b><span>já renovados: fechar</span></li>{% endif %}</ol>
-    <ul class="pn-tickets">
-      {% for r in abertos[:6] %}{% set t = r.t %}
-      <li><a href="/pedidos/smax/{{ t.id }}" class="ticket int">{{ t.id }}</a>
-        <span class="mono small">{{ t.endpoint or '—' }}</span>
-        {% if t.id in stale_ids %}<span class="pn-pill t-a">parado {{ stale_ids[t.id] }} dias</span>{% endif %}
-        {% if r.cert_expirado %}<span class="pn-pill t-x">certificado expirado</span>{% elif r.ja_renovado %}<span class="pn-pill t-ok">já renovado</span>{% endif %}
-        <span class="small muted pn-who">{{ t.phase or '—' }}{% if t.owner_person or t.owner_group %} · {{ t.owner_person or t.owner_group }}{% endif %}</span></li>
-      {% endfor %}
-    </ul>
-    {% if abertos|length > 6 %}<p class="small"><a href="/pedidos">Mais {{ abertos|length - 6 }} pedidos abertos</a></p>{% endif %}
-    {% else %}
-    <p class="pn-empty"><b>Nenhum pedido aberto.</b>{% if not smax_on %} A leitura do SMAX não está ligada.{% endif %}</p>
-    {% endif %}
-  </section>
-
-  <section class="pn-card" aria-labelledby="h-testes">
-    <div class="pn-card-h"><h2 id="h-testes">Testes nos servidores</h2><span class="muted small">{{ s.ep_total }} servidores, 13 testes em 7 camadas</span><a class="pn-link" href="/testes">Ver testes</a></div>
-    <ol class="pn-layers">
-      {% for c in camadas %}
-      <li><a class="pn-layer l-{{ c.state }}" href="/testes{{ '?teste=' ~ c.teste if c.state in ('falha', 'aviso') else '' }}" title="{{ c.question }}"><span class="pn-layer-b" aria-hidden="true"></span><b>{{ c.label }}</b><span>{{ c.text }}</span></a></li>
-      {% endfor %}
-    </ol>
-    {% if not s.ep_verified %}<p class="small muted mt">Nenhum servidor verificado ainda: cada camada fica verde, âmbar ou vermelha com o resultado. <a href="/jobs">Verificar agora</a></p>
-    {% elif s.ep_failing %}<p class="small mt"><a href="/testes?estado=falha">{{ s.ep_failing }} servidor{{ 'es' if s.ep_failing != 1 }} com falha</a> · {{ s.ep_verified }} de {{ s.ep_total }} verificados</p>
-    {% else %}<p class="small muted mt">{{ s.ep_verified }} de {{ s.ep_total }} servidores verificados, sem falhas.</p>{% endif %}
-  </section>
-</div>
-
-<div class="pn-two">
-  <section class="pn-card" id="movimento" aria-labelledby="h-mov">
-    <div class="pn-card-h"><h2 id="h-mov">Movimento nos pedidos</h2>
-      <span class="seg"><a href="/?janela=24#movimento" class="{{ 'on' if janela == 24 }}">24 h</a><a href="/?janela=168#movimento" class="{{ 'on' if janela == 168 }}">7 dias</a></span></div>
-    {% if activity %}
-    <ol class="feed">
-      {% for e in activity[:8] %}
-      <li class="feed-{{ e.tipo }}">
-        <span class="feed-when" title="{{ e.quando|dtt }}">{{ e.quando|ago }}</span>
-        <div class="feed-body">
-          <a href="/pedidos/smax/{{ e.pedido }}" class="mono">{{ e.pedido }}</a> <span class="muted mono small">{{ e.alvo }}</span>
-          <div class="small">{% if e.tipo == 'fase' %}mudou de fase: <b>{{ e.de or '—' }}</b> → <b>{{ e.para }}</b>
-            {% elif e.tipo == 'novo' %}pedido novo, fase <b>{{ e.para or '—' }}</b>
-            {% else %}<b>{{ e.autor or 'comentário' }}</b>: {{ e.texto }}{% endif %}</div>
-        </div>
-      </li>
-      {% endfor %}
-    </ol>
-    {% if activity|length > 8 %}<p class="small"><a href="/pedidos?vista=comentarios">Mais {{ activity|length - 8 }} no período</a></p>{% endif %}
-    {% else %}
-    <p class="pn-empty"><b>Sem movimento.</b> Nenhum pedido mudou de fase nem teve comentários {{ 'nas últimas 24 h' if janela == 24 else 'nos últimos 7 dias' }}.{% if not smax_on %} A leitura do SMAX não está ligada.{% endif %}</p>
-    {% endif %}
-  </section>
-
-  <section class="pn-card" aria-labelledby="h-meses">
-    <div class="pn-card-h"><h2 id="h-meses">Expirações nos próximos 12 meses</h2><span class="muted small">certificados</span></div>
-    {% set maxm = (s.timeline|map(attribute='total')|max) if s.timeline else 0 %}
-    <svg class="months" viewBox="0 0 720 190" role="img" aria-label="Número de certificados que expiram em cada um dos próximos 12 meses">
-      <line x1="0" y1="160" x2="720" y2="160"/>
-      {% for m in s.timeline %}
-        {% set h = ((m.total / maxm) * 130) if maxm else 0 %}
-        {% set x = loop.index0 * 60 + 12 %}
-        {% if m.total %}<rect class="m-bar {{ 'm-now' if loop.first else 'soon' if loop.index0 < 3 else '' }}" x="{{ x }}" y="{{ (160 - h)|round(1) }}" width="36" height="{{ h|round(1) }}" rx="6"><title>{{ MONTHS[m.mes - 1] }} {{ m.ano }}: {{ m.total }}</title></rect>{% endif %}
-        <text class="v" x="{{ x + 18 }}" y="{{ (151 - h)|round(1) }}" text-anchor="middle">{{ m.total if m.total else '' }}</text>
-        <text x="{{ x + 18 }}" y="180" text-anchor="middle">{{ MONTHS[m.mes - 1] }}{% if m.mes == 1 or loop.first %} {{ m.ano % 100 }}{% endif %}</text>
-      {% endfor %}
-    </svg>
-  </section>
-</div>
-
+{%- endmacro %}
+{% macro card_meses() -%}
+<section class="pn-card" aria-labelledby="h-meses">
+  <div class="pn-card-h"><h2 id="h-meses">Expirações nos próximos 12 meses</h2><span class="muted small">certificados</span></div>
+  {% set maxm = (s.timeline|map(attribute='total')|max) if s.timeline else 0 %}
+  <svg class="months" viewBox="0 0 720 190" role="img" aria-label="Número de certificados que expiram em cada um dos próximos 12 meses">
+    <line x1="0" y1="160" x2="720" y2="160"/>
+    {% for m in s.timeline %}
+      {% set h = ((m.total / maxm) * 130) if maxm else 0 %}
+      {% set x = loop.index0 * 60 + 12 %}
+      {% if m.total %}<rect class="m-bar {{ 'm-now' if loop.first else 'soon' if loop.index0 < 3 else '' }}" x="{{ x }}" y="{{ (160 - h)|round(1) }}" width="36" height="{{ h|round(1) }}" rx="6"><title>{{ MONTHS[m.mes - 1] }} {{ m.ano }}: {{ m.total }}</title></rect>{% endif %}
+      <text class="v" x="{{ x + 18 }}" y="{{ (151 - h)|round(1) }}" text-anchor="middle">{{ m.total if m.total else '' }}</text>
+      <text x="{{ x + 18 }}" y="180" text-anchor="middle">{{ MONTHS[m.mes - 1] }}{% if m.mes == 1 or loop.first %} {{ m.ano % 100 }}{% endif %}</text>
+    {% endfor %}
+  </svg>
+</section>
+{%- endmacro %}
+{% macro card_nis2() -%}
+{% set ncripto = nis.cripto.values()|sum %}
 <section class="pn-card" id="nis2" aria-labelledby="h-nis">
   <div class="pn-card-h"><h2 id="h-nis">Conformidade e evidência <small>NIS2</small></h2><a class="pn-link" href="/painel/evidencia.csv">Relatório de hoje (CSV)</a></div>
   <div class="pn-nis">
@@ -265,12 +301,4 @@
   </div>
   <p class="small muted mt">Evidência: <a href="/painel/evidencia.csv">relatório de hoje (CSV)</a> · <a href="/cmdb/historico">alterações na CMDB</a> · <a href="/jobs">execuções e auditoria</a></p>
 </section>
-{% endif %}
-{% endblock %}
-
-{% macro prazos_bar(p) -%}
-<svg class="pn-bar" viewBox="0 0 1000 14" preserveAspectRatio="none" role="img" aria-label="{% for sg in p.segs %}{{ sg.label }}: {{ sg.n }}{{ '; ' if not loop.last }}{% endfor %}">
-  {% if not p.total %}<rect class="s-vazio" x="0" y="0" width="1000" height="14" rx="7"/>{% endif %}
-  {% for sg in p.segs %}{% if sg.n %}<rect class="s-{{ sg.key }}" x="{{ sg.x }}" y="0" width="{{ sg.w }}" height="14" rx="4"/>{% endif %}{% endfor %}
-</svg>
 {%- endmacro %}

@@ -232,6 +232,9 @@ class Settings:
     admin_user: str = "admin"
     admin_password: str | None = None
     cookie_secure: bool = False
+    public_url: str = ""                           # endereço da aplicação nos links dos convites (ex.: https://atalaia.exemplo.pt)
+    invite_hours: int = 72                         # validade do link de convite ou de nova palavra-passe
+    password_min: int = 12
 
     # Escrever na UCMDB pela REST API (criar e atualizar certificados em vez do certs_update.csv)
     ucmdb_write: bool = False
@@ -384,6 +387,9 @@ class Settings:
             admin_user=_env("CERTWATCH_ADMIN_USER", "admin"),
             admin_password=_secret("admin_password", "CERTWATCH_ADMIN_PASSWORD", required=True),
             cookie_secure=_env("CERTWATCH_COOKIE_SECURE", "false").lower() == "true",
+            public_url=_env("CERTWATCH_PUBLIC_URL", "").rstrip("/"),
+            invite_hours=max(1, int(_env("CERTWATCH_INVITE_HOURS", "72"))),
+            password_min=max(8, int(_env("CERTWATCH_PASSWORD_MIN", "12"))),
             ucmdb_write=_env("CERTWATCH_UCMDB_WRITE", "false").lower() == "true",
             ucmdb_cert_type=_env("CERTWATCH_UCMDB_CERT_TYPE", "digital_certificate"),
             smax_files_max=int(_env("CERTWATCH_SMAX_FILES_MAX", "200")),

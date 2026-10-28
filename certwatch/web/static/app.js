@@ -232,6 +232,8 @@ document.addEventListener("DOMContentLoaded", () => {
       editing = null;
     });
   });
+  // Campos só de leitura para copiar (ex.: o link de um convite): selecionar tudo ao clicar
+  document.querySelectorAll("input[data-select-all]").forEach((inp) => inp.addEventListener("focus", () => inp.select()));
   // Botões que pedem confirmação antes de enviar (ex.: aplicar na UCMDB)
   document.querySelectorAll("button[data-confirm]").forEach((b) => b.addEventListener("click", (e) => {
     if (!window.confirm(b.dataset.confirm)) e.preventDefault();
@@ -255,4 +257,160 @@ document.addEventListener("DOMContentLoaded", () => {
       .catch(() => setTimeout(poll, 15000));
   };
   setTimeout(poll, 5000);
+});
+
+// Painel: organizar os cartões. Em "Organizar o painel" cada cartão ganha uma pega (arrastar para mudar de sítio, ou
+// setas do teclado), botões de largura e um canto para puxar a largura e a altura (duplo clique no canto: altura do
+// conteúdo). A disposição fica guardada para cada pessoa (POST /painel/disposicao); "Repor" volta à de origem.
+document.addEventListener("DOMContentLoaded", () => {
+  const grid = document.querySelector("[data-pn-grid]");
+  const bar = document.querySelector("[data-pn-arrange]");
+  if (!grid || !bar || !window.fetch) return;
+  bar.hidden = false;
+  const toggle = bar.querySelector("[data-pn-toggle]");
+  const reset = bar.querySelector("[data-pn-reset]");
+  const hint = bar.querySelector("[data-pn-hint]");
+  const STEP = 40, MINH = 4, MAXH = 30;
+  const cells = () => Array.from(grid.children).filter((c) => c.classList.contains("pn-cell"));
+  let editing = false, timer = 0;
+
+  const send = (body) => fetch("/painel/disposicao", {
+    method: "POST", credentials: "same-origin",
+    headers: { "Content-Type": "application/json", "X-CSRF-Token": grid.dataset.csrf || "" },
+    body: JSON.stringify(body),
+  });
+  const persist = () => {
+    clearTimeout(timer);
+    timer = setTimeout(() => {
+      const w = {}, h = {};
+      cells().forEach((c) => { w[c.dataset.card] = +c.dataset.w; h[c.dataset.card] = +c.dataset.h; });
+      send({ order: cells().map((c) => c.dataset.card), w, h });
+    }, 350);
+  };
+  const label = (c) => {
+    const s = c.querySelector(".pn-size");
+    if (s) s.textContent = c.dataset.w + "/12" + (+c.dataset.h ? " · " + (+c.dataset.h * STEP) + " px" : "");
+    const auto = c.querySelector("[data-auto]");
+    if (auto) auto.hidden = !+c.dataset.h;
+  };
+  const setW = (c, w) => {
+    w = Math.max(3, Math.min(12, Math.round(w)));
+    if (w === +c.dataset.w) return false;
+    c.classList.remove("w-" + c.dataset.w); c.dataset.w = w; c.classList.add("w-" + w); label(c);
+    return true;
+  };
+  const setH = (c, h) => {
+    h = h ? Math.max(MINH, Math.min(MAXH, Math.round(h))) : 0;
+    if (h === +c.dataset.h) return false;
+    c.classList.remove("h-" + c.dataset.h); c.dataset.h = h; c.classList.add("h-" + h); label(c);
+    return true;
+  };
+  const btn = (text, aria, cls) => {
+    const b = document.createElement("button");
+    b.type = "button"; b.textContent = text; b.setAttribute("aria-label", aria);
+    if (cls) b.className = cls;
+    return b;
+  };
+
+  cells().forEach((c) => {
+    const name = c.dataset.label || c.dataset.card;
+    const tools = document.createElement("div");
+    tools.className = "pn-tools";
+    const grip = btn("⠿", `Mudar ${name} de sítio (arrastar, ou setas do teclado)`, "pn-grip");
+    const less = btn("−", `${name}: mais estreito`);
+    const size = document.createElement("span"); size.className = "pn-size";
+    const more = btn("+", `${name}: mais largo`);
+    const auto = btn("Auto", `${name}: altura do conteúdo`); auto.dataset.auto = "1";
+    tools.append(grip, less, size, more, auto);
+    const corner = document.createElement("span");
+    corner.className = "pn-resize"; corner.title = "Puxar para mudar o tamanho; duplo clique: altura do conteúdo";
+    c.append(tools, corner);
+    label(c);
+
+    less.addEventListener("click", () => { if (setW(c, +c.dataset.w - 1)) persist(); });
+    more.addEventListener("click", () => { if (setW(c, +c.dataset.w + 1)) persist(); });
+    auto.addEventListener("click", () => { if (setH(c, 0)) persist(); });
+
+    // mudar de sítio com as setas
+    grip.addEventListener("keydown", (e) => {
+      const back = e.key === "ArrowLeft" || e.key === "ArrowUp", fwd = e.key === "ArrowRight" || e.key === "ArrowDown";
+      if (!back && !fwd) return;
+      e.preventDefault();
+      const sib = back ? c.previousElementSibling : c.nextElementSibling;
+      if (!sib) return;
+      grid.insertBefore(c, back ? sib : sib.nextElementSibling);
+      grip.focus(); persist();
+    });
+    // mudar de sítio a arrastar: o cartão vai para antes ou depois daquele que está debaixo do ponteiro
+    grip.addEventListener("pointerdown", (e) => {
+      if (!editing || e.button !== 0) return;
+      e.preventDefault();
+      c.classList.add("is-moving");          // segue-se o ponteiro na janela: mudar o cartão de sítio no DOM larga a captura
+      let lastX = e.clientX, lastY = e.clientY;
+      const move = (ev) => {
+        if (Math.abs(ev.clientX - lastX) + Math.abs(ev.clientY - lastY) < 6) return;
+        const t = cells().find((o) => {
+          if (o === c) return false;
+          const r = o.getBoundingClientRect();
+          return ev.clientX >= r.left && ev.clientX <= r.right && ev.clientY >= r.top && ev.clientY <= r.bottom;
+        });
+        if (!t) return;
+        const r = t.getBoundingClientRect();
+        const after = ev.clientX > r.left + r.width / 2;
+        const ref = after ? t.nextElementSibling : t;
+        if (ref !== c && ref !== c.nextElementSibling) {                   // senão já está nesse sítio
+          grid.insertBefore(c, ref);
+          lastX = ev.clientX; lastY = ev.clientY;
+        }
+      };
+      const up = () => {
+        window.removeEventListener("pointermove", move);
+        window.removeEventListener("pointerup", up);
+        window.removeEventListener("pointercancel", up);
+        c.classList.remove("is-moving");
+        persist();
+      };
+      window.addEventListener("pointermove", move);
+      window.addEventListener("pointerup", up);
+      window.addEventListener("pointercancel", up);
+    });
+    // mudar o tamanho a puxar o canto: a largura encaixa nas 12 colunas, a altura em passos de 40 px
+    corner.addEventListener("pointerdown", (e) => {
+      if (!editing || e.button !== 0) return;
+      e.preventDefault();
+      c.classList.add("is-resizing");
+      const r0 = c.getBoundingClientRect(), x0 = e.clientX, y0 = e.clientY;
+      const gap = parseFloat(getComputedStyle(grid).columnGap) || 16;
+      const col = (grid.clientWidth - 11 * gap) / 12;
+      let changed = false;
+      const move = (ev) => {
+        const w = (r0.width + (ev.clientX - x0) + gap) / (col + gap);
+        changed = setW(c, w) || changed;
+        if (Math.abs(ev.clientY - y0) > 8) changed = setH(c, (r0.height + (ev.clientY - y0)) / STEP) || changed;
+      };
+      const up = () => {
+        window.removeEventListener("pointermove", move);
+        window.removeEventListener("pointerup", up);
+        window.removeEventListener("pointercancel", up);
+        c.classList.remove("is-resizing");
+        if (changed) persist();
+      };
+      window.addEventListener("pointermove", move);
+      window.addEventListener("pointerup", up);
+      window.addEventListener("pointercancel", up);
+    });
+    corner.addEventListener("dblclick", () => { if (setH(c, 0)) persist(); });
+  });
+
+  toggle.addEventListener("click", () => {
+    editing = !editing;
+    grid.classList.toggle("is-editing", editing);
+    toggle.setAttribute("aria-pressed", String(editing));
+    toggle.textContent = editing ? "Concluído" : "Organizar o painel";
+    hint.hidden = reset.hidden = !editing;
+  });
+  reset.addEventListener("click", () => {
+    if (!window.confirm("Voltar à disposição de origem dos cartões?")) return;
+    send({ reset: true }).then(() => location.reload());
+  });
 });

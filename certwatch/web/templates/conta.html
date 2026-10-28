@@ -1,0 +1,41 @@
+{% extends "base.html" %}
+{% block title %}A minha conta{% endblock %}
+{% block page_title %}A minha conta{% endblock %}
+{% block lede %}O seu acesso ao Atalaia Cert.{% endblock %}
+{% block content %}
+{% for n in notas %}<p class="note" role="status">{{ n }}</p>{% endfor %}
+{% for e in erros %}<p class="note bad" role="alert">A palavra-passe não foi alterada: {{ e }}.</p>{% endfor %}
+<div class="grid g2">
+  <section class="card" aria-labelledby="h-eu">
+    <h2 id="h-eu">Conta</h2>
+    <dl class="kv">
+      {% if me %}
+      <dt>Nome</dt><dd>{{ me.name or '—' }}</dd>
+      <dt>Email</dt><dd class="mono">{{ me.email }}</dd>
+      <dt>Papel</dt><dd><b>{{ ROLES[me.role] }}</b><div class="small muted">{{ ROLE_HELP[me.role] }}</div></dd>
+      <dt>Palavra-passe</dt><dd>{{ 'definida em ' ~ (me.password_set_at|dt) if me.password_set_at else '—' }}</dd>
+      {% else %}
+      <dt>Utilizador</dt><dd class="mono">{{ user }}</dd>
+      <dt>Papel</dt><dd><b>Administrador</b><div class="small muted">Conta de recurso definida no servidor.</div></dd>
+      {% endif %}
+    </dl>
+    {% if role == 'admin' %}<p class="small"><a href="/utilizadores">Gerir os utilizadores</a></p>{% endif %}
+  </section>
+  <section class="card" aria-labelledby="h-pw">
+    <h2 id="h-pw">Mudar a palavra-passe</h2>
+    {% if me %}
+    <form method="post" action="/conta/palavra-passe" class="stack us-pw">
+      <input type="hidden" name="csrf" value="{{ csrf }}">
+      <input type="hidden" name="username" value="{{ me.email }}" autocomplete="username">
+      <label>Palavra-passe atual<input type="password" name="atual" required autocomplete="current-password"></label>
+      <label>Nova<input type="password" name="nova" required minlength="{{ password_min }}" autocomplete="new-password"></label>
+      <label>Repetir a nova<input type="password" name="confirmar" required minlength="{{ password_min }}" autocomplete="new-password"></label>
+      <p class="small muted">Pelo menos {{ password_min }} caracteres, sem o seu nome de utilizador. Uma frase com várias palavras é mais fácil de lembrar e mais segura.</p>
+      <button class="primary">Mudar a palavra-passe</button>
+    </form>
+    {% else %}
+    <p>A palavra-passe desta conta está no servidor, no ficheiro <span class="mono">secrets/admin_password</span>. Para a mudar, altere o ficheiro e reinicie a aplicação.</p>
+    {% endif %}
+  </section>
+</div>
+{% endblock %}

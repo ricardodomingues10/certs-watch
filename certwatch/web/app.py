@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import csv
 import json
+import logging
 import io
 import re
 import time
@@ -45,7 +46,9 @@ from ..collectors.smax import ticket_url
 from ..tickets import TICKET_HELP, TICKET_ORDER, TICKET_STATES, TICKET_VIEWS, comment_files, filter_tickets, ticket_list, tickets_by_label, link as ticket_link, tickets_by_endpoint
 from ..trust import local_trust_files
 from ..normalize import norm_label, split_api_name, is_ip, is_valid_hostname, norm_host, norm_issuer
-from .security import check_csrf, current_user, security_middleware
+from .security import check_csrf, current_user, forget_logins, require_admin, security_middleware
+from .. import users as us
+from ..models import User, UserPref
 
 BASE = Path(__file__).parent
 MONTHS = ["jan", "fev", "mar", "abr", "mai", "jun", "jul", "ago", "set", "out", "nov", "dez"]
@@ -76,6 +79,21 @@ app = FastAPI(title="Atalaia Cert", version=__version__, lifespan=lifespan, docs
 app.middleware("http")(security_middleware)
 app.mount("/static", StaticFiles(directory=BASE / "static"), name="static")
 templates = Jinja2Templates(directory=BASE / "templates")
+
+
+class _RedactInvite(logging.Filter):
+    """O código do link de convite vai no endereço (/convite/<código>): nunca fica no registo de acessos."""
+    _re = re.compile(r"(/convite/)[^\s?\"]+")
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        if isinstance(record.args, tuple):
+            record.args = tuple(self._re.sub(r"\1***", a) if isinstance(a, str) else a for a in record.args)
+        elif isinstance(record.msg, str):
+            record.msg = self._re.sub(r"\1***", record.msg)
+        return True
+
+
+logging.getLogger("uvicorn.access").addFilter(_RedactInvite())
 
 
 def _tz() -> ZoneInfo:
@@ -170,7 +188,8 @@ NAV_GROUPS = [
     ("cmdb", "CMDB", [("/cmdb-final", "Atualizar a CMDB", "reconc_dif"), ("/ucmdb/certificado", "Editar um certificado", None),
                       ("/cmdb/historico", "Histórico de alterações", None)]),
     ("sistema", "Sistema", [("/jobs", "Execuções e auditoria", None), ("/cmdb-final/permissoes", "Ligação à UCMDB", None),
-                            ("/cmdb-final/avi", "AVI pela API", None), ("/testes/como-funciona", "Como funciona", None)]),
+                            ("/cmdb-final/avi", "AVI pela API", None), ("/utilizadores", "Utilizadores", None),
+                            ("/testes/como-funciona", "Como funciona", None)]),
 ]
 _NAV_ALIASES = {"/cert/": "/certificados", "/reconciliacao": "/cmdb-final"}
 PALETTES = {"consola": "Consola (escuro)", "assinatura": "Assinatura (escuro)", "relatorio": "Relatório (claro)"}
@@ -255,8 +274,13 @@ def busy_work() -> list[str]:
 def render(request: Request, name: str, user: str, **ctx):
     counts = nav_counts()
     ctx.setdefault("busy", busy_work())
+    role = getattr(request.state, "role", "")
+    tree = nav_tree(request.url.path, counts)
+    if role != "admin":
+        for g in tree:
+            g["items"] = [i for i in g["items"] if i["href"] != "/utilizadores"]
     return templates.TemplateResponse(request, name, {"user": user, "csrf": request.state.csrf, "nav": counts,
-                                                      "navtree": nav_tree(request.url.path, counts),
+                                                      "navtree": tree, "role": role, "ROLES": us.ROLES,
                                                       "palette": palette_of(request), "PALETTES": PALETTES,
                                                       "client": {"name": get_settings().client_name,
                                                                  "logo": client_logo() is not None,
@@ -400,6 +424,258 @@ def _freshness(s) -> list[dict]:
     return out
 
 
+# ------------------------------------------------------------------ utilizadores
+def _user_row(u: User, now) -> dict:
+    exp = as_utc(u.token_expires)
+    return {"id": u.id, "email": u.email, "name": u.name, "role": u.role, "status": u.status, "invited_by": u.invited_by,
+            "invited_at": u.invited_at, "last_seen": u.last_seen, "password_set_at": u.password_set_at,
+            "link_kind": u.token_kind if u.token_hash else "", "link_expires": exp,
+            "link_expired": bool(u.token_hash and exp and exp < now)}
+
+
+def _users_page(request: Request, user: str, notas: list | None = None, erros: list | None = None,
+                link: dict | None = None, status_code: int = 200):
+    st = get_settings()
+    now = utcnow()
+    order = {"ativo": 0, "convidado": 1, "desativado": 2}
+    with session_scope() as s:
+        rows = sorted((_user_row(u, now) for u in s.scalars(select(User))),
+                      key=lambda r: (order.get(r["status"], 9), r["email"]))
+    r = render(request, "utilizadores.html", user, rows=rows, ROLE_HELP=us.ROLE_HELP, STATUS=us.STATUS,
+               smtp_problems=rp.smtp_problems(st), notas=notas or [], erros=erros or [], link=link,
+               admin_user=st.admin_user, admin_on=bool(st.admin_password), me=user, invite_hours=st.invite_hours,
+               public_url=st.public_url, password_min=st.password_min)
+    r.status_code = status_code
+    return r
+
+
+def _deliver_link(request: Request, email: str, by: str) -> tuple[list, list, dict | None]:
+    """Gera um link novo para o utilizador e envia-o por email; sem email configurado (ou se o envio falhar)
+    o link aparece uma vez a quem o pediu, para o enviar à mão."""
+    st = get_settings()
+    base = us.base_url(st, str(request.base_url))
+    with session_scope() as s:
+        u = us.by_email(s, email)
+        kind = "convite" if u.status == "convidado" else "reposicao"
+        token = us.issue_token(u, kind, st)
+        link = us.link_for(st, str(request.base_url), token)
+        msg = None if rp.smtp_problems(st) else us.email_message(st, u, link, by, st.client_name, base)
+        audit(s, by, "utilizador.link", u.email, tipo=kind, por_email=msg is not None)
+    show = {"email": email, "url": link, "kind": kind}
+    if msg is None:
+        return ([f"O email não está configurado: copie o link abaixo e envie-o a {email}."], [], show)
+    try:
+        rp.send(st, [msg])
+    except rp.ReportError as exc:
+        return [], [f"O email para {email} não foi enviado ({exc}). Copie o link abaixo e envie-o à mão."], show
+    what = "Convite enviado" if kind == "convite" else "Link para uma palavra-passe nova enviado"
+    return [f"{what} para {email}. O link vale {st.invite_hours} horas e só uma vez."], [], None
+
+
+@app.get("/utilizadores")
+def users_page(request: Request, user: str = Depends(require_admin)):
+    return _users_page(request, user)
+
+
+@app.post("/utilizadores/convidar")
+def users_invite(request: Request, csrf: str = Form(""), email: str = Form(""), nome: str = Form(""),
+                 papel: str = Form("operador"), user: str = Depends(require_admin)):
+    check_csrf(request, csrf)
+    st = get_settings()
+    try:
+        with session_scope() as s:
+            u, _ = us.invite(s, st, email, nome, papel, user)
+            audit(s, user, "utilizador.convidar", u.email, papel=u.role)
+            email = u.email
+    except us.UserError as exc:
+        return _users_page(request, user, erros=[str(exc)], status_code=400)
+    notas, erros, link = _deliver_link(request, email, user)
+    return _users_page(request, user, notas=notas, erros=erros, link=link)
+
+
+def _guard_admin_change(s, st, target: User, user: str, losing_admin: bool) -> None:
+    if target.email == us.norm_email(user):
+        raise us.UserError("Não pode alterar, desativar nem apagar a sua própria conta aqui (peça a outro administrador).")
+    if losing_admin and target.role == "admin" and target.status == "ativo" and us.active_admins(s) <= 1 and not st.admin_password:
+        raise us.UserError("É o último administrador ativo: dê o papel de administrador a outra pessoa primeiro.")
+
+
+@app.post("/utilizadores/{uid}/{acao}")
+def users_action(request: Request, uid: int, acao: str, csrf: str = Form(""), papel: str = Form(""),
+                 user: str = Depends(require_admin)):
+    check_csrf(request, csrf)
+    st = get_settings()
+    if acao not in ("papel", "desativar", "ativar", "link", "apagar"):
+        raise HTTPException(404)
+    try:
+        with session_scope() as s:
+            u = s.get(User, uid)
+            if u is None:
+                raise HTTPException(404, "Utilizador não encontrado")
+            email = u.email
+            if acao == "link":
+                if u.status == "desativado":
+                    raise us.UserError(f"{email} está desativado: ative a conta antes de enviar um link.")
+            elif acao == "papel":
+                if papel not in us.ROLES:
+                    raise us.UserError("Papel desconhecido.")
+                _guard_admin_change(s, st, u, user, papel != "admin")
+                old, u.role = u.role, papel
+                audit(s, user, "utilizador.papel", email, de=old, para=papel)
+                nota = f"{email} passou a {us.ROLES[papel].lower()}."
+            elif acao == "desativar":
+                _guard_admin_change(s, st, u, user, True)
+                u.status, u.token_hash, u.token_expires = "desativado", "", None
+                audit(s, user, "utilizador.desativar", email)
+                nota = f"{email} foi desativado: deixa de conseguir entrar."
+            elif acao == "ativar":
+                u.status = "ativo" if u.password_hash else "convidado"
+                audit(s, user, "utilizador.ativar", email)
+                nota = f"{email} foi ativado." + ("" if u.password_hash else " Ainda não definiu palavra-passe: envie-lhe um link.")
+            else:
+                _guard_admin_change(s, st, u, user, True)
+                s.query(UserPref).filter(UserPref.username == email).delete()
+                s.delete(u)
+                audit(s, user, "utilizador.apagar", email)
+                nota = f"{email} foi apagado."
+    except us.UserError as exc:
+        return _users_page(request, user, erros=[str(exc)], status_code=400)
+    forget_logins()
+    if acao == "link":
+        notas, erros, link = _deliver_link(request, email, user)
+        return _users_page(request, user, notas=notas, erros=erros, link=link)
+    return _users_page(request, user, notas=[nota])
+
+
+def _public(request: Request, name: str, **ctx):
+    return templates.TemplateResponse(request, name, {"csrf": request.state.csrf, "palette": palette_of(request),
+                                                      "client": {"name": get_settings().client_name}, **ctx})
+
+
+@app.get("/convite/{token}")
+def invite_page(request: Request, token: str):
+    """Página pública (sem palavra-passe ainda): definir a palavra-passe a partir do link do email."""
+    with session_scope() as s:
+        u = us.user_for_token(s, token)
+        info = {"email": u.email, "name": u.name, "kind": u.token_kind, "role": us.ROLES[u.role]} if u else None
+    r = _public(request, "convite.html", info=info, token=token, done=False, erros=[], password_min=get_settings().password_min)
+    r.status_code = 200 if info else 404
+    return r
+
+
+@app.post("/convite/{token}")
+def invite_set(request: Request, token: str, csrf: str = Form(""), palavra: str = Form(""), confirmar: str = Form("")):
+    check_csrf(request, csrf)
+    st = get_settings()
+    with session_scope() as s:
+        u = us.user_for_token(s, token)
+        if u is None:
+            return _public(request, "convite.html", info=None, token="", done=False, erros=[], password_min=st.password_min)
+        info = {"email": u.email, "name": u.name, "kind": u.token_kind, "role": us.ROLES[u.role]}
+        erros = us.password_problems(palavra, u.email, st)
+        if palavra != confirmar:
+            erros.append("as duas palavras-passe não são iguais")
+        if erros:
+            r = _public(request, "convite.html", info=info, token=token, done=False, erros=erros, password_min=st.password_min)
+            r.status_code = 400
+            return r
+        kind = u.token_kind
+        us.set_password(u, palavra)
+        audit(s, u.email, "utilizador.palavra_passe", u.email, origem=kind)
+    forget_logins()
+    return _public(request, "convite.html", info=info, token="", done=True, erros=[], password_min=st.password_min)
+
+
+@app.get("/conta")
+def account_page(request: Request, user: str = Depends(current_user)):
+    return _account(request, user)
+
+
+def _account(request: Request, user: str, notas=None, erros=None, status_code: int = 200):
+    st = get_settings()
+    with session_scope() as s:
+        u = us.by_email(s, user)
+        me = _user_row(u, utcnow()) if u else None
+    r = render(request, "conta.html", user, me=me, ROLE_HELP=us.ROLE_HELP, notas=notas or [], erros=erros or [],
+               password_min=st.password_min)
+    r.status_code = status_code
+    return r
+
+
+@app.post("/conta/palavra-passe")
+def account_password(request: Request, csrf: str = Form(""), atual: str = Form(""), nova: str = Form(""),
+                     confirmar: str = Form(""), user: str = Depends(current_user)):
+    check_csrf(request, csrf)
+    st = get_settings()
+    with session_scope() as s:
+        u = us.by_email(s, user)
+        if u is None:
+            return _account(request, user, erros=["A palavra-passe desta conta está no servidor (secrets/admin_password)."], status_code=400)
+        erros = [] if us.verify_password(atual, u.password_hash) else ["a palavra-passe atual não está certa"]
+        erros += us.password_problems(nova, u.email, st)
+        if nova != confirmar:
+            erros.append("as duas palavras-passe novas não são iguais")
+        if erros:
+            return _account(request, user, erros=erros, status_code=400)
+        us.set_password(u, nova)
+        audit(s, user, "utilizador.palavra_passe", user, origem="conta")
+    forget_logins()
+    return _account(request, user, notas=["Palavra-passe alterada. O navegador vai pedir a nova na próxima página."])
+
+
+# ------------------------------------------------------------------ disposição do Painel
+PANEL_LABELS = {"cobertura": "Cobertura de pedidos", "resumo": "Resumo e prazos", "mal": "O que está mal",
+                "fazer": "O que está por fazer", "abrir": "Pedidos por abrir", "curso": "Pedidos em curso",
+                "testes": "Testes nos servidores", "movimento": "Movimento nos pedidos", "meses": "Expirações nos próximos 12 meses",
+                "nis2": "Conformidade e evidência"}
+PANEL_CARDS = {"cobertura": (4, 0), "resumo": (8, 0), "mal": (4, 0), "fazer": (4, 0), "abrir": (4, 0),
+               "curso": (6, 0), "testes": (6, 0), "movimento": (6, 0), "meses": (6, 0), "nis2": (12, 0)}
+
+
+def panel_layout(user: str) -> list[dict]:
+    """Os cartões do Painel pela ordem e com o tamanho que esta pessoa escolheu (largura em colunas de 12,
+    altura em passos de 40 px; 0 = a altura do conteúdo)."""
+    with session_scope() as s:
+        pref = s.scalar(select(UserPref).where(UserPref.username == user, UserPref.key == "painel"))
+        v = dict(pref.value) if pref else {}
+    order = [c for c in v.get("order", []) if c in PANEL_CARDS]
+    order += [c for c in PANEL_CARDS if c not in order]
+    out = []
+    for c in order:
+        w = v.get("w", {}).get(c, PANEL_CARDS[c][0])
+        h = v.get("h", {}).get(c, PANEL_CARDS[c][1])
+        w = w if isinstance(w, int) and 3 <= w <= 12 else PANEL_CARDS[c][0]
+        h = h if isinstance(h, int) and (h == 0 or 4 <= h <= 30) else 0
+        out.append({"id": c, "w": w, "h": h})
+    return out
+
+
+@app.post("/painel/disposicao")
+async def panel_layout_save(request: Request, user: str = Depends(current_user)):
+    check_csrf(request, request.headers.get("X-CSRF-Token"))
+    try:
+        data = await request.json()
+    except ValueError:
+        raise HTTPException(400, "JSON inválido")
+    if not isinstance(data, dict):
+        raise HTTPException(400, "JSON inválido")
+    with session_scope() as s:
+        pref = s.scalar(select(UserPref).where(UserPref.username == user, UserPref.key == "painel"))
+        if data.get("reset"):
+            if pref is not None:
+                s.delete(pref)
+            return JSONResponse({"ok": True, "reset": True})
+        order = [c for c in data.get("order", []) if isinstance(c, str) and c in PANEL_CARDS][:len(PANEL_CARDS)]
+        w = {c: v for c, v in (data.get("w") or {}).items() if c in PANEL_CARDS and isinstance(v, int) and 3 <= v <= 12}
+        h = {c: v for c, v in (data.get("h") or {}).items() if c in PANEL_CARDS and isinstance(v, int) and (v == 0 or 4 <= v <= 30)}
+        value = {"order": order, "w": w, "h": h}
+        if pref is None:
+            s.add(UserPref(username=user, key="painel", value=value))
+        else:
+            pref.value, pref.updated_at = value, utcnow()
+    return JSONResponse({"ok": True})
+
+
 @app.get("/")
 def dashboard(request: Request, janela: int = 24, vista: str = "", user: str = Depends(current_user)):
     """Painel: o que está mal, o que está por fazer e que pedidos abrir (vista Resumo), ou o mesmo trabalho
@@ -435,7 +711,7 @@ def dashboard(request: Request, janela: int = 24, vista: str = "", user: str = D
                   can_create=can_create, limit=settings.dash_expiry_days, stale_days=settings.dash_stale_days,
                   now=now, prazos=prazos, camadas=db_.layer_summary(matrix), fases=db_.open_by_phase(open_rows),
                   abertos=open_rows, stale_ids=stale_ids, frase=db_.headline(k, len(items)), trabalho=trabalho,
-                  nav_n=nav)
+                  nav_n=nav, layout=panel_layout(user), CARD_LABELS=PANEL_LABELS)
 
 
 @app.get("/painel/evidencia.csv")

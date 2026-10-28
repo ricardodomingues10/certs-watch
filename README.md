@@ -96,6 +96,19 @@ ssh -L 8088:127.0.0.1:8088 utilizador@servidor
 
 Abrir `http://localhost:8088`. O utilizador é `admin` e a palavra-passe é o conteúdo de `secrets/admin_password`.
 
+**Utilizadores** (Sistema → Utilizadores, só administradores). Cada pessoa entra com o seu email e a sua palavra-passe (basic authentication: o navegador pede-as). Para dar acesso:
+1. Em **Convidar uma pessoa**, escreva o email, o nome e o papel e carregue em **Enviar convite**.
+2. A pessoa recebe um email com um link para definir a palavra-passe, válido `CERTWATCH_INVITE_HOURS` horas (72) e uma só vez. Sem email configurado (`CERTWATCH_SMTP_*`, os mesmos do relatório por email) ou se o envio falhar, o link aparece na página para o enviar à mão.
+3. Depois de definir a palavra-passe, entra com o email e essa palavra-passe.
+
+| Papel | O que pode |
+|---|---|
+| Administrador | Tudo, incluindo gerir os utilizadores e convidar pessoas |
+| Operador | Tudo menos gerir utilizadores: criar pedidos, atualizar a CMDB, executar, decidir alertas |
+| Só consulta | Vê todas as páginas, mas não altera nada (pode mudar o tema, a sua palavra-passe e a disposição do Painel) |
+
+Na lista, o administrador muda o papel, desativa (a pessoa deixa de entrar logo) ou ativa, envia um link para uma palavra-passe nova (ou reenvia o convite) e apaga. Um administrador não se altera a si próprio, e não se tira o último administrador ativo quando não há conta de recurso. **A minha conta** (o nome no topo) mostra o papel e muda a palavra-passe (pelo menos `CERTWATCH_PASSWORD_MIN` caracteres, 12). A conta `admin` com a palavra-passe em `secrets/admin_password` continua a funcionar como **conta de recurso** (para o primeiro acesso ou se não houver mais nenhum administrador). Os links usam o endereço por onde o administrador está a usar a aplicação; para fixar outro (por exemplo, o nome público atrás do proxy), defina `CERTWATCH_PUBLIC_URL`.
+
 A interface ocupa a largura toda do ecrã e adapta-se a qualquer tamanho. A navegação fica na coluna à esquerda, agrupada por tarefa: **Painel**, **Inventário** (certificados, APIs e segredos, servidores), **Vigilância** (testes, na internet), **Renovar** (pedidos SMAX, relatório por email), **CMDB** (atualizar a CMDB, editar um certificado, histórico) e **Sistema** (execuções e auditoria, ligação à UCMDB, AVI pela API, como funciona). No telemóvel fica no menu do canto. Os alertas estão no sino da barra de cima, ao pé do utilizador, com o número de alertas abertos por cima (vermelho se houver altos ou críticos). A caixa no topo procura em tudo. Cada tabela ajusta-se ao espaço que tem: escondem-se primeiro as colunas secundárias e, se ainda não couber, cada linha passa a cartão.
 
 **Logótipo**: no alto de uma atalaia (em desenho), uma idosa de lenço preto atado ao queixo, óculos, xaile e cruz de ouro vigia de frente para nós, com a mão direita em pala sobre os olhos e um foco na mão esquerda. Olha para a direita, para o nome da aplicação: o foco sobe devagar de baixo para cima, por cima de "Cert" e depois de "Atalaia", e cada letra acende e dá um pequeno salto quando a luz lhe passa por cima; depois o foco apaga-se, desce e recomeça (ciclo de 7 s). Respira e pisca os olhos. O desenho está em `certwatch/web/templates/_atalaia.html` (SVG dentro da página) e a animação em `style.css`, por isso funciona com a CSP da aplicação. `CERTWATCH_LOGO_ANIMATION=sempre` (por omissão), `auto` (para quando o Windows ou o navegador pedem menos movimento) ou `parado` (sem foco nem letras a acender). A luz fica só no logótipo e no nome: não há iluminação na página. A barra de cima mostra o que está a correr no servidor ("A trabalhar: …", atualizado a cada 5 s por `/estado/ocupado`); trabalho parado há mais de 2 horas não conta. O ícone do separador (`static/atalaia-icone.svg`) gera-se com `python tools/logo/gerar_svg.py`. A coluna encolhe em ecrãs mais baixos (portáteis de 1366×768 incluídos) para o menu caber todo sem deslizar.
@@ -112,6 +125,7 @@ A interface ocupa a largura toda do ecrã e adapta-se a qualquer tamanho. A nave
   - **Pedidos em curso** por fase do SMAX, com os parados e os já renovados assinalados; **Testes nos servidores** por camada (rede, TLS, cadeia, identidade, validade, criptografia, inventário), vermelho, âmbar ou verde com o pior resultado; **Movimento nos pedidos** (24 h ou 7 dias); **Expirações nos próximos 12 meses**.
   - **Conformidade e evidência (NIS2)**: eficácia (antecedência a abrir pedidos, al. f), criptografia (al. h), gestão de ativos (al. i) e o que está em uso sem registo na CMDB. **Exportar evidência** dá um CSV com cada certificado e API, a data, o pedido e os alertas, à data de hoje.
 - **Por semana e mês** (`/?vista=trabalho`): o mesmo trabalho como tarefas, em três colunas. **Hoje**: expirados ou a expirar em até 2 dias, expirados em uso, alertas críticos, pedidos com o certificado já expirado, renovados por instalar. **Esta semana**: até 7 dias, pedidos parados (se o certificado expira em até 30 dias), alterações da CMDB por rever, certificados da internet por triar. **Este mês**: o resto (até 20 dias, pedidos com outra data, pedidos já renovados por fechar, servidores por verificar, fontes antigas). Cada tarefa diz porquê e tem o botão da ação (por exemplo, criar o pedido).
+- **Organizar o painel** (no Resumo, em ecrãs largos): cada cartão ganha uma pega para mudar de sítio (arrastar, ou as setas do teclado), botões de largura (de 3 a 12 colunas) e um canto para puxar a largura e a altura (duplo clique no canto, ou **Auto**: a altura do conteúdo). Os cartões da mesma linha ficam com a mesma altura. A disposição fica guardada para cada pessoa; **Repor a disposição** volta à de origem.
 
 **Atualizar a CMDB** em cinco passos (Fontes, Comparar, Rever, Aplicar, Confirmar), com o estado de cada um e o **próximo passo** destacado, numa frase e um botão. Antes de aplicar, "O que vai acontecer" diz quantos certificados são criados, atualizados e deixados como estão. O detalhe técnico da comparação fica recolhido.
 
@@ -477,13 +491,14 @@ Configuração no `.env`: `CERTWATCH_SMTP_HOST`, `_PORT`, `_SECURITY` (starttls/
 
 ## 10. Segurança da própria aplicação
 
-- A interface escuta só em localhost; o acesso é por túnel SSH. Autenticação HTTP Basic, proteção CSRF (cookie `SameSite=Strict` + token), CSP restritiva, `X-Frame-Options: DENY` e redirecionamentos apenas para caminhos locais.
+- A interface escuta só em localhost; o acesso é por túnel SSH (ou por um proxy com HTTPS). Autenticação HTTP Basic com contas por pessoa, proteção CSRF (cookie `SameSite=Strict` + token), CSP restritiva, `X-Frame-Options: DENY` e redirecionamentos apenas para caminhos locais.
 - Os segredos ficam em ficheiros montados (`/run/secrets`), nunca em variáveis de ambiente nem no código.
+- As palavras-passe dos utilizadores nunca são guardadas nem registadas: só o hash scrypt (sal aleatório). O link de convite leva um código aleatório de 256 bits, de uma só utilização e com prazo; na base de dados fica só o sha256 do código e o registo de acessos do servidor esconde-o (`/convite/***`). Ao fim de 10 tentativas falhadas em 15 minutos, esse utilizador fica bloqueado 15 minutos nesse endereço. Como a basic authentication manda as credenciais em cada pedido, use sempre HTTPS (ou o túnel SSH) e `CERTWATCH_COOKIE_SECURE=true` com HTTPS.
 - Os contentores correm como UID 10001, com filesystem só de leitura, `cap_drop: ALL` e `no-new-privileges`.
 - O TLS para a UCMDB é sempre verificado contra o trust store.
 - Os dados da CMDB são tratados como não confiáveis: só hostnames e IPs válidos e portas da allowlist são alvos. Nenhum valor passa por uma shell.
 - A ingestão é abortada se a UCMDB devolver menos de `CERTWATCH_UCMDB_MIN_CIS` registos, para que uma resposta truncada não desative o inventário.
-- Toda a ação humana (aceitar risco, decidir sobre um certificado encontrado na internet, adicionar servidor, pedir execução) fica registada na auditoria.
+- Toda a ação humana (aceitar risco, decidir sobre um certificado encontrado na internet, adicionar servidor, pedir execução, convidar, alterar ou apagar utilizadores) fica registada na auditoria.
 - As exportações CSV protegem contra injeção de fórmulas no Excel.
 - A diretoria de importação é montada só de leitura.
 - **A base de dados é um mapa da superfície TLS da organização**: o volume `pgdata` e os backups devem ser tratados como sensíveis.

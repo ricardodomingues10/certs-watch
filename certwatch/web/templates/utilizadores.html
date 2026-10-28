@@ -1,0 +1,77 @@
+{% extends "base.html" %}
+{% block title %}Utilizadores{% endblock %}
+{% block crumb %}Sistema{% endblock %}
+{% block page_title %}Utilizadores{% endblock %}
+{% block lede %}Quem pode entrar no Atalaia Cert. Cada pessoa entra com o seu email e a sua palavra-passe; o convite chega por email com um link para a definir (válido {{ invite_hours }} horas, uma só vez).{% endblock %}
+{% block content %}
+{% for n in notas %}<p class="note" role="status">{{ n }}</p>{% endfor %}
+{% for e in erros %}<p class="note bad" role="alert">{{ e }}</p>{% endfor %}
+
+{% if link %}
+<section class="card us-link" aria-label="Link para {{ link.email }}">
+  <h2>{{ 'Link do convite' if link.kind == 'convite' else 'Link para uma palavra-passe nova' }} <small>{{ link.email }}</small></h2>
+  <label class="us-copy"><span class="sr">Link</span><input type="text" readonly value="{{ link.url }}" class="mono" data-select-all></label>
+  <p class="small muted">Só aparece agora. Envie-o à pessoa por um canal de confiança; vale {{ invite_hours }} horas e só uma vez. Um link novo invalida este.</p>
+</section>
+{% endif %}
+
+<section class="card" aria-labelledby="h-convidar">
+  <h2 id="h-convidar">Convidar uma pessoa</h2>
+  {% if smtp_problems %}<p class="note warn small">O email não está configurado ({{ smtp_problems|join('; ') }}). O convite cria o link e mostra-o aqui, para o enviar à mão.</p>{% endif %}
+  <form method="post" action="/utilizadores/convidar" class="us-invite">
+    <input type="hidden" name="csrf" value="{{ csrf }}">
+    <label>Email<input type="email" name="email" required maxlength="254" autocomplete="off" placeholder="nome@exemplo.pt"></label>
+    <label>Nome<input type="text" name="nome" maxlength="128" autocomplete="off" placeholder="como aparece no convite"></label>
+    <label>Papel<select name="papel">{% for k, v in ROLES.items() %}<option value="{{ k }}" {{ 'selected' if k == 'operador' }}>{{ v }}</option>{% endfor %}</select></label>
+    <button class="primary">Enviar convite</button>
+  </form>
+  <dl class="us-roles">{% for k, v in ROLES.items() %}<dt>{{ v }}</dt><dd>{{ ROLE_HELP[k] }}</dd>{% endfor %}</dl>
+  {% if not public_url %}<p class="small muted">Os links usam o endereço por onde está a usar a aplicação. Para fixar outro, defina <span class="mono">CERTWATCH_PUBLIC_URL</span> no .env.</p>{% endif %}
+</section>
+
+<section class="card flush" aria-labelledby="h-pessoas">
+  <h2 id="h-pessoas">Pessoas com acesso <small>{{ rows|length + (1 if admin_on else 0) }}</small></h2>
+  <div class="scroll"><table class="us-table">
+    <thead><tr><th>Pessoa</th><th>Papel</th><th>Estado</th><th class="opt">Último acesso</th><th class="opt">Convite</th><th><span class="sr">Ações</span></th></tr></thead>
+    <tbody>
+    {% if admin_on %}
+    <tr>
+      <td><b>Conta de recurso</b><div class="mono small">{{ admin_user }}</div></td>
+      <td>Administrador</td>
+      <td><span class="tag tag-ok">Ativo</span></td>
+      <td class="opt small muted">—</td>
+      <td class="opt small muted">definida no servidor</td>
+      <td class="small muted">A palavra-passe está em <span class="mono">secrets/admin_password</span>.</td>
+    </tr>
+    {% endif %}
+    {% for r in rows %}
+    <tr class="{{ 'faded' if r.status == 'desativado' }}">
+      <td>{% if r.name %}<b>{{ r.name }}</b>{% endif %}<div class="mono small">{{ r.email }}</div>{% if r.email == me %}<span class="tag tag-acc">é você</span>{% endif %}</td>
+      <td>{% if r.email == me %}{{ ROLES[r.role] }}{% else %}
+        <form method="post" action="/utilizadores/{{ r.id }}/papel" class="us-role">
+          <input type="hidden" name="csrf" value="{{ csrf }}">
+          <select name="papel" aria-label="Papel de {{ r.email }}">{% for k, v in ROLES.items() %}<option value="{{ k }}" {{ 'selected' if k == r.role }}>{{ v }}</option>{% endfor %}</select>
+          <button class="small-btn">Guardar</button>
+        </form>{% endif %}</td>
+      <td><span class="tag {{ 'tag-ok' if r.status == 'ativo' else 'tag-run' if r.status == 'convidado' else 'tag-off' }}">{{ STATUS[r.status] }}</span></td>
+      <td class="opt small">{{ r.last_seen|ago if r.last_seen else 'nunca' }}</td>
+      <td class="opt small">{% if r.invited_at %}{{ r.invited_by }}, {{ r.invited_at|dt }}{% endif %}
+        {% if r.link_kind %}<div class="{{ 'err-line' if r.link_expired else 'muted' }}">{{ 'link expirou' if r.link_expired else 'link válido até ' ~ (r.link_expires|dtt) }}</div>{% endif %}</td>
+      <td class="actions">{% if r.email != me %}<div class="us-acts">
+        {% if r.status != 'desativado' %}
+        <form method="post" action="/utilizadores/{{ r.id }}/link"><input type="hidden" name="csrf" value="{{ csrf }}"><button class="small-btn">{{ 'Reenviar convite' if r.status == 'convidado' else 'Enviar link para nova palavra-passe' }}</button></form>
+        <form method="post" action="/utilizadores/{{ r.id }}/desativar"><input type="hidden" name="csrf" value="{{ csrf }}"><button class="small-btn">Desativar</button></form>
+        {% else %}
+        <form method="post" action="/utilizadores/{{ r.id }}/ativar"><input type="hidden" name="csrf" value="{{ csrf }}"><button class="small-btn">Ativar</button></form>
+        {% endif %}
+        <form method="post" action="/utilizadores/{{ r.id }}/apagar"><input type="hidden" name="csrf" value="{{ csrf }}"><button class="small-btn us-del" data-confirm="Apagar {{ r.email }}? A pessoa deixa de conseguir entrar e o convite deixa de valer.">Apagar</button></form>
+      </div>{% else %}<a class="small" href="/conta">A minha conta</a>{% endif %}</td>
+    </tr>
+    {% else %}
+    {% if not admin_on %}<tr><td colspan="6"><div class="empty"><b>Ainda ninguém</b>Convide a primeira pessoa acima.</div></td></tr>{% endif %}
+    {% endfor %}
+    </tbody>
+  </table></div>
+</section>
+<p class="small muted">Tudo o que se faz aqui fica em <a href="/jobs">Execuções e auditoria</a>. As palavras-passe nunca são guardadas: só um hash (scrypt). Ao fim de 10 tentativas falhadas em 15 minutos, esse utilizador fica bloqueado 15 minutos nesse endereço.</p>
+{% endblock %}
