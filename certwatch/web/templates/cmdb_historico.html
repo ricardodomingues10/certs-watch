@@ -58,7 +58,7 @@
         {% if w.detalhe and w.estado != 'ok' %}<div class="small muted">{{ w.detalhe }}</div>{% endif %}</td>
     </tr>
   {% else %}
-    <tr><td colspan="6"><div class="empty">{% if qs %}<b>Nada com estes filtros</b><a href="/cmdb/historico">Limpar os filtros</a>{% else %}<b>Ainda não foi feita nenhuma alteração na UCMDB</b>As alterações aplicadas em <a href="/cmdb-final">Reconciliar e atualizar</a> ou em <a href="/ucmdb/certificado">Editar um certificado</a> aparecem aqui.{% endif %}</div></td></tr>
+    <tr><td colspan="6"><div class="empty">{% if qs %}<b>Nada com estes filtros</b><a href="/cmdb/historico">Limpar os filtros</a>{% else %}<b>Ainda não foi feita nenhuma alteração na UCMDB</b>As alterações aplicadas em <a href="/cmdb-final">Atualizar a CMDB</a> ou em <a href="/ucmdb/certificado">Editar um certificado</a> aparecem aqui.{% endif %}</div></td></tr>
   {% endfor %}
   </tbody>
 </table>

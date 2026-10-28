@@ -102,7 +102,7 @@ A interface ocupa a largura toda do ecrã e adapta-se a qualquer tamanho. A nave
 
 **Cliente**: o nome em `CERTWATCH_CLIENT_NAME` e o logo em `branding/logo.svg` (ou `logo.png`, `logo.webp`; fundo transparente, até 2 MB) aparecem no topo da coluna, no título das páginas e no rodapé. O logo aparece como é, com o fundo transparente, centrado sobre a coluna. Se for escuro e se perder na coluna escura, use `CERTWATCH_LOGO_STYLE=claro` (o logo passa a branco) ou `placa` (sobre uma placa clara). Os ficheiros de logo não vão para o repositório: cada instalação tem o seu.
 
-**Temas**: Consola (escuro, ciano; por omissão), Assinatura (escuro, violeta) e Relatório (claro, cobalto). Vermelho, âmbar e verde ficam reservados para estados. O tema por omissão define-se em `CERTWATCH_UI_PALETTE=consola|assinatura|relatorio`; cada pessoa pode escolher outro no rodapé (fica guardado só no seu browser).
+**Temas**: Consola (escuro, ciano; por omissão), Assinatura (escuro, violeta) e Relatório (claro, cobalto). Vermelho, âmbar e verde ficam reservados para estados. O tema por omissão define-se em `CERTWATCH_UI_PALETTE=consola|assinatura|relatorio`; cada pessoa pode escolher outro no rodapé (fica guardado só no seu browser). Todas as páginas seguem o mesmo estilo: cartões de cantos redondos, títulos em texto normal, contagens em pastilhas e números grandes em mosaicos; a letra monoespaçada fica só para dados técnicos (nomes, séries, caminhos).
 
 **Painel**: o que fazer hoje.
 - Contadores no topo: expirados ainda em uso, a expirar sem pedido, renovados mas não instalados, pedidos parados, pedidos abertos com certificado já expirado, alertas críticos e mudanças nos pedidos. Cada um abre a lista.

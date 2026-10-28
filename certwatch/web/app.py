@@ -372,7 +372,7 @@ def setup_checklist(s, settings, stats) -> list[dict]:
     files = cf.current_inputs(s, settings)
     items.append({"ok": True if files else None, "title": "Fontes da reconciliação",
                   "hint": (", ".join(f"{k}: {v['nome']}" for k, v in files.items()) if files else
-                           "Colocar exportações ca1*, ca2*, avi* e azure* na diretoria import/ ou carregá-las em Reconciliar e atualizar.")})
+                           "Colocar exportações ca1*, ca2*, avi* e azure* na diretoria import/ ou carregá-las em Atualizar a CMDB.")})
     items.append({"ok": True if settings.ucmdb_write else None, "title": "Escrita na UCMDB",
                   "hint": ("Ligada: a reconciliação aplica as alterações diretamente na UCMDB." if settings.ucmdb_write else
                            "Opcional: definir CERTWATCH_UCMDB_WRITE=true no .env para aplicar as alterações na UCMDB.")})

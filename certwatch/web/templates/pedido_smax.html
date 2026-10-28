@@ -128,7 +128,7 @@
   {% if perc.cmdb %}<p class="small muted">Na CMDB: {% for r in perc.cmdb %}{{ r.valid_to|dt }}{{ ' (' ~ (r.issuer_name or r.issuer) ~ ')' if (r.issuer_name or r.issuer) }}{{ ', ' if not loop.last }}{% endfor %}</p>{% endif %}
   {% if not perc.steps[3].done %}
   <p>{% if perc.steps[3].run %}<a class="button" href="/cmdb-final/{{ perc.steps[3].run.id }}?vista=alterados&amp;q={{ perc.cn|urlencode }}">Ver na reconciliação #{{ perc.steps[3].run.id }}</a>{% endif %}
-     <a class="button" href="/cmdb-final">Reconciliar e atualizar</a></p>
+     <a class="button" href="/cmdb-final">Atualizar a CMDB</a></p>
   {% endif %}
 </section>
 

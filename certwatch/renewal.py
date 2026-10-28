@@ -246,7 +246,7 @@ def pipeline(t: SmaxTicket, settings: Settings, ctx: Context) -> dict:
                     s4["detail"] = (f"Na reconciliação #{run.id}, " + ("incluída, por aplicar na UCMDB" if inc else "excluída"))
                 break
         else:
-            s4["detail"] = ("Ainda não está numa reconciliação. Reconcilie em CMDB → Reconciliar e atualizar"
+            s4["detail"] = ("Ainda não está numa reconciliação. Reconcilie em CMDB → Atualizar a CMDB"
                             + (" (a renovação registada entra automaticamente)." if registered else
                                "; registe a renovação para garantir que entra."))
     else:
