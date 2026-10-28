@@ -684,7 +684,9 @@ def test_reconcile_one_source(settings, monkeypatch):
     (settings.import_dir / "avi.csv").write_bytes(AVI)            # só o AVI, na diretoria
     with TestClient(webapp.app) as c:
         page = c.get("/cmdb-final", auth=AUTH).text
-        assert "Comparar só esta fonte" in page and "import/avi.csv" in page
+        assert "import/avi.csv" in page and "Ler pela API do AVI" in page          # a lista de fontes e as ligações
+        page = c.get("/cmdb-final?fonte=AVI", auth=AUTH).text
+        assert "Comparar só AVI" in page and "import/avi.csv" in page and 'name="fonte" value="AVI"' in page
         token = c.cookies["cw_csrf"]
         # tudo: falta CA1 e CA2, com a indicação do nome esperado na diretoria
         r = c.post("/cmdb-final/gerar", data={"csrf": token}, auth=AUTH)
@@ -708,7 +710,7 @@ def test_reconcile_one_source(settings, monkeypatch):
         c.post("/cmdb-final/fonte/AVI", data={"csrf": token}, files={"ficheiro": ("avi-novo.csv", AVI)}, auth=AUTH)
         with session_scope() as s:
             assert cf.current_inputs(s, settings)["AVI"]["origem"] == "carregado"
-        page = c.get("/cmdb-final", auth=AUTH).text
+        page = c.get("/cmdb-final?fonte=AVI", auth=AUTH).text
         assert "Voltar a usar a diretoria import/" in page and "não usado: há um carregado mais recente" in page
         c.post("/cmdb-final/fonte/AVI/diretoria", data={"csrf": token}, auth=AUTH)
         with session_scope() as s:
@@ -723,3 +725,48 @@ def test_data_flow_azure_only():
     flow = cf.data_flow(run)
     assert flow[0]["titulo"] == "Azure" and flow[0]["n"] == 3 and flow[1]["n"] == 40
     assert flow[2]["n"] == 3 and flow[3]["n"] == 2 and "2 não existem na CMDB" in flow[3]["det"]
+
+
+def test_sources_page_per_source_and_bulk_upload(settings, monkeypatch):
+    """A página das fontes: cada fonte com as suas diferenças da última comparação em que entrou, o detalhe da
+    fonte escolhida e o carregamento de vários ficheiros de uma vez, com a fonte reconhecida pelo nome."""
+    import copy
+    from types import SimpleNamespace
+
+    from fastapi.testclient import TestClient
+
+    from certwatch.web import app as webapp
+
+    # contagens por fonte: a comparação só do AVI conta para o AVI; para a CA1 vale a última completa
+    full = SimpleNamespace(id=5, status="pronto", summary={}, changes=[{"fonte": "CA1", "tipo": "novo"}, {"fonte": "CA1", "tipo": "alterado"},
+                           {"fonte": "AVI", "tipo": "alterado"}], problems=[{"fonte": "CA1"}, "texto solto"], vistas={})
+    only_avi = SimpleNamespace(id=6, status="pronto", summary={"ambito": ["AVI"]}, changes=[], problems=[{"fonte": "AVI"}], vistas={})
+    src = {x["id"]: x for x in webapp.recon_sources(settings, {}, {}, [only_avi, full], None, 0)}
+    assert src["CA1"]["run"].id == 5 and src["CA1"]["cnt"]["novos"] == 1 and src["CA1"]["cnt"]["problemas"] == 1
+    assert src["AVI"]["run"].id == 6 and src["AVI"]["diffs"] == 0 and src["AVI"]["alone"]
+    assert src["CA1"]["bar"]["novos"] % 5 == 0 and not src["CA1"]["has"] and src["CA1"]["kind"] == "file"
+
+    monkeypatch.setattr(webapp, "get_settings", lambda: settings)
+
+    def fake_bg(run_id, st, only=None):
+        cf.generate(run_id, st, fetch=lambda s2: (cf.build_cmdb_table(copy.deepcopy(CIS), s2), []),
+                    live_factory=lambda s, s2: live, today=TODAY, only=only)
+    monkeypatch.setattr(cf, "generate_in_background", fake_bg)
+    AUTH = ("admin", "teste-admin-123")
+    with TestClient(webapp.app) as c:
+        page = c.get("/cmdb-final", auth=AUTH).text
+        assert "Todas as fontes" in page and "0 de" in page and "Arraste para aqui" in page
+        token = c.cookies["cw_csrf"]
+        r = c.post("/cmdb-final/fontes/carregar", data={"csrf": token},
+                   files=[("ficheiros", ("ca1-2026.csv", CA1)), ("ficheiros", ("avi.csv", AVI)), ("ficheiros", ("notas.csv", b"a;b\n1;2\n"))],
+                   auth=AUTH)
+        assert r.status_code == 200
+        assert "ca1-2026.csv carregado como CA1" in r.text and "avi.csv carregado como AVI" in r.text
+        assert "notas.csv: o nome não começa por nenhum prefixo conhecido" in r.text
+        assert c.post("/cmdb-final/fontes/carregar", data={"csrf": "x"}, files=[("ficheiros", ("avi.csv", AVI))], auth=AUTH).status_code == 403
+        r = c.post("/cmdb-final/gerar", data={"csrf": token, "fonte": "CA1"}, auth=AUTH, follow_redirects=False)
+        page = c.get("/cmdb-final?fonte=CA1", auth=AUTH).text
+        assert "Comparar só CA1" in page and "ca1-2026.csv" in page and "Diferenças com a CMDB" in page
+        assert "vista=novos&amp;fonte=CA1" in page or "vista=alterados&amp;fonte=CA1" in page
+        assert 'aria-current="true"' in page and "fonte=CA1#fontes" in page
+        assert c.get("/cmdb-final?fonte=XPTO", auth=AUTH).status_code == 200            # fonte desconhecida: todas

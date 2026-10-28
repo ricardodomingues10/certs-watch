@@ -1,107 +1,199 @@
 {% extends "base.html" %}
-{% from "_macros.html" import recon_steps %}
+{% from "_macros.html" import recon_status %}
 {% block title %}Atualizar a CMDB{% endblock %}
 {% block crumb %}CMDB{% endblock %}
 {% block page_title %}Atualizar a CMDB{% endblock %}
-{% block lede %}Compara as fontes (CAs, AVI, Azure, internet e renovações registadas) com a CMDB lida agora pela API, mostra cada diferença e porquê, e aplica na UCMDB as que escolher. Cinco passos; o próximo está sempre destacado.{% endblock %}
+{% block lede %}Cada fonte lê-se e compara-se sozinha ou com as outras. A UCMDB só muda com a sua confirmação.{% endblock %}
 {% set missing = settings.final_sources|reject('in', inputs)|list %}
 {% set busy = latest and latest.status == 'a_gerar' %}
 {% block actions %}
+<a class="button" href="#historico">Histórico</a>
 <form method="post" action="/cmdb-final/gerar"><input type="hidden" name="csrf" value="{{ csrf }}">
-  <button {{ 'disabled' if missing or busy }} title="{{ 'Falta: ' ~ missing|join(', ') if missing else ('A comparar (#' ~ latest.id ~ ')' if busy else 'Lê a CMDB pela API e todas as fontes, e compara') }}">Comparar todas as fontes</button></form>
+  <button class="primary" {{ 'disabled' if missing or busy }} title="{{ 'Falta: ' ~ missing|join(', ') if missing else ('A comparar (#' ~ latest.id ~ ')' if busy else 'Lê a CMDB pela API e todas as fontes, e compara') }}">Comparar todas as fontes</button></form>
 {% endblock %}
-{% block content %}
-{% set ready = latest and latest.status in ('pronto', 'bloqueado') %}
-{% set lsm = latest.summary if latest and latest.summary else {} %}
-{{ recon_steps(guide, csrf) }}
 
-{% macro files_cell(src, required) %}{% set f = files.get(src) %}{% set i = inputs.get(src) %}
-  {% if f and f.diretoria %}<div class="{{ 'muted' if i and i.origem != 'diretoria' }}"><span class="mono small">import/{{ f.diretoria.nome }}</span>
-    <div class="small muted">{{ f.diretoria.quando|dtt }}{% if i and i.origem == 'diretoria' %} · <b>em uso</b>{% else %} · não usado: há um carregado mais recente{% endif %}</div></div>
-  {% else %}<div class="small muted">import/: nenhum ficheiro a começar por <span class="mono">{{ settings.import_sources.get(src, src|lower) }}</span></div>{% endif %}
-  {% if f and f.carregado %}<div class="mt-s {{ 'muted' if i and i.origem != 'carregado' }}"><span class="mono small">{{ f.carregado.nome }}</span>
-    <div class="small muted">carregado por {{ f.carregado.por }}, {{ f.carregado.quando|dtt }}{% if i and i.origem == 'carregado' %} · <b>em uso</b>{% else %} · não usado: o da diretoria é mais recente{% endif %}</div></div>{% endif %}
-  {% if not i and required %}<span class="tag tag-err">em falta</span>{% endif %}
-{% endmacro %}
-{% macro actions_cell(src) %}
-  {% if src in files %}<form class="upload" method="post" action="/cmdb-final/fonte/{{ src }}" enctype="multipart/form-data">
-    <input type="hidden" name="csrf" value="{{ csrf }}">
-    <input type="file" name="ficheiro" accept=".csv,.txt,.xlsx,.xlsm" required aria-label="Ficheiro de {{ label }}">
-    <button>Carregar</button></form>
-  {% if files[src].carregado %}<form method="post" action="/cmdb-final/fonte/{{ src }}/diretoria" class="mt-s"><input type="hidden" name="csrf" value="{{ csrf }}">
-    <button class="link small" data-confirm="Esquecer o ficheiro carregado de {{ label }} e usar o da diretoria import/?">Voltar a usar a diretoria import/</button></form>{% endif %}{% endif %}
-{% endmacro %}
-{% macro only_btn(src, can, label) %}
-  <form method="post" action="/cmdb-final/gerar" class="mt-s"><input type="hidden" name="csrf" value="{{ csrf }}"><input type="hidden" name="fonte" value="{{ src }}">
-    <button class="small" {{ 'disabled' if not can or busy }} title="{{ 'A comparar' if busy else ('Compara só ' ~ label ~ ' com a CMDB; as outras fontes não são lidas' if can else 'Sem dados de ' ~ label) }}">Comparar só esta fonte</button></form>
-{% endmacro %}
-<section class="card" id="fontes">
-  <h2>Passo 1 · Fontes</h2>
-  <p class="small muted">Se não carregar nada, é lido o ficheiro mais recente da diretoria <span class="mono">import/</span> do servidor (nome a começar por {% for src in settings.final_sources %}<span class="mono">{{ settings.import_sources.get(src, src|lower) }}</span>, {% endfor %}<span class="mono">{{ settings.import_sources.get(AZURE, 'azure') }}</span>). Um ficheiro carregado aqui só é usado enquanto for mais recente do que o da diretoria. Pode comparar todas as fontes ou uma de cada vez.</p>
-  <div class="scroll"><table class="compact">
-    <thead><tr><th>Fonte</th><th>Como é usada</th><th>Ficheiro</th><th>Carregar outro</th></tr></thead>
-    {% for src in settings.final_sources %}
-    <tr>
-      <td><b>{{ src }}</b><div class="small muted">obrigatória para comparar tudo</div>{{ only_btn(src, inputs.get(src), src) }}</td>
-      <td class="small">{% if src in ('CA1', 'CA2') %}Exportação da CA (certutil): CommonName, data de expiração, série e estado do pedido. Emissor: {% if issuers.get(src) %}{{ issuers[src] }}{% else %}<span class="tag tag-run" title="Os certificados novos desta CA ficam com o emissor Por verificar">por definir em CERTWATCH_IMPORT_ISSUERS</span>{% endif %}{% else %}Exportação com CommonName, data de fim, série, emissor e nomes alternativos.{% endif %}</td>
-      <td>{{ files_cell(src, true) }}</td>
-      <td>{{ actions_cell(src) }}{% if src == 'AVI' %}<div class="mt-s small"><a href="/cmdb-final/avi">Ler pela API do AVI</a>{% if settings.avi_source != 'ficheiro' %} <span class="tag tag-acc">{{ 'API' if settings.avi_source == 'api' else 'API, ficheiro se falhar' }}</span>{% endif %}</div>{% endif %}</td>
-    </tr>
-    {% endfor %}
-    <tr>
-      <td><b>Azure</b><div class="small muted">opcional</div>{{ only_btn(AZURE, inputs.get(AZURE), 'Azure') }}</td>
-      <td class="small">App Registrations: cada credencial (segredo ou certificado) é comparada com a lista de APIs e com a de certificados.{% if apis_at %} Lista de APIs lida em {{ apis_at|dtt }}.{% endif %}</td>
-      <td>{{ files_cell(AZURE, false) }}</td>
-      <td>{{ actions_cell(AZURE) }}</td>
-    </tr>
-    {% if ct is not none %}
-    <tr>
-      <td><b>Internet</b><div class="small muted">automática</div>{{ only_btn('INTERNET', ct.validas, 'Internet') }}</td>
-      <td class="small">Certificados encontrados nos registos públicos (Certificate Transparency): o mais recente de cada nome. Só os marcados "Adicionar à CMDB" vêm incluídos; os "Ignorar" ficam de fora.</td>
-      <td>{% if ct.validas %}<b>{{ ct.validas }}</b> válido{{ 's' if ct.validas != 1 }}
-          <div class="small muted">{{ ct.triagem.adicionar }} "Adicionar à CMDB", {{ ct.triagem.por_triar }} por triar, {{ ct.triagem.investigar }} a investigar</div>
-          {% else %}<span class="muted small">nenhum</span>{% endif %}</td>
-      <td class="small"><a href="/descoberta">Triar em Na internet</a></td>
-    </tr>
-    {% endif %}
-    <tr>
-      <td><b>Renovações</b><div class="small muted">automática</div>{{ only_btn('RENOVACAO', renewals, 'Renovações') }}</td>
-      <td class="small">Renovações registadas na página de cada pedido SMAX (do servidor, do ficheiro do certificado ou à mão). Têm prioridade sobre as outras fontes.</td>
-      <td>{% if renewals %}<b>{{ renewals }}</b> registada{{ 's' if renewals != 1 }}{% else %}<span class="muted small">nenhuma</span>{% endif %}</td>
-      <td class="small"><a href="/pedidos">Pedidos SMAX</a></td>
-    </tr>
-  </table></div>
-  {% if dir_files %}
-  <details class="small mt"><summary>Ficheiros na diretoria import/ ({{ dir_files|length }}) e o que acontece a cada um</summary>
-    <table class="compact mt"><thead><tr><th>Ficheiro</th><th class="num">Tamanho</th><th>Uso</th></tr></thead>
-    {% for f in dir_files %}<tr><td class="mono">{{ f.name }}</td><td class="num">{{ '%.1f KB'|format(f.size / 1024) }}</td>
-      <td>{% if f.ok %}{{ f.what }}{% else %}<span class="tag tag-run">{{ f.what }}</span>{% endif %}</td></tr>{% endfor %}
-    </table></details>
+{% macro diff_tiles(run, cnt, src) %}{% set q = '&fonte=' ~ src if src else '' %}
+<div class="rc-stats">
+  {% if src == AZURE %}
+  <a class="rc-stat" href="/cmdb-final/{{ run.id }}?vista=azure"><span>Credenciais a rever</span><b>{{ cnt.azure }}</b></a>
+  {% else %}
+  <a class="rc-stat" href="/cmdb-final/{{ run.id }}?vista=novos{{ q }}"><span>Novos</span><b>{{ cnt.novos }}</b></a>
+  <a class="rc-stat" href="/cmdb-final/{{ run.id }}?vista=alterados{{ q }}"><span>Alterados</span><b>{{ cnt.alterados }}</b></a>
+  {% if not src %}<a class="rc-stat" href="/cmdb-final/{{ run.id }}?vista=so_na_cmdb"><span>Só na CMDB</span><b class="muted">{{ cnt.so_na_cmdb }}</b></a>{% endif %}
+  <a class="rc-stat" href="/cmdb-final/{{ run.id }}?vista=erros"><span>Problemas nas linhas</span><b class="{{ 'bad' if cnt.problemas else 'muted' }}">{{ cnt.problemas }}</b></a>
   {% endif %}
-  <p class="small muted">A CMDB é lida pela API no momento de comparar (TQL <span class="mono">{{ settings.ucmdb_tql or '(não definido)' }}</span>{% if cmdb_at %}; última leitura {{ cmdb_at|dtt }}{% endif %}).</p>
+</div>
+{% endmacro %}
+
+{% macro file_rows(x) %}{% set f = x.files %}{% set i = x.input %}
+<div class="rc-files">
+  {% if f and f.diretoria %}<div class="rc-file {{ 'is-off' if i and i.origem != 'diretoria' }}">
+    <span class="mono">import/{{ f.diretoria.nome }}</span>
+    <span class="small muted">{{ f.diretoria.quando|dtt }} · {{ f.diretoria.quando|ago }}{% if i and i.origem == 'diretoria' %} · <b>em uso</b>{% else %} · não usado: há um carregado mais recente{% endif %}</span></div>
+  {% else %}<div class="rc-file is-off"><span class="small muted">import/: nenhum ficheiro a começar por <span class="mono">{{ settings.import_sources.get(x.id, x.id|lower) }}</span></span></div>{% endif %}
+  {% if f and f.carregado %}<div class="rc-file {{ 'is-off' if i and i.origem != 'carregado' }}">
+    <span class="mono">{{ f.carregado.nome }}</span>
+    <span class="small muted">carregado por {{ f.carregado.por }}, {{ f.carregado.quando|dtt }}{% if i and i.origem == 'carregado' %} · <b>em uso</b>{% else %} · não usado: o da diretoria é mais recente{% endif %}</span></div>{% endif %}
+</div>
+<div class="rc-actions">
+  <form class="rc-upload" method="post" action="/cmdb-final/fonte/{{ x.id }}" enctype="multipart/form-data">
+    <input type="hidden" name="csrf" value="{{ csrf }}">
+    <label class="rc-pick"><span>Escolher ficheiro de {{ x.name }}</span>
+      <input type="file" name="ficheiro" accept=".csv,.txt,.xlsx,.xlsm" required aria-label="Ficheiro de {{ x.name }}" data-autosubmit></label>
+    <button class="rc-nojs">Carregar</button></form>
+  {% if f and f.carregado %}<form method="post" action="/cmdb-final/fonte/{{ x.id }}/diretoria"><input type="hidden" name="csrf" value="{{ csrf }}">
+    <button class="link small" data-confirm="Esquecer o ficheiro carregado de {{ x.name }} e usar o da diretoria import/?">Voltar a usar a diretoria import/</button></form>{% endif %}
+</div>
+{% endmacro %}
+
+{% block content %}<div class="rc-page">
+{% for n in notas %}<div class="note">{{ n }}</div>{% endfor %}
+{% for a in avisos %}<div class="note warn">{{ a }}</div>{% endfor %}
+
+<div class="rc-top">
+  {{ recon_status(guide, csrf) }}
+  <aside class="rc-dest" aria-label="Destino">
+    <span class="rc-dest-k">Destino</span>
+    <b class="rc-dest-t"><span class="rc-live {{ 'on' if settings.ucmdb_write else 'off' }}"></span>UCMDB · API</b>
+    <span>TQL <span class="mono">{{ settings.ucmdb_tql or '(não definido)' }}</span></span>
+    <span>{% if cmdb_at %}lida {{ cmdb_at|ago }}{% else %}ainda não lida{% endif %} · escrita {{ 'ligada' if settings.ucmdb_write else 'desligada' }}</span>
+    <a href="/cmdb-final/permissoes">Ligação à UCMDB</a>
+  </aside>
+</div>
+
+<section class="rc-layout" id="fontes" aria-label="Fontes">
+  <div class="rc-list">
+    <div class="rc-list-h"><h2>Fontes</h2><span class="small muted">{{ n_ready }} de {{ sources|length }} com dados</span></div>
+    <a class="rc-src {{ 'on' if not sel }}" href="/cmdb-final#fontes" {% if not sel %}aria-current="true"{% endif %}>
+      <span class="rc-src-top"><span class="rc-dot k-all"></span><b>Todas as fontes</b>
+        {% if ready_cnt %}<span class="rc-pill">{{ ready_cnt.novos + ready_cnt.alterados }} alterações</span>{% endif %}</span>
+      <span class="small muted">{% if ready %}#{{ ready.id }} · {{ ready.created_at|dtt }}{% if (ready.summary or {}).get('ambito') %} · só {{ ready.summary.ambito|map('source_name')|join(', ') }}{% endif %}{% else %}ainda não comparadas{% endif %}</span>
+    </a>
+    {% for x in sources %}
+    <a class="rc-src {{ 'on' if sel == x.id }}" href="/cmdb-final?fonte={{ x.id }}#fontes" {% if sel == x.id %}aria-current="true"{% endif %}>
+      <span class="rc-src-top"><span class="rc-dot k-{{ x.kind }}{{ ' is-missing' if not x.has and x.required }}"></span><b>{{ x.name }}</b>
+        <span class="rc-mode k-{{ x.kind }}">{{ x.mode }}</span>
+        {% if x.diffs is not none %}<span class="rc-pill {{ 'is-zero' if not x.diffs }}">{{ x.diffs if x.diffs else 'em dia' }}{{ ' a rever' if x.diffs and x.id == AZURE else (' alterações' if x.diffs else '') }}</span>
+        {% elif not x.has and x.required %}<span class="rc-pill is-bad">em falta</span>{% endif %}</span>
+      <span class="rc-bar" aria-hidden="true"><i class="b-n w{{ x.bar.novos }}"></i><i class="b-a w{{ x.bar.alterados }}"></i><i class="b-p w{{ x.bar.problemas }}"></i></span>
+      <span class="small muted">{{ x.fresh }}{% if x.stale %} <span class="rc-age">há {{ x.age }} dias</span>{% endif %}</span>
+    </a>
+    {% endfor %}
+    <div class="rc-legend small muted"><span><i class="b-n"></i>novos</span><span><i class="b-a"></i>alterados</span><span><i class="b-p"></i>problemas nas linhas</span></div>
+
+    <form class="rc-drop" method="post" action="/cmdb-final/fontes/carregar" enctype="multipart/form-data">
+      <input type="hidden" name="csrf" value="{{ csrf }}">
+      <label><input type="file" name="ficheiros" multiple accept=".csv,.txt,.xlsx,.xlsm" aria-label="Ficheiros das fontes" data-autosubmit>
+        <b>Arraste para aqui as exportações novas</b>
+        <span class="small muted">CSV ou Excel. A fonte é reconhecida pelo nome ({% for src in settings.final_sources %}{{ settings.import_sources.get(src, src|lower) }}*, {% endfor %}{{ settings.import_sources.get(AZURE, 'azure') }}*).</span></label>
+      <button class="rc-nojs">Carregar</button>
+    </form>
+  </div>
+
+  <article class="rc-card rc-detail" id="detalhe" aria-label="{{ cur.name if cur else 'Todas as fontes' }}">
+  {% if cur %}{% set x = cur %}
+    <header class="rc-detail-h">
+      <div>
+        <h2>{{ x.name }} <span class="rc-mode k-{{ x.kind }}">{{ x.mode }}</span>{% if not x.required and x.kind != 'auto' %} <span class="rc-mode">opcional</span>{% endif %}</h2>
+        <p class="muted">{{ x.desc }}{% if x.id in ('CA1', 'CA2') and x.id in issuers %} Emissor: {% if issuers[x.id] %}{{ issuers[x.id] }}{% else %}<span class="tag tag-run" title="Os certificados novos desta CA ficam com o emissor Por verificar">por definir em CERTWATCH_IMPORT_ISSUERS</span>{% endif %}.{% endif %}</p>
+      </div>
+      <form method="post" action="/cmdb-final/gerar"><input type="hidden" name="csrf" value="{{ csrf }}"><input type="hidden" name="fonte" value="{{ x.id }}">
+        <button class="rc-dark" {{ 'disabled' if not x.has or busy }} title="{{ 'A comparar' if busy else ('Compara só ' ~ x.name ~ ' com a CMDB; as outras fontes não são lidas' if x.has else 'Sem dados de ' ~ x.name) }}">Comparar só {{ x.name }}</button></form>
+    </header>
+    {% if busy %}<div class="rc-running" role="status">A comparar (#{{ latest.id }}). <a href="/cmdb-final/{{ latest.id }}">Ver o progresso</a></div>{% endif %}
+
+    <div class="rc-facts">
+      {% if x.id == 'INTERNET' %}
+      <div><span>Certificados válidos</span><b>{{ ct.validas if ct else 0 }}</b></div>
+      <div><span>Triagem</span><b>{{ ct.triagem.adicionar if ct else 0 }} a adicionar · {{ ct.triagem.por_triar if ct else 0 }} por triar</b></div>
+      {% elif x.id == 'RENOVACAO' %}
+      <div><span>Renovações registadas</span><b>{{ renewals }}</b></div>
+      <div><span>Origem</span><b>pedidos SMAX</b></div>
+      {% else %}
+      <div><span>Última leitura</span><b>{% if x.input %}{{ x.input.quando|dtt }}{% else %}—{% endif %}</b>{% if x.input %}<small class="{{ 'warn' if x.stale }}">{{ x.input.quando|ago }}</small>{% endif %}</div>
+      <div><span>Em uso</span><b class="mono">{% if x.input %}{{ ('import/' ~ x.input.nome) if x.input.origem == 'diretoria' else x.input.nome }}{% else %}nenhum ficheiro{% endif %}</b>{% if x.input and x.input.origem == 'carregado' %}<small>carregado por {{ x.input.por }}</small>{% endif %}</div>
+      {% endif %}
+      <div><span>Comparada</span><b>{% if x.run %}<a href="/cmdb-final/{{ x.run.id }}">#{{ x.run.id }}</a> · {{ x.run.created_at|dtt }}{% else %}ainda não{% endif %}</b>{% if x.run %}<small>{{ 'comparação parcial' if x.alone else 'com todas as fontes' }}</small>{% endif %}</div>
+    </div>
+
+    <div class="rc-block">
+      <h3>Diferenças com a CMDB <small>{% if x.run %}na comparação #{{ x.run.id }}{% else %}compare para ver{% endif %}</small></h3>
+      {% if x.run %}{{ diff_tiles(x.run, x.cnt, x.id) }}
+        {% if x.diffs %}<a class="button primary" href="/cmdb-final/{{ x.run.id }}?vista={{ 'azure' if x.id == AZURE else ('novos' if x.cnt.novos else 'alterados') }}{{ '' if x.id == AZURE else '&fonte=' ~ x.id }}">Rever {{ x.diffs }} {{ 'credenciais' if x.id == AZURE else ('alteração' if x.diffs == 1 else 'alterações') }} de {{ x.name }}</a>{% endif %}
+      {% else %}<p class="muted">Ainda não entrou numa comparação. Use «Comparar só {{ x.name }}».</p>{% endif %}
+    </div>
+
+    <div class="rc-block rc-link">
+      <h3>Como chega</h3>
+      {% if x.id == 'INTERNET' %}
+        <p>Leitura automática na execução diária (crt.sh, Cert Spotter, ctlogs.dev). Não precisa de ficheiros.</p>
+        <a class="button" href="/descoberta">Triar em Na internet</a>
+      {% elif x.id == 'RENOVACAO' %}
+        <p>Cada renovação registada num pedido entra na comparação seguinte, com prioridade sobre as outras fontes.</p>
+        <a class="button" href="/pedidos">Abrir Pedidos SMAX</a>
+      {% else %}
+        {% if x.id == 'AVI' %}<p>{% if x.kind == 'api' %}Pela REST API do controlador ({{ x.mode }}).{% else %}Por ficheiro; também pode ser lido pela API do controlador.{% endif %} <a href="/cmdb-final/avi">Ler pela API do AVI</a></p>
+        {% elif x.id == AZURE %}<p>Por ficheiro: a exportação das App Registrations.{% if apis_at %} Lista de APIs da CMDB lida {{ apis_at|ago }}.{% endif %}</p>
+        {% else %}<p>Por ficheiro: o mais recente da diretoria <span class="mono">import/</span>, ou o carregado aqui se for mais recente.</p>{% endif %}
+        {{ file_rows(x) }}
+      {% endif %}
+    </div>
+
+  {% else %}
+    <header class="rc-detail-h">
+      <div>
+        <h2>Todas as fontes <span class="rc-mode k-all">comparação completa</span></h2>
+        <p class="muted">Junta as fontes, aplica as regras (o servidor decide datas em conflito) e mostra uma só lista de alterações. A CMDB é lida pela API no momento de comparar.</p>
+      </div>
+    </header>
+    {% if busy %}<div class="rc-running" role="status">A comparar (#{{ latest.id }}). <a href="/cmdb-final/{{ latest.id }}">Ver o progresso</a></div>{% endif %}
+    <div class="rc-facts">
+      <div><span>Última comparação</span><b>{% if ready %}<a href="/cmdb-final/{{ ready.id }}">#{{ ready.id }}</a> · {{ ready.created_at|dtt }}{% else %}nenhuma{% endif %}</b>{% if ready %}<small>{% if (ready.summary or {}).get('ambito') %}só {{ ready.summary.ambito|map('source_name')|join(', ') }}{% else %}todas as fontes{% endif %}</small>{% endif %}</div>
+      <div><span>Fontes com dados</span><b>{{ n_ready }} de {{ sources|length }}</b>{% if missing %}<small class="warn">falta {{ missing|join(', ') }}</small>{% endif %}</div>
+      <div><span>Ficheiro mais antigo</span><b>{% if oldest %}{{ oldest.name }}{% else %}—{% endif %}</b>{% if oldest %}<small class="{{ 'warn' if oldest.stale }}">{{ oldest.input.quando|ago }}</small>{% endif %}</div>
+    </div>
+    <div class="rc-block">
+      <h3>Diferenças com a CMDB <small>{% if ready %}na comparação #{{ ready.id }}{% endif %}</small></h3>
+      {% if ready %}{{ diff_tiles(ready, ready_cnt, '') }}
+        {% if ready_cnt.novos + ready_cnt.alterados %}<a class="button primary" href="/cmdb-final/{{ ready.id }}#alteracoes">Rever as alterações</a>{% endif %}
+      {% else %}<p class="muted">Ainda não há comparações. Confirme as fontes e use «Comparar todas as fontes».</p>{% endif %}
+    </div>
+    <div class="rc-block">
+      <h3>Como chega cada fonte</h3>
+      <div class="rc-ways">
+        {% for x in sources %}
+        <a class="rc-way" href="/cmdb-final?fonte={{ x.id }}#fontes"><b>{{ x.name }}</b><span class="rc-mode k-{{ x.kind }}">{{ x.mode }}</span><span class="small muted">{{ x.fresh }}</span></a>
+        {% endfor %}
+      </div>
+      <p class="small"><a href="/cmdb-final/avi">Ler pela API do AVI</a> · <a href="/cmdb-final/permissoes">Ligação à UCMDB</a></p>
+      {% if dir_files %}
+      <details class="small"><summary>Ficheiros na diretoria import/ ({{ dir_files|length }}) e o que acontece a cada um</summary>
+        <table class="compact mt"><thead><tr><th>Ficheiro</th><th class="num">Tamanho</th><th>Uso</th></tr></thead>
+        {% for f in dir_files %}<tr><td class="mono">{{ f.name }}</td><td class="num">{{ '%.1f KB'|format(f.size / 1024) }}</td>
+          <td>{% if f.ok %}{{ f.what }}{% else %}<span class="tag tag-run">{{ f.what }}</span>{% endif %}</td></tr>{% endfor %}
+        </table></details>
+      {% endif %}
+    </div>
+  {% endif %}
+  </article>
 </section>
 
-<section class="card flush">
-  <h2>Comparações anteriores</h2>
-  <div class="scroll"><table>
-    <thead><tr><th>Reconciliação</th><th>Por</th><th>Estado</th><th class="num">Novos</th><th class="num">Alterados</th><th class="num opt">Só na CMDB</th><th class="num opt">Erros nas fontes</th><th class="num">Aplicadas na UCMDB</th></tr></thead>
-    <tbody>
-    {% set newest_ready = (runs|selectattr('status', 'in', ['pronto', 'bloqueado'])|first) %}
-    {% for r in runs %}{% set sm = r.summary or {} %}{% set superseded = r.status in ('pronto', 'bloqueado') and newest_ready and r.id != newest_ready.id %}
-    <tr>
-      <td><a href="/cmdb-final/{{ r.id }}"><b>#{{ r.id }}</b></a> <span class="small muted">{{ r.created_at|dtt }}</span>
-        <div class="small muted">{% if sm.get('ambito') %}só {{ sm.ambito|map('source_name')|join(', ') }}{% else %}todas as fontes{% endif %}</div></td>
-      <td class="small">{{ r.created_by }}</td>
-      <td>{% if superseded %}<span class="tag tag-off" title="Há uma reconciliação mais recente; só a mais recente pode ser aplicada">substituída</span>{% else %}<span class="tag {{ {'pronto': 'tag-ok', 'bloqueado': 'tag-ok', 'erro': 'tag-err', 'a_gerar': 'tag-acc'}[r.status] }}">{{ FINAL_STATES[r.status] }}</span>{% endif %}</td>
-      <td class="num">{{ sm.get('novos', '—') }}</td><td class="num">{{ sm.get('alterados', '—') }}</td>
-      <td class="num opt">{{ sm.get('so_na_cmdb', '—') }}</td><td class="num opt">{{ sm.get('erros', '—') }}</td>
-      <td class="num">{{ applied.get(r.id, '—') }}</td>
-    </tr>
-    {% else %}
-    <tr><td colspan="8"><div class="empty"><b>Ainda não há reconciliações</b>Confirme as fontes e use "Comparar todas as fontes". Nada é escrito na UCMDB sem a sua confirmação.</div></td></tr>
-    {% endfor %}
-    </tbody>
-  </table></div>
+<section class="rc-card rc-hist" id="historico" aria-label="Comparações anteriores">
+  <div class="rc-list-h"><h2>Comparações anteriores</h2></div>
+  {% set newest_ready = (runs|selectattr('status', 'in', ['pronto', 'bloqueado'])|first) %}
+  {% for r in runs %}{% set sm = r.summary or {} %}{% set superseded = r.status in ('pronto', 'bloqueado') and newest_ready and r.id != newest_ready.id %}
+  {% if loop.index == 7 %}<details class="rc-more"><summary>Mostrar mais {{ runs|length - 6 }}</summary>{% endif %}
+  <a class="rc-hrow" href="/cmdb-final/{{ r.id }}">
+    <span><b>#{{ r.id }}</b> <span class="muted">{{ r.created_at|dtt }}</span></span>
+    <span>{% if sm.get('ambito') %}só {{ sm.ambito|map('source_name')|join(', ') }}{% else %}todas as fontes{% endif %}</span>
+    <span class="muted">{{ r.created_by }}</span>
+    <span class="small">{% if sm %}{{ sm.get('novos', 0) }} novos · {{ sm.get('alterados', 0) }} alterados · {{ sm.get('erros', 0) }} problemas{% if applied.get(r.id) %} · <b>{{ applied[r.id] }} aplicadas</b>{% endif %}{% else %}—{% endif %}</span>
+    <span>{% if superseded %}<span class="tag tag-off" title="Há uma reconciliação mais recente; só a mais recente pode ser aplicada">substituída</span>{% else %}<span class="tag {{ {'pronto': 'tag-ok', 'bloqueado': 'tag-ok', 'erro': 'tag-err', 'a_gerar': 'tag-acc'}[r.status] }}">{{ FINAL_STATES[r.status] }}</span>{% endif %}</span>
+  </a>
+  {% if loop.last and loop.index >= 7 %}</details>{% endif %}
+  {% else %}
+  <div class="empty"><b>Ainda não há reconciliações</b>Confirme as fontes e use "Comparar todas as fontes". Nada é escrito na UCMDB sem a sua confirmação.</div>
+  {% endfor %}
 </section>
 
 <details class="card">
@@ -109,14 +201,15 @@
   <ul class="small">
     <li>As datas comparam-se ao dia. DD/MM/AAAA nunca é trocado por MM/DD; os seriais do Excel são convertidos diretamente.</li>
     <li>Cada certificado das fontes é procurado na CMDB pelo CommonName. Se o CommonName da CMDB estiver vazio, usa-se Name, Display Label ou Hostname, e o CommonName é preenchido nessa mesma linha.</li>
-    <li>São postos de lado (Erros nas fontes): sem CommonName, data vazia ou ilegível, pedidos não emitidos, certificados já expirados e nomes sem domínio.</li>
+    <li>São postos de lado (Problemas nas linhas): sem CommonName, data vazia ou ilegível, pedidos não emitidos, certificados já expirados e nomes sem domínio.</li>
     <li>CommonName existente: atualiza ValidTo e SerialNumber na linha com a data mais próxima. CommonName novo: certificado novo (Global Id = x no certs_update); o emissor é o configurado para CA1/CA2 e, no AVI, o Issuer_CommonName.</li>
     <li>Se a fonte tiver uma data anterior à da CMDB, decide o certificado que o servidor apresenta na porta 443 (verificação do Atalaia Cert com menos de {{ settings.final_live_max_age_h }} h, ou ligação na hora). Sem resposta, ou num wildcard, a CMDB não é alterada.</li>
     <li>A Description regista o que mudou ("{{ settings.final_description }} - Data de expiracao alterado de … para …").</li>
     <li>Emissor que nenhuma fonte tenha: "Por verificar". Série que falte num certificado da internet ou num renovado: x1, x2… a seguir ao maior da CMDB. Duas alterações com a mesma chave IssuerName + SerialNumber são o mesmo certificado com vários nomes: fica uma (a de um certificado que já está na CMDB, ou a do nome mais curto) e pode trocar.</li>
-    <li>"Comparar só esta fonte" lê só essa fonte; as outras não são lidas nem precisam de ficheiro. A CMDB é sempre lida por inteiro.</li>
+    <li>«Comparar só» uma fonte lê só essa fonte; as outras não são lidas nem precisam de ficheiro. A CMDB é sempre lida por inteiro.</li>
     <li>Cada alteração pode ser excluída; a escolha fica guardada para as reconciliações seguintes (mesmo CommonName e mesma data).</li>
-    <li>Diferenças em relação ao workflow n8n: uma data vazia na fonte vai para Erros nas fontes; ValidTo e SerialNumber só contam como alterados se mudarem de facto.</li>
+    <li>Um ficheiro de fonte com mais de {{ stale_days }} dias fica assinalado: provavelmente há uma exportação mais recente.</li>
   </ul>
 </details>
+</div>
 {% endblock %}

@@ -1,5 +1,16 @@
-// certwatch — melhorias opcionais (a aplicação funciona sem JavaScript).
+// Atalaia Cert — melhorias opcionais (a aplicação funciona sem JavaScript).
+document.documentElement.classList.add("js");
 document.addEventListener("DOMContentLoaded", () => {
+  // Escolher um ficheiro já o envia (o botão "Carregar" só aparece sem JavaScript); arrastar realça a zona
+  document.querySelectorAll("input[type=file][data-autosubmit]").forEach((inp) => {
+    inp.addEventListener("change", () => { if (inp.files && inp.files.length) inp.form.requestSubmit ? inp.form.requestSubmit() : inp.form.submit(); });
+    const zone = inp.closest(".rc-drop");
+    if (zone) {
+      ["dragenter", "dragover"].forEach((ev) => inp.addEventListener(ev, () => zone.classList.add("is-over")));
+      ["dragleave", "drop"].forEach((ev) => inp.addEventListener(ev, () => zone.classList.remove("is-over")));
+    }
+  });
+
   // "Selecionar todos" numa tabela com checkboxes (name="cn" ou o indicado em data-check-all)
   document.querySelectorAll("input[data-check-all]").forEach((all) => {
     const form = all.closest("form");

@@ -1694,8 +1694,8 @@ def recon_guide(*, missing: list[str], run, busy: bool, to_apply: int, applied: 
                    botao=f"Abrir a #{superseded_by}", href=f"/cmdb-final/{superseded_by}")
     elif missing:
         nxt.update(texto=f"Falta o ficheiro de {', '.join(missing)}. Coloque-o na diretoria import/ ou carregue-o aqui. "
-                         "Também pode comparar só as fontes que tem (\"Comparar só esta fonte\").",
-                   botao="Ver as fontes", href="/cmdb-final#fontes")
+                         "Também pode comparar uma fonte de cada vez: escolha-a na lista e use «Comparar só».",
+                   botao="Ver as fontes", href="/cmdb-final?fonte=" + missing[0] + "#fontes")
     elif busy:
         nxt.update(texto="A ler a CMDB e as fontes e a comparar. A página atualiza-se sozinha.")
     elif not ready:
@@ -1737,8 +1737,82 @@ def _stale_runs(s) -> None:
             run.status, run.error, run.finished_at = "erro", "Interrompido (o processo parou durante a reconciliação).", utcnow()
 
 
+RECON_STALE_DAYS = 7      # um ficheiro de fonte mais antigo do que isto fica assinalado
+RECON_DESC = {
+    "CA1": "Exportação da autoridade de certificação (certutil): CommonName, fim de validade, número de série e estado do pedido.",
+    "CA2": "Exportação da autoridade de certificação (certutil): CommonName, fim de validade, número de série e estado do pedido.",
+    "AVI": "Certificados dos virtual services e das CAs do AVI: CommonName, fim de validade, série, emissor e nomes alternativos.",
+    "AZURE": "App Registrations: cada segredo ou certificado é comparado com a lista de APIs e com a de certificados da CMDB.",
+    "INTERNET": "Certificados encontrados nos registos públicos (Certificate Transparency). Entram só os marcados «Adicionar à CMDB».",
+    "RENOVACAO": "Renovações registadas na página de cada pedido SMAX (do servidor, do ficheiro do certificado ou à mão). Têm prioridade sobre as outras fontes.",
+}
+
+
+def _run_counts(run, src: str | None) -> dict:
+    """Diferenças de uma reconciliação, no total ou só de uma fonte."""
+    ch = [c for c in (run.changes or []) if src is None or c.get("fonte") == src]
+    probs = [p for p in (run.problems or []) if isinstance(p, dict) and (src is None or p.get("fonte") == src)]
+    az = [x for x in ((run.vistas or {}).get("azure") or []) if x.get("estado") not in ("igual", "expirado")]
+    return {"novos": sum(1 for c in ch if c.get("tipo") == "novo"), "alterados": sum(1 for c in ch if c.get("tipo") != "novo"),
+            "problemas": len(probs), "azure": len(az), "so_na_cmdb": len((run.vistas or {}).get("so_na_cmdb") or [])}
+
+
+def recon_sources(settings, inputs: dict, files: dict, runs: list, ct, renewals: int) -> list[dict]:
+    """As fontes da página Atualizar a CMDB: como chegam, há quanto tempo, e as diferenças da última comparação
+    em que cada uma entrou (sozinha ou com as outras)."""
+    now = utcnow()
+    ready = [r for r in runs if r.status in ("pronto", "bloqueado")]
+
+    def last_for(src):
+        for r in ready:
+            amb = (r.summary or {}).get("ambito")
+            if not amb or src in amb:
+                return r
+        return None
+
+    out = []
+    for src in cf.all_sources(settings):
+        i = inputs.get(src)
+        if src == cf.INTERNET:
+            kind, mode = "auto", "automática"
+            has = bool(ct and ct.get("validas"))
+            fresh = (f"{ct['validas']} válidos · {ct['triagem']['por_triar']} por triar" if has else "nenhum certificado válido")
+        elif src == cf.RENOVACAO:
+            kind, mode = "auto", "automática"
+            has = bool(renewals)
+            fresh = f"{renewals} registada{'s' if renewals != 1 else ''} nos pedidos" if renewals else "nenhuma por refletir"
+        else:
+            api = src == cf.AVI and settings.avi_source != "ficheiro"
+            kind = "api" if api else "file"
+            mode = ({"api": "API", "auto": "API, ficheiro se falhar"}.get(settings.avi_source, "API") if api else "ficheiro")
+            has = i is not None
+            if i:
+                where = f"import/{i['nome']}" if i["origem"] == "diretoria" else i["nome"]
+                fresh = f"{where} · {fmt_ago(i['quando'])}"
+            else:
+                fresh = "sem ficheiro" if src in settings.final_sources else "sem ficheiro (opcional)"
+        age = (now - as_utc(i["quando"])).days if i else None
+        run = last_for(src)
+        cnt = _run_counts(run, src) if run else None
+        out.append({"id": src, "name": cf.source_name(src), "kind": kind, "mode": mode, "required": src in settings.final_sources,
+                    "desc": RECON_DESC.get(src, ""), "input": i, "files": files.get(src), "has": has, "fresh": fresh,
+                    "age": age, "stale": age is not None and age > RECON_STALE_DAYS, "run": run,
+                    "alone": bool(run and (run.summary or {}).get("ambito")), "cnt": cnt})
+    top = max([1] + [x["cnt"]["novos"] + x["cnt"]["alterados"] + x["cnt"]["problemas"] for x in out if x["cnt"]])
+    for x in out:
+        c = x["cnt"] or {"novos": 0, "alterados": 0, "problemas": 0}
+        pct = lambda v: (max(1, round(v * 20 / top)) * 5 if v else 0)   # noqa: E731  (classes w0…w100, de 5 em 5: a CSP não deixa estilos inline)
+        x["bar"] = {"novos": pct(c["novos"]), "alterados": pct(c["alterados"]), "problemas": pct(c["problemas"])}
+        x["diffs"] = (c.get("azure", 0) if x["id"] == cf.AZURE_SOURCE else c["novos"] + c["alterados"]) if x["cnt"] else None
+    return out
+
+
 @app.get("/cmdb-final")
-def final_page(request: Request, user: str = Depends(current_user)):
+def final_page(request: Request, fonte: str = "", user: str = Depends(current_user)):
+    return _final_page(request, user, fonte)
+
+
+def _final_page(request: Request, user: str, fonte: str = "", notas: list[str] | None = None, avisos: list[str] | None = None):
     settings = get_settings()
     today = utcnow().astimezone(_tz()).date()
     with session_scope() as s:
@@ -1765,10 +1839,18 @@ def final_page(request: Request, user: str = Depends(current_user)):
     guide = recon_guide(missing=[x for x in settings.final_sources if x not in inputs], run=latest,
                         busy=bool(latest and latest.status == "a_gerar"), to_apply=to_apply_n,
                         applied=applied.get(latest.id, 0) if latest else 0, write_on=settings.ucmdb_write, on_run_page=False)
+    sources = recon_sources(settings, inputs, files, runs, ct, renewals)
+    ids = {x["id"] for x in sources}
+    sel = fonte.upper() if fonte.upper() in ids else ""
+    ready = next((r for r in runs if r.status in ("pronto", "bloqueado")), None)
+    oldest = min((x for x in sources if x["input"]), key=lambda x: x["input"]["quando"], default=None)
     return render(request, "final.html", user, guide=guide, inputs=inputs, files=files, runs=runs, latest=latest, cmdb_at=cmdb_at,
                   apis_at=apis_at, settings=settings, FINAL_STATES=FINAL_STATES, ct=ct, renewals=renewals,
                   applied=applied, AZURE=cf.AZURE_SOURCE, dir_files=scan_import_dir(settings),
-                  issuers={k: settings.import_issuers.get(k, "") for k in settings.final_sources})
+                  issuers={k: settings.import_issuers.get(k, "") for k in settings.final_sources},
+                  sources=sources, sel=sel, cur=next((x for x in sources if x["id"] == sel), None), ready=ready,
+                  ready_cnt=_run_counts(ready, None) if ready else None, oldest=oldest, notas=notas or [], avisos=avisos or [],
+                  n_ready=sum(1 for x in sources if x["has"]), stale_days=RECON_STALE_DAYS)
 
 
 @app.post("/cmdb-final/gerar")
@@ -1913,7 +1995,31 @@ def final_use_dir(request: Request, source: str, csrf: str = Form(""), user: str
         for up in ups:
             s.delete(up)
         audit(s, user, "cmdb_final.usar_diretoria", source, carregados_removidos=len(ups))
-    return RedirectResponse("/cmdb-final#fontes", status_code=303)
+    return RedirectResponse(f"/cmdb-final?fonte={source}", status_code=303)
+
+
+def _store_source_file(user: str, source: str, name: str, data: bytes) -> str | None:
+    """Valida e guarda o ficheiro de uma fonte. Devolve a mensagem de erro, ou None se ficou guardado."""
+    if Path(name).suffix.lower() not in cf.ALLOWED_EXT:
+        return "Formato não aceite: use CSV ou Excel (.xlsx)."
+    if len(data) > cf.MAX_UPLOAD:
+        return f"Ficheiro demasiado grande (máximo {cf.MAX_UPLOAD // 1024 // 1024} MB)."
+    try:
+        if source == cf.AZURE_SOURCE:
+            from ..azure_rec import read_azure
+            items, info = read_azure(data, name, utcnow().astimezone(_tz()).date())
+        else:
+            items, info = cf.read_source(source, name, data, utcnow().astimezone(_tz()).date())
+    except Exception as exc:   # ficheiro ilegível ou sem as colunas esperadas
+        return f"Não foi possível usar o ficheiro de {source}: {exc}"
+    if not items:
+        return f"O ficheiro de {source} não tem linhas."
+    import hashlib
+    with session_scope() as s:
+        s.add(FinalInput(source=source, name=name, sha256=hashlib.sha256(data).hexdigest(), size=len(data), data=data,
+                         uploaded_by=user))
+        audit(s, user, "cmdb_final.carregar", f"{source}: {name}", linhas=len(items), validas=info["validas"])
+    return None
 
 
 @app.post("/cmdb-final/fonte/{source}")
@@ -1926,28 +2032,42 @@ async def final_upload(request: Request, source: str, csrf: str = Form(""), fich
         raise HTTPException(404)
     name = Path(ficheiro.filename or "").name[:200]
     data = await ficheiro.read(cf.MAX_UPLOAD + 1)
-    if Path(name).suffix.lower() not in cf.ALLOWED_EXT:
-        return _final_error(request, user, "Formato não aceite: use CSV ou Excel (.xlsx).", "/cmdb-final")
-    if len(data) > cf.MAX_UPLOAD:
-        return _final_error(request, user, f"Ficheiro demasiado grande (máximo {cf.MAX_UPLOAD // 1024 // 1024} MB).", "/cmdb-final")
-    try:
-        if source == cf.AZURE_SOURCE:
-            from ..azure_rec import read_azure
-            items, info = read_azure(data, name, utcnow().astimezone(_tz()).date())
+    err = _store_source_file(user, source, name, data)
+    if err:
+        return _final_error(request, user, err, f"/cmdb-final?fonte={source}")
+    return RedirectResponse(f"/cmdb-final?fonte={source}", status_code=303)
+
+
+@app.post("/cmdb-final/fontes/carregar")
+async def final_upload_many(request: Request, csrf: str = Form(""), ficheiros: list[UploadFile] = File(...),
+                            user: str = Depends(current_user)):
+    """Vários ficheiros de uma vez: a fonte de cada um é reconhecida pelo nome (ca1*, ca2*, avi*, azure*)."""
+    check_csrf(request, csrf)
+    settings = get_settings()
+    from ..reconcile import source_for
+    allowed = {*settings.final_sources, cf.AZURE_SOURCE}
+    notas, avisos, seen = [], [], set()
+    for f in ficheiros[:10]:
+        name = Path(f.filename or "").name[:200]
+        if not name:
+            continue
+        src = source_for(name, settings)
+        if src not in allowed:
+            avisos.append(f"{name}: o nome não começa por nenhum prefixo conhecido ("
+                          + ", ".join(f"{settings.import_sources.get(x, x.lower())}*" for x in sorted(allowed)) + ").")
+            continue
+        if src in seen:
+            avisos.append(f"{name}: já foi carregado outro ficheiro de {cf.source_name(src)} neste envio.")
+            continue
+        err = _store_source_file(user, src, name, await f.read(cf.MAX_UPLOAD + 1))
+        if err:
+            avisos.append(f"{name}: {err}")
         else:
-            items, info = cf.read_source(source, name, data, utcnow().astimezone(_tz()).date())
-    except Exception as exc:   # ficheiro ilegível ou sem as colunas esperadas
-        return _final_error(request, user, f"Não foi possível usar o ficheiro de {source}: {exc}", "/cmdb-final")
-    if not items:
-        return _final_error(request, user, f"O ficheiro de {source} não tem linhas.", "/cmdb-final")
-    import hashlib
-    with session_scope() as s:
-        s.add(FinalInput(source=source, name=name, sha256=hashlib.sha256(data).hexdigest(), size=len(data), data=data,
-                         uploaded_by=user))
-        audit(s, user, "cmdb_final.carregar", f"{source}: {name}", linhas=len(items), validas=info["validas"])
-    return RedirectResponse("/cmdb-final", status_code=303)
-
-
+            seen.add(src)
+            notas.append(f"{name} carregado como {cf.source_name(src)}.")
+    if not notas and not avisos:
+        avisos.append("Nenhum ficheiro escolhido.")
+    return _final_page(request, user, next(iter(seen)) if len(seen) == 1 else "", notas, avisos)
 
 
 @app.post("/cmdb-final/{run_id}/ucmdb")

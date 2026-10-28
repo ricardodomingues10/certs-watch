@@ -80,15 +80,20 @@
 {% else %}<span class="muted">—</span>{% endif %}
 {%- endmacro %}
 
-{% macro recon_steps(g, csrf) -%}
-<ol class="steps" aria-label="Passos para atualizar a CMDB">
-  {% for st in g.steps %}<li class="step-{{ st.state }}"{% if st.state == 'current' %} aria-current="step"{% endif %}><span class="n">PASSO {{ st.n }}</span><b>{{ st.label }}</b><span class="s">{{ st.sub }}</span></li>{% endfor %}
-</ol>
-{% if g.next.texto %}
-<div class="next" role="status">
-  <div><span class="next-h">Próximo passo</span><p>{{ g.next.texto }}</p></div>
-  {% if g.next.post %}<form method="post" action="{{ g.next.post }}"><input type="hidden" name="csrf" value="{{ csrf }}"><button class="primary">{{ g.next.botao }}</button></form>
-  {% elif g.next.href %}<a class="button primary" href="{{ g.next.href }}">{{ g.next.botao }}</a>{% endif %}
-</div>
-{% endif %}
+{#- Estado da atualização da CMDB: em que passo está, o que fazer a seguir (um só botão) e os cinco passos. -#}
+{% macro recon_status(g, csrf) -%}
+{% set cur = g.steps|selectattr('state', 'in', ['current', 'bad'])|first %}
+<section class="rc-card rc-state" aria-label="Estado da atualização da CMDB">
+  <div class="rc-state-top">
+    <div class="rc-state-text">
+      <span class="rc-kicker">{% if cur %}Passo {{ cur.n }} de 5 · {{ cur.label|lower }}{% else %}Tudo feito{% endif %}</span>
+      <p class="rc-headline" role="status">{{ g.next.texto or 'A CMDB coincide com as fontes.' }}</p>
+    </div>
+    {% if g.next.post %}<form method="post" action="{{ g.next.post }}"><input type="hidden" name="csrf" value="{{ csrf }}"><button class="primary rc-big">{{ g.next.botao }}</button></form>
+    {% elif g.next.href %}<a class="button primary rc-big" href="{{ g.next.href }}">{{ g.next.botao }}</a>{% endif %}
+  </div>
+  <ol class="rc-steps" aria-label="Passos para atualizar a CMDB">
+    {% for st in g.steps %}<li class="rc-step is-{{ st.state }}"{% if st.state == 'current' %} aria-current="step"{% endif %}><span class="rc-seg"></span><b>{{ st.label }}</b><span class="rc-sub">{{ st.sub }}</span></li>{% endfor %}
+  </ol>
+</section>
 {%- endmacro %}

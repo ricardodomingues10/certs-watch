@@ -179,7 +179,16 @@ SSL Shopper e SSL Labs não servem para descoberta: não procuram certificados, 
 
 ## 5. Reconciliar e atualizar a CMDB
 
-Menu **CMDB → Reconciliar e atualizar**. Faz o mesmo que o workflow n8n "Reconciliação de Certificados", explica cada passo e aplica as alterações diretamente na UCMDB.
+Menu **CMDB → Atualizar a CMDB**. Faz o mesmo que o workflow n8n "Reconciliação de Certificados", explica cada passo e aplica as alterações diretamente na UCMDB.
+
+A página está organizada à volta das **fontes**:
+- **Em cima**, o estado em cinco passos (fontes, comparar, rever, aplicar, confirmar), com uma frase que diz o que falta e um único botão para o passo seguinte. Ao lado, o destino: a UCMDB, o TQL, quando foi lida e se a escrita está ligada.
+- **À esquerda, a lista de fontes**: cada uma com o modo (ficheiro, API ou automática), o número de alterações da última comparação, uma barra com novos, alterados e problemas nas linhas, e de onde vieram os dados. Um ficheiro com mais de 7 dias aparece marcado como antigo.
+- **À direita, o detalhe da fonte escolhida**: última leitura, ficheiro em uso, diferenças com a CMDB, **Rever N alterações** só dessa fonte, **Como chega** (ficheiros da diretoria e carregados) e **Comparar só esta fonte**. Em **Todas as fontes**, o resumo e como chega cada uma.
+- **Arrastar ficheiros** para a caixa da lista carrega vários de uma vez: a fonte é reconhecida pelo início do nome (`ca1*`, `ca2*`, `avi*`, `azure*`); um nome desconhecido é recusado com a explicação.
+- Em baixo, as comparações anteriores e as regras em detalhe.
+
+Quando uma fonte passar a vir por API em vez de ficheiro (como o AVI já pode), muda só o modo e o bloco **Como chega** dessa fonte; o resto da página fica igual.
 
 ### 5.1 Fontes
 - **CA1, CA2 e AVI** (obrigatórias para reconciliar tudo, `CERTWATCH_FINAL_SOURCES`) e **Azure** (opcional). **Sem carregar nada, é lido o ficheiro mais recente da diretoria `import/`** (o início do nome indica a fonte: `ca1*`, `ca2*`, `avi*`, `azure*`, `CERTWATCH_IMPORT_SOURCES`). Um ficheiro carregado na página só é usado enquanto for mais recente do que o da diretoria; **Voltar a usar a diretoria import/** esquece-o. A página mostra, por fonte, o ficheiro da diretoria e o carregado, qual está em uso, e o que acontece a cada ficheiro da diretoria.
@@ -187,8 +196,8 @@ Menu **CMDB → Reconciliar e atualizar**. Faz o mesmo que o workflow n8n "Recon
 - **Renovações** registadas nos pedidos SMAX: têm prioridade sobre as outras fontes.
 - Ficheiros aceites: CSV (UTF-8, UTF-16 do certutil, Windows-1252; vírgula, ponto e vírgula ou tabulação) e Excel `.xlsx`. Colunas do certutil (`Issued Common Name`, `Certificate Expiration Date`, `Serial Number`, `Request Disposition`), do AVI (`Subject_CommonName`, `Validity_NotAfter`, `SerialNumber`, `Issuer_CommonName`, `SubjectAlternativeName`) e do Azure (`EnterpriseApplication;AppRegistration;AppId;CredentialType;KeyId;StartDate;EndDate;Status`), mesmo com acentos estragados. Datas DD/MM/AAAA (nunca trocadas por MM/DD), ISO, seriais do Excel e AAAAMMDD.
 
-### 5.2 Reconciliar
-**Reconciliar agora** lê a CMDB pela REST API (o TQL de `CERTWATCH_UCMDB_TQL`, com todos os atributos) e compara todas as fontes. **Reconciliar só esta fonte** (em cada fonte, incluindo Azure, Internet e Renovações) compara só essa: as outras não são lidas nem precisam de ficheiro; a CMDB é sempre lida por inteiro. A reconciliação fica marcada "só CA1" (por exemplo) na lista e na página. Como só a mais recente pode ser aplicada, aplique o que quiser de uma antes de reconciliar outra fonte. A página da reconciliação começa por **O que foi comparado**: os cinco passos (fontes, CMDB, comparação, servidor, resultado), cada um com os números desta execução e o que faz.
+### 5.2 Comparar
+**Comparar todas as fontes** lê a CMDB pela REST API (o TQL de `CERTWATCH_UCMDB_TQL`, com todos os atributos) e compara todas as fontes. **Comparar só {fonte}** (no detalhe de cada fonte, incluindo Azure, Internet e Renovações) compara só essa: as outras não são lidas nem precisam de ficheiro; a CMDB é sempre lida por inteiro. A reconciliação fica marcada "só CA1" (por exemplo) na lista e na página. Como só a mais recente pode ser aplicada, aplique o que quiser de uma antes de comparar outra fonte. A página da comparação mostra o estado em cinco passos e **O que foi comparado**: os cinco passos (fontes, CMDB, comparação, servidor, resultado), cada um com os números desta execução e o que faz.
 
 ### 5.3 Diferenças
 Cada separador começa com uma caixa que diz **o que compara**, **como encontra** cada certificado, **quando aparece ali** e **o que acontece ao aplicar**; cada linha diz **porquê** (por exemplo "Na CMDB está 10-11-2026; CA1, linha 3, tem 10-11-2027 (mais recente)").
@@ -204,10 +213,10 @@ Cada separador começa com uma caixa que diz **o que compara**, **como encontra*
 | Erros nas fontes | Linhas postas de lado e avisos sobre datas da CMDB |
 | Detalhes técnicos | Ficheiros (`CMDB_Final.xlsx`, `certs_update.csv`, `certs_update_sem_cabecalho.csv`) para descarregar e o mapeamento das colunas |
 
-Cada alteração tem a caixa **Incluir**: ao excluir uma linha nova, sai do Excel e dos CSV; ao excluir uma alterada, volta ao que está na CMDB. A escolha fica guardada para as reconciliações seguintes (mesmo CommonName e mesma data).
+Cada alteração é um cartão com o certificado, a fonte, o motivo e os campos antes e depois, e o interruptor **Incluir / Ignorar**. Os botões das fontes por cima da lista mostram só as alterações de uma fonte. Uma barra fixa em baixo diz quantas há por aplicar e quantas ignoradas, com **Guardar a seleção** e **Aplicar na UCMDB**. Quanto ao **Incluir**: ao excluir uma linha nova, sai do Excel e dos CSV; ao excluir uma alterada, volta ao que está na CMDB. A escolha fica guardada para as reconciliações seguintes (mesmo CommonName e mesma data).
 
 ### 5.4 Aplicar na UCMDB
-Com `CERTWATCH_UCMDB_WRITE=true` no `.env`: **Aplicar** numa linha (para testar com um certificado) ou **Aplicar todas na UCMDB** (as incluídas que ainda não foram aplicadas, em segundo plano, com progresso). Linha nova → `POST /rest-api/dataModel`; linha alterada → `PUT /rest-api/dataModel/ci/{id}` só com os campos que mudaram. Para confirmar no fim, basta reconciliar de novo: não devem aparecer diferenças.
+Com `CERTWATCH_UCMDB_WRITE=true` no `.env`: **Aplicar** numa linha (para testar com um certificado) ou **Aplicar todas na UCMDB** (as incluídas que ainda não foram aplicadas, em segundo plano, com progresso). Linha nova → `POST /rest-api/dataModel`; linha alterada → `PUT /rest-api/dataModel/ci/{id}` só com os campos que mudaram. Durante e depois da escrita, **Aplicar na UCMDB** mostra o progresso (escritas e confirmadas de total), os contadores por estado e a lista das que falharam, cada uma com ligação ao seu cartão e **Tentar de novo**. Para confirmar no fim, basta comparar de novo: não devem aparecer diferenças.
 
 ### 5.5 Azure: API ou certificado
 Cada credencial é procurada na lista de APIs e na de certificados, pelo nome da App Registration ou da Enterprise Application (sem o sufixo que a CMDB às vezes acrescenta), e comparada pela data de fim (1 dia de tolerância): não existe, data mais recente, mais antiga, igual, expirada; os segredos da lista de APIs com localização Azure que já não aparecem na exportação ficam como **só na CMDB**.
