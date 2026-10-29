@@ -108,7 +108,7 @@
       <div><span>Triagem</span><b>{{ ct.triagem.adicionar if ct else 0 }} a adicionar · {{ ct.triagem.por_triar if ct else 0 }} por triar</b></div>
       {% elif x.id == 'RENOVACAO' %}
       <div><span>Renovações registadas</span><b>{{ renewals }}</b></div>
-      <div><span>Origem</span><b>pedidos SMAX</b></div>
+      <div><span>Origem</span><b>pedidos {{ TK }}</b></div>
       {% else %}
       <div><span>Última leitura</span><b>{% if x.input %}{{ x.input.quando|dtt }}{% else %}—{% endif %}</b>{% if x.input %}<small class="{{ 'warn' if x.stale }}">{{ x.input.quando|ago }}</small>{% endif %}</div>
       <div><span>Em uso</span><b class="mono">{% if x.input %}{{ ('import/' ~ x.input.nome) if x.input.origem == 'diretoria' else x.input.nome }}{% else %}nenhum ficheiro{% endif %}</b>{% if x.input and x.input.origem == 'carregado' %}<small>carregado por {{ x.input.por }}</small>{% endif %}</div>
@@ -130,7 +130,7 @@
         <a class="button" href="/descoberta">Triar em Na internet</a>
       {% elif x.id == 'RENOVACAO' %}
         <p>Cada renovação registada num pedido entra na comparação seguinte, com prioridade sobre as outras fontes.</p>
-        <a class="button" href="/pedidos">Abrir Pedidos SMAX</a>
+        <a class="button" href="/pedidos">Abrir Pedidos {{ TK }}</a>
       {% else %}
         {% if x.id == 'AVI' %}<p>{% if x.kind == 'api' %}Pela REST API do controlador ({{ x.mode }}).{% else %}Por ficheiro; também pode ser lido pela API do controlador.{% endif %} <a href="/cmdb-final/avi">Ler pela API do AVI</a></p>
         {% elif x.id == AZURE %}<p>Por ficheiro: a exportação das App Registrations.{% if apis_at %} Lista de APIs da CMDB lida {{ apis_at|ago }}.{% endif %}</p>

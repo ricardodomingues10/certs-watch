@@ -45,7 +45,7 @@ e reinicie (<span class="mono">docker compose up -d</span>), ou coloque a export
 
 <div class="card flush scroll">
 <table>
-  <thead><tr><th>Nome</th><th>Aplicação</th><th>Localização</th><th>Expira</th>{% if smax_on %}<th>Pedido SMAX</th>{% endif %}<th>Expirado? (CMDB)</th><th>Registo na CMDB</th>{% if any_host %}<th>Servidor</th>{% endif %}</tr></thead>
+  <thead><tr><th>Nome</th><th>Aplicação</th><th>Localização</th><th>Expira</th>{% if smax_on %}<th>Pedido {{ TK }}</th>{% endif %}<th>Expirado? (CMDB)</th><th>Registo na CMDB</th>{% if any_host %}<th>Servidor</th>{% endif %}</tr></thead>
   <tbody>
   {% for r in rows %}{% set a = r.api %}
     <tr>

@@ -71,7 +71,7 @@
       <td><a href="/certificados/detalhe?cn={{ r.cn|urlencode }}" class="mono">{{ r.common_name }}</a></td>
       <td>{{ r.dias|ndias }}</td>
       <td class="opt small">{{ r.vida_dias|ndias }}</td>
-      <td class="small">{% if r.dono %}{{ r.dono.equipa or '—' }}{% if r.dono.origem == 'smax' %} <span class="tag tag-run">SMAX</span>{% endif %}{% else %}<a href="/certificados/detalhe?cn={{ r.cn|urlencode }}#dono" class="muted">sem dono</a>{% endif %}</td>
+      <td class="small">{% if r.dono %}{{ r.dono.equipa or '—' }}{% if r.dono.origem == 'smax' %} <span class="tag tag-run">{{ TK }}</span>{% endif %}{% else %}<a href="/certificados/detalhe?cn={{ r.cn|urlencode }}#dono" class="muted">sem dono</a>{% endif %}</td>
       <td class="opt small">{{ r.live_issuer or r.issuers|join(', ') }}</td>
       <td class="opt small">{{ r.instalado_em|map(attribute='host')|unique|list|length or '—' }}</td></tr>{% endfor %}</tbody>
   </table></div>

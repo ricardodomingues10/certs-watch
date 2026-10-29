@@ -33,7 +33,7 @@
 {% if smax_on %}
 <section class="card" id="smax">
   <div class="card-head">
-    <h2>Pedidos no SMAX <small>{{ smax.open|length }} aberto(s), {{ smax.closed|length }} fechado(s)</small></h2>
+    <h2>Pedidos no {{ TK }} <small>{{ smax.open|length }} aberto(s), {{ smax.closed|length }} fechado(s)</small></h2>
     {% if create_on %}<form method="post" action="/pedidos/novo">
       <input type="hidden" name="csrf" value="{{ csrf }}"><input type="hidden" name="cn" value="{{ cn }}">
       <input type="hidden" name="next" value="/certificados/detalhe?cn={{ cn|urlencode }}">
@@ -69,7 +69,7 @@
   <h2>Dono</h2>
   {% if dono %}
   <p><b>{{ dono.equipa or 'Sem equipa' }}</b>{% if dono.pessoa %} · {{ dono.pessoa }}{% endif %}
-    {% if dono.origem == 'smax' %}<span class="tag tag-run" title="Grupo e responsável do pedido {{ dono.pedido }} no SMAX">sugerido pelo SMAX</span>{% else %}<span class="tag tag-ok">atribuído</span>{% endif %}</p>
+    {% if dono.origem == 'smax' %}<span class="tag tag-run" title="Grupo e responsável do pedido {{ dono.pedido }} no {{ TK }}">sugerido pelo {{ TK }}</span>{% else %}<span class="tag tag-ok">atribuído</span>{% endif %}</p>
   {% if dono.email %}<p class="small">Avisos iriam para <span class="mono">{{ dono.email }}</span>.</p>{% endif %}
   {% if dono.origem == 'atribuido' %}<p class="small muted">Por {{ dono.por }} em {{ dono.em|dt }}.</p>{% endif %}
   {% else %}

@@ -1,14 +1,14 @@
 {% extends "base.html" %}
-{% block title %}Pedidos SMAX{% endblock %}
+{% block title %}Pedidos {{ TK }}{% endblock %}
 {% block crumb %}Operação{% endblock %}
-{% block page_title %}Pedidos SMAX{% endblock %}
-{% block lede %}Pedidos de certificados lidos do SMAX{% if fetched %} (última leitura {{ fetched|dtt }}){% endif %}, ligados ao certificado ou à API a que se referem. Os comentários dos pedidos abertos mostram o que os técnicos escreveram, mesmo quando o estado não mudou.{% endblock %}
+{% block page_title %}Pedidos {{ TK }}{% endblock %}
+{% block lede %}Pedidos de certificados lidos do {{ TK }}{% if fetched %} (última leitura {{ fetched|dtt }}){% endif %}, ligados ao certificado ou à API a que se referem. Os comentários dos pedidos abertos mostram o que os técnicos escreveram, mesmo quando o estado não mudou.{% endblock %}
 {% block actions %}
 <a class="button" href="/pedidos/lotes">Lotes criados aqui ({{ n_lotes }})</a>
-{% if smax_on %}<form method="post" action="/jobs/ingest_smax"><input type="hidden" name="csrf" value="{{ csrf }}"><input type="hidden" name="next" value="/pedidos"><button>Ler o SMAX agora</button></form>{% endif %}
+{% if smax_on %}<form method="post" action="/jobs/ingest_smax"><input type="hidden" name="csrf" value="{{ csrf }}"><input type="hidden" name="next" value="/pedidos"><button>Ler o {{ TK }} agora</button></form>{% endif %}
 {% endblock %}
 {% block content %}
-{% if not smax_on %}<div class="note warn">A leitura do SMAX não está configurada (README, secção 7).</div>{% endif %}
+{% if not smax_on %}<div class="note warn">A leitura do {{ TK }} não está configurada (README, secção 7).</div>{% endif %}
 <nav class="tabs" aria-label="Vistas">
   {% for k, label in views.items() %}
   <a href="/pedidos?vista={{ k }}{{ '&' ~ qs if qs }}" class="{{ 'on' if vista == k }}">{{ label }} <span class="n {{ 'hot' if k == 'atrasados' and counts[k] }}">{{ counts[k] }}</span></a>
@@ -31,7 +31,7 @@
   {% for r in rows %}{% set t = r.t %}
     <tr>
       <td><a class="ticket int {{ 'ticket-open' if r.aberto else 'ticket-closed' }}" href="/pedidos/smax/{{ t.id|urlencode }}" title="Percurso, comentários e ações">{{ t.id }}</a>
-        {% if r.url %}<a class="small" href="{{ r.url }}" target="_blank" rel="noopener noreferrer" title="Abrir no SMAX">SMAX ↗</a>{% endif %}
+        {% if r.url %}<a class="small" href="{{ r.url }}" target="_blank" rel="noopener noreferrer" title="Abrir no {{ TK }}">{{ TK }} ↗</a>{% endif %}
         <div class="small muted ticket-title">{{ t.display_label }}</div>
         {% if r.percurso %}<div class="small"><span class="tag {{ 'tag-ok' if not r.percurso.current else 'tag-acc' }}" title="Passos do percurso feitos">{{ r.percurso.done }}/5</span> {{ 'concluído' if not r.percurso.current else 'próximo: ' ~ r.percurso.current_label|lower }}</div>{% endif %}</td>
       <td>{% if r.alvo %}<a class="mono" href="{{ '/certificados/detalhe?cn=' if r.alvo.tipo == 'certificado' else '/apis?q=' }}{{ r.alvo.nome|urlencode }}">{{ r.alvo.nome }}</a>
@@ -53,7 +53,7 @@
         {% elif r.aberto %}<span class="muted">sem comentários</span>{% else %}<span class="muted">—</span>{% endif %}</td>
     </tr>
   {% else %}
-    <tr><td colspan="6"><div class="empty"><b>Nenhum pedido nesta vista</b>{{ 'Ainda não houve leitura do SMAX.' if not counts.todos else '' }}</div></td></tr>
+    <tr><td colspan="6"><div class="empty"><b>Nenhum pedido nesta vista</b>{{ ('Ainda não houve leitura do ' ~ TK ~ '.') if not counts.todos else '' }}</div></td></tr>
   {% endfor %}
   </tbody>
 </table>

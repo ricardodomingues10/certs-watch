@@ -2,7 +2,7 @@
 {% block title %}Donos{% endblock %}
 {% block crumb %}Inventário{% endblock %}
 {% block page_title %}Donos <small>{{ total - sem|length }} de {{ total }} certificados com dono</small>{% endblock %}
-{% block lede %}Que equipa e que pessoa respondem por cada certificado. O dono é atribuído aqui (ou na página do certificado); sem isso, o Atalaia sugere o grupo do pedido mais recente no SMAX.{% endblock %}
+{% block lede %}Que equipa e que pessoa respondem por cada certificado. O dono é atribuído aqui (ou na página do certificado); sem isso, o Atalaia sugere o grupo do pedido mais recente no {{ TK }}.{% endblock %}
 {% block content %}
 {% for n in notas %}<p class="note" role="status">{{ n }}</p>{% endfor %}
 {% for e in erros %}<p class="note bad" role="alert">{{ e }}</p>{% endfor %}
@@ -12,7 +12,7 @@
 <section class="card flush" aria-labelledby="h-eq">
   <h2 id="h-eq">Equipas <small>{{ stats|length }}</small></h2>
   <div class="scroll"><table>
-    <thead><tr><th>Equipa</th><th>Certificados</th><th>A expirar em 30 dias</th><th class="opt">Grupo no SMAX</th><th class="opt">Avisos iriam para</th><th><span class="sr">Ações</span></th></tr></thead>
+    <thead><tr><th>Equipa</th><th>Certificados</th><th>A expirar em 30 dias</th><th class="opt">Grupo no {{ TK }}</th><th class="opt">Avisos iriam para</th><th><span class="sr">Ações</span></th></tr></thead>
     <tbody>
     {% for x in stats %}{% set t = x.t %}
     <tr>
@@ -26,7 +26,7 @@
           <input type="hidden" name="csrf" value="{{ csrf }}"><input type="hidden" name="id" value="{{ t.id }}">
           <label>Nome<input type="text" name="nome" value="{{ t.name }}" required maxlength="128"></label>
           <label>Email da equipa<input type="email" name="email" value="{{ t.email }}" maxlength="254"></label>
-          <label>Grupo no SMAX<input type="text" name="grupo" value="{{ t.smax_group }}" maxlength="256"></label>
+          <label>Grupo no {{ TK }}<input type="text" name="grupo" value="{{ t.smax_group }}" maxlength="256"></label>
           <label>Chave do Teams<input type="text" name="teams" value="{{ t.teams_key }}" maxlength="64"></label>
           <label>Notas<input type="text" name="notas" value="{{ t.notes }}" maxlength="500"></label>
           <button class="small-btn">Guardar</button>
@@ -35,7 +35,7 @@
       </details></td>
     </tr>
     {% else %}
-    <tr><td colspan="6"><div class="empty"><b>Ainda não há equipas</b>Crie a primeira abaixo. Se os pedidos do SMAX já têm grupos, use o mesmo nome em «Grupo no SMAX» para o Atalaia ligar os pedidos à equipa.</div></td></tr>
+    <tr><td colspan="6"><div class="empty"><b>Ainda não há equipas</b>Crie a primeira abaixo. Se os pedidos do {{ TK }} já têm grupos, use o mesmo nome em «Grupo no {{ TK }}» para o Atalaia ligar os pedidos à equipa.</div></td></tr>
     {% endfor %}
     </tbody>
   </table></div>
@@ -44,7 +44,7 @@
       <input type="hidden" name="csrf" value="{{ csrf }}">
       <label>Nome<input type="text" name="nome" required maxlength="128" placeholder="Sistemas Centrais"></label>
       <label>Email da equipa<input type="email" name="email" maxlength="254" placeholder="sistemas@exemplo.pt"></label>
-      <label>Grupo no SMAX<input type="text" name="grupo" maxlength="256" placeholder="o nome do grupo nos pedidos"></label>
+      <label>Grupo no {{ TK }}<input type="text" name="grupo" maxlength="256" placeholder="o nome do grupo nos pedidos"></label>
       <label>Chave do Teams<input type="text" name="teams" maxlength="64" placeholder="sistemas"></label>
       <button class="primary">Criar a equipa</button>
     </form>
@@ -53,8 +53,8 @@
 
 {% if smax_only %}
 <section class="card" aria-labelledby="h-smax">
-  <h2 id="h-smax">Grupos do SMAX sem equipa</h2>
-  <p class="small muted">Estes grupos aparecem nos pedidos, mas ainda não correspondem a nenhuma equipa. Crie a equipa com o mesmo «Grupo no SMAX» para os certificados ficarem ligados a ela.</p>
+  <h2 id="h-smax">Grupos do {{ TK }} sem equipa</h2>
+  <p class="small muted">Estes grupos aparecem nos pedidos, mas ainda não correspondem a nenhuma equipa. Crie a equipa com o mesmo «Grupo no {{ TK }}» para os certificados ficarem ligados a ela.</p>
   <ul class="ow-groups">{% for g, n in smax_only %}<li><b>{{ g }}</b> <span class="muted">{{ n }} certificado{{ 's' if n != 1 }}</span></li>{% endfor %}</ul>
 </section>
 {% endif %}

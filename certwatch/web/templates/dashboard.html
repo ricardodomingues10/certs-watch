@@ -190,7 +190,7 @@
   {% if items %}
   <form method="post" action="/pedidos/novo">
     <input type="hidden" name="csrf" value="{{ csrf }}"><input type="hidden" name="next" value="/">
-    <p class="pn-sub small muted">Expiram nos próximos {{ limit }} dias, ou expiraram há até 30, sem pedido em curso.{% if not smax_on %} A leitura do SMAX não está ligada: sem ela todos aparecem "sem pedido" (README, secção 7).{% endif %}</p>
+    <p class="pn-sub small muted">Expiram nos próximos {{ limit }} dias, ou expiraram há até 30, sem pedido em curso.{% if not smax_on %} A leitura do {{ TK }} não está ligada: sem ela todos aparecem "sem pedido" (README, secção 7).{% endif %}</p>
     {% for it in items %}
     {% if loop.index == 9 %}<details class="pn-more"><summary>Mais {{ items|length - 8 }}</summary>{% endif %}
     <div class="pn-open">
@@ -206,7 +206,7 @@
     </div>
     {% if loop.last and loop.length > 8 %}</details>{% endif %}
     {% endfor %}
-    {% if can_create %}<div class="pn-foot pn-foot-act"><button class="primary">Criar pedidos para os selecionados</button><span class="small muted">Abre um rascunho para rever antes de criar no SMAX. As APIs pedem-se à mão. <a href="/pedidos/regras">Regras para abrir pedidos sozinho</a>{% if not regras %} (nenhuma ativa){% endif %}.</span></div>{% endif %}
+    {% if can_create %}<div class="pn-foot pn-foot-act"><button class="primary">Criar pedidos para os selecionados</button><span class="small muted">Abre um rascunho para rever antes de criar no {{ TK }}. As APIs pedem-se à mão. <a href="/pedidos/regras">Regras para abrir pedidos sozinho</a>{% if not regras %} (nenhuma ativa){% endif %}.</span></div>{% endif %}
   </form>
   {% else %}
   <p class="pn-empty"><b>Nada por pedir.</b> Tudo o que expira nos próximos {{ limit }} dias tem pedido em curso.</p>
@@ -215,7 +215,7 @@
 {%- endmacro %}
 {% macro card_curso() -%}
 <section class="pn-card" aria-labelledby="h-curso">
-  <div class="pn-card-h"><h2 id="h-curso">Pedidos em curso</h2><span class="muted small">{{ abertos|length }} abertos no SMAX</span><a class="pn-link" href="/pedidos">Ver todos</a></div>
+  <div class="pn-card-h"><h2 id="h-curso">Pedidos em curso</h2><span class="muted small">{{ abertos|length }} abertos no {{ TK }}</span><a class="pn-link" href="/pedidos">Ver todos</a></div>
   {% if fases %}
   <ol class="pn-phases">{% for f in fases %}<li><i class="ph-{{ loop.index0 % 4 }}" aria-hidden="true"></i><b>{{ f.n }}</b><span>{{ f.fase }}</span></li>{% endfor %}
     {% if k.ja_renovado %}<li><i class="ph-ok" aria-hidden="true"></i><b>{{ k.ja_renovado }}</b><span>já renovados: fechar</span></li>{% endif %}</ol>
@@ -230,7 +230,7 @@
   </ul>
   {% if abertos|length > 6 %}<p class="small"><a href="/pedidos">Mais {{ abertos|length - 6 }} pedidos abertos</a></p>{% endif %}
   {% else %}
-  <p class="pn-empty"><b>Nenhum pedido aberto.</b>{% if not smax_on %} A leitura do SMAX não está ligada.{% endif %}</p>
+  <p class="pn-empty"><b>Nenhum pedido aberto.</b>{% if not smax_on %} A leitura do {{ TK }} não está ligada.{% endif %}</p>
   {% endif %}
 </section>
 
@@ -268,7 +268,7 @@
   </ol>
   {% if activity|length > 8 %}<p class="small"><a href="/pedidos?vista=comentarios">Mais {{ activity|length - 8 }} no período</a></p>{% endif %}
   {% else %}
-  <p class="pn-empty"><b>Sem movimento.</b> Nenhum pedido mudou de fase nem teve comentários {{ 'nas últimas 24 h' if janela == 24 else 'nos últimos 7 dias' }}.{% if not smax_on %} A leitura do SMAX não está ligada.{% endif %}</p>
+  <p class="pn-empty"><b>Sem movimento.</b> Nenhum pedido mudou de fase nem teve comentários {{ 'nas últimas 24 h' if janela == 24 else 'nos últimos 7 dias' }}.{% if not smax_on %} A leitura do {{ TK }} não está ligada.{% endif %}</p>
   {% endif %}
 </section>
 
@@ -295,7 +295,7 @@
   <div class="pn-card-h"><h2 id="h-nis">Conformidade e evidência <small>NIS2</small></h2><a class="pn-link" href="/painel/evidencia.csv">Relatório de hoje (CSV)</a></div>
   <div class="pn-nis">
     <div><span>Eficácia · al. f)</span>{% if nis.antecedencia is not none %}<b>{{ nis.antecedencia|round|int }} dias</b><small>de antecedência a abrir pedidos (mediana de {{ nis.n_pedidos }}){% if nis.reacao is not none %}; {{ nis.reacao|round|int }} dias depois do primeiro alerta{% endif %}</small>
-      {% else %}<b>—</b><small>precisa da data de criação dos pedidos no SMAX</small>{% endif %}</div>
+      {% else %}<b>—</b><small>precisa da data de criação dos pedidos no {{ TK }}</small>{% endif %}</div>
     <div><span>Criptografia · al. h)</span><b class="{{ 'ok' if not ncripto }}">{{ ncripto }}</b><small>
       <a href="/findings?tipo=CRIPTO_FRACA">chave fraca {{ nis.cripto.fraca }}</a> · <a href="/findings?tipo=TLS_LEGADO">TLS 1.0/1.1 {{ nis.cripto.tls_legado }}</a> · <a href="/findings?tipo=CHAIN_INVALIDA">cadeia {{ nis.cripto.cadeia }}</a> · <a href="/findings?tipo=SELF_SIGNED">autoassinados {{ nis.cripto.autoassinados }}</a> · <a href="/findings?tipo=API_SEM_TLS">APIs sem TLS {{ nis.cripto.api_sem_tls }}</a></small></div>
     <div><span>Gestão de ativos · al. i)</span><b>{{ nis.inventario.certificados }} + {{ nis.inventario.apis }}</b><small>certificados e APIs no inventário; {{ nis.inventario.confirmados }} confirmados num servidor</small></div>

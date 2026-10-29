@@ -1,9 +1,9 @@
 {% extends "base.html" %}
 {% block title %}Lote {{ b.id }}{% endblock %}
 {% block head %}{% if b.status == 'a_criar' %}<meta http-equiv="refresh" content="3">{% endif %}{% endblock %}
-{% block crumb %}<a href="/pedidos">Pedidos SMAX</a> › <a href="/pedidos/lotes">Lotes</a>{% endblock %}
+{% block crumb %}<a href="/pedidos">Pedidos {{ TK }}</a> › <a href="/pedidos/lotes">Lotes</a>{% endblock %}
 {% block page_title %}Lote {{ b.id }} <span class="tag {{ {'concluido': 'tag-ok', 'interrompido': 'tag-err', 'a_criar': 'tag-run', 'rascunho': 'tag-acc'}.get(b.status, 'tag-off') }}">{{ BATCH_STATES.get(b.status, b.status) }}</span>{% endblock %}
-{% block lede %}{% if b.status == 'rascunho' %}Preencha o que a CMDB não tem. Os valores já preenchidos são sugestões e indicam de onde vêm. Só os pedidos marcados são enviados; nada é criado no SMAX antes de rever e confirmar.{% elif b.status == 'a_criar' %}A criar os pedidos no SMAX, um de cada vez. Esta página atualiza-se sozinha.{% else %}Criado por {{ b.created_by }} em {{ b.created_at|dtt }}{% if b.confirmed_by %}, confirmado por {{ b.confirmed_by }} em {{ b.confirmed_at|dtt }}{% endif %}.{% endif %}{% endblock %}
+{% block lede %}{% if b.status == 'rascunho' %}Preencha o que a CMDB não tem. Os valores já preenchidos são sugestões e indicam de onde vêm. Só os pedidos marcados são enviados; nada é criado no {{ TK }} antes de rever e confirmar.{% elif b.status == 'a_criar' %}A criar os pedidos no {{ TK }}, um de cada vez. Esta página atualiza-se sozinha.{% else %}Criado por {{ b.created_by }} em {{ b.created_at|dtt }}{% if b.confirmed_by %}, confirmado por {{ b.confirmed_by }} em {{ b.confirmed_at|dtt }}{% endif %}.{% endif %}{% endblock %}
 {% block actions %}
 {% if b.status == 'rascunho' %}
 <form method="post" action="/pedidos/{{ b.id }}/cancelar"><input type="hidden" name="csrf" value="{{ csrf }}"><button>Cancelar lote</button></form>
@@ -81,7 +81,7 @@
       <td><span class="tag {{ {'criado': 'tag-ok', 'falhou': 'tag-err', 'indeterminado': 'tag-err', 'a_enviar': 'tag-run', 'pendente': 'tag-run'}.get(d.status, 'tag-off') }}" title="{{ DRAFT_HELP.get(d.status, '') }}">{{ DRAFT_STATES.get(d.status, d.status) }}</span></td>
       <td>{% if d.ticket_id %}<a class="ticket ticket-open" href="{{ ticket_url(d.ticket_id) }}" target="_blank" rel="noopener noreferrer">{{ d.ticket_id }}</a>{% else %}<span class="muted">—</span>{% endif %}</td>
       <td class="small">{{ d.ambiente or '—' }} · {{ d.tipo or '—' }}</td>
-      <td class="small">{{ d.detail.get('motivo', '') }}{% if d.detail.get('texto') %}<details><summary>resposta do SMAX</summary><pre class="payload">{{ d.detail.texto }}</pre></details>{% endif %}{% if d.detail.get('erro') %}{{ d.detail.erro }}{% endif %}</td>
+      <td class="small">{{ d.detail.get('motivo', '') }}{% if d.detail.get('texto') %}<details><summary>resposta do {{ TK }}</summary><pre class="payload">{{ d.detail.texto }}</pre></details>{% endif %}{% if d.detail.get('erro') %}{{ d.detail.erro }}{% endif %}</td>
     </tr>
   {% endfor %}
   </tbody>

@@ -30,14 +30,14 @@
     <option value="">Próprio ou partilhado</option>
     {% for k, l in cert_filters.items() %}<option value="{{ k }}" {{ 'selected' if servido == k }}>{{ l }}</option>{% endfor %}
   </select>
-  {% if smax_on %}<select id="f-pedido" name="pedido" aria-label="Pedido SMAX">
-    <option value="">Com ou sem pedido SMAX</option>
+  {% if smax_on %}<select id="f-pedido" name="pedido" aria-label="Pedido {{ TK }}">
+    <option value="">Com ou sem pedido {{ TK }}</option>
     {% for k, l in ticket_filters.items() %}<option value="{{ k }}" {{ 'selected' if pedido == k }}>{{ l }}</option>{% endfor %}
   </select>{% endif %}
   <select id="f-dono" name="dono" aria-label="Dono">
     <option value="">Qualquer dono</option>
     <option value="sem" {{ 'selected' if dono == 'sem' }}>Sem dono</option>
-    <option value="smax" {{ 'selected' if dono == 'smax' }}>Dono só sugerido pelo SMAX</option>
+    <option value="smax" {{ 'selected' if dono == 'smax' }}>Dono só sugerido pelo {{ TK }}</option>
     {% for t in equipas %}<option value="{{ t.id }}" {{ 'selected' if dono == t.id|string }}>{{ t.name }}</option>{% endfor %}
   </select>
   <select id="f-dias" name="dias" aria-label="Prazo">
@@ -56,7 +56,7 @@
 <input type="hidden" name="next" value="/certificados{{ '?' ~ export_qs if export_qs }}">
 {% for k, v in [('q', q), ('dias', dias), ('estado', estado), ('tipo', tipo), ('ambito', ambito), ('renovacao', renovacao), ('pedido', pedido), ('servido', servido), ('dono', dono)] %}<input type="hidden" name="{{ k }}" value="{{ v }}">{% endfor %}
 <div class="selbar">
-  <span>Pedidos SMAX: <b data-sel-count>0</b> selecionado(s)</span>
+  <span>Pedidos {{ TK }}: <b data-sel-count>0</b> selecionado(s)</span>
   <span class="grow"></span>
   <button name="modo" value="selecionados">Preparar para os selecionados</button>
   <button name="modo" value="vista" {{ 'disabled' if not rows }}>Preparar para os {{ rows|length }} desta vista</button>
@@ -65,7 +65,7 @@
 <div class="card flush scroll">
 <table>
   <thead>
-    <tr>{% if create_on %}<th class="th-check"><input type="checkbox" data-check-all aria-label="Selecionar todos"></th>{% endif %}<th class="th-state">Estado</th><th>Certificado</th><th class="opt">Tipo</th><th class="opt">Âmbito</th><th class="opt-s">Situação</th><th>Prazo</th>{% if smax_on %}<th>Pedido SMAX</th>{% endif %}<th class="opt">Dono</th><th class="opt">Emissor</th><th class="opt" title="{{ AUTO_RENEW_HELP['auto'] }}">Renovação automática</th></tr>
+    <tr>{% if create_on %}<th class="th-check"><input type="checkbox" data-check-all aria-label="Selecionar todos"></th>{% endif %}<th class="th-state">Estado</th><th>Certificado</th><th class="opt">Tipo</th><th class="opt">Âmbito</th><th class="opt-s">Situação</th><th>Prazo</th>{% if smax_on %}<th>Pedido {{ TK }}</th>{% endif %}<th class="opt">Dono</th><th class="opt">Emissor</th><th class="opt" title="{{ AUTO_RENEW_HELP['auto'] }}">Renovação automática</th></tr>
   </thead>
   <tbody>
   {% for r in rows %}
@@ -82,7 +82,7 @@
       <td class="opt-s">{{ r.summary }}{% if r.findings > 1 %} <span class="muted small">(+{{ r.findings - 1 }})</span>{% endif %}</td>
       <td>{{ days(r.dias) }} <div class="small muted opt-s">{{ (r.live_not_after or r.cmdb_valid_to)|dt }} · {{ r.fonte_data }}</div></td>
       {% if smax_on %}<td>{{ ticket_cell(r.smax, r.dias) }}</td>{% endif %}
-      <td class="small opt">{% if r.dono %}{{ r.dono.equipa or '—' }}{% if r.dono.pessoa %}<div class="muted">{{ r.dono.pessoa }}</div>{% endif %}{% if r.dono.origem == 'smax' %}<span class="tag tag-run" title="Do pedido {{ r.dono.pedido }} no SMAX">SMAX</span>{% endif %}{% else %}<a href="/certificados/detalhe?cn={{ r.cn|urlencode }}#dono" class="muted">sem dono</a>{% endif %}</td>
+      <td class="small opt">{% if r.dono %}{{ r.dono.equipa or '—' }}{% if r.dono.pessoa %}<div class="muted">{{ r.dono.pessoa }}</div>{% endif %}{% if r.dono.origem == 'smax' %}<span class="tag tag-run" title="Do pedido {{ r.dono.pedido }} no {{ TK }}">{{ TK }}</span>{% endif %}{% else %}<a href="/certificados/detalhe?cn={{ r.cn|urlencode }}#dono" class="muted">sem dono</a>{% endif %}</td>
       <td class="small opt">{{ r.live_issuer or r.issuers|join(', ') or '—' }}</td>
       <td class="opt">{% if r.renovacao == 'auto' %}<span class="tag tag-ok" title="{{ AUTO_RENEW_HELP['auto'] }} Detetado em: {{ r.renovacao_fonte }}.">Sim</span>{% else %}<span class="muted" title="{{ AUTO_RENEW_HELP['manual'] }}">Não</span>{% endif %}</td>
     </tr>

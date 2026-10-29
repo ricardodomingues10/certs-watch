@@ -1,11 +1,11 @@
 {% extends "base.html" %}
 {% block title %}Pedido {{ t.id }}{% endblock %}
-{% block crumb %}<a href="/pedidos">Pedidos SMAX</a>{% endblock %}
+{% block crumb %}<a href="/pedidos">Pedidos {{ TK }}</a>{% endblock %}
 {% block page_title %}Pedido {{ t.id }} <small><span class="tag {{ 'tag-off' if perc.closed else 'tag-acc' }}">{{ t.phase or 'fase desconhecida' }}</span></small>{% endblock %}
 {% block lede %}{{ t.display_label }}{% endblock %}
 {% block actions %}
-{% if url %}<a class="button" href="{{ url }}" target="_blank" rel="noopener noreferrer">Abrir no SMAX ↗</a>{% endif %}
-{% if discussao %}<a class="button" href="{{ discussao }}" target="_blank" rel="noopener noreferrer">Discussão no SMAX ↗</a>{% endif %}
+{% if url %}<a class="button" href="{{ url }}" target="_blank" rel="noopener noreferrer">Abrir no {{ TK }} ↗</a>{% endif %}
+{% if discussao %}<a class="button" href="{{ discussao }}" target="_blank" rel="noopener noreferrer">Discussão no {{ TK }} ↗</a>{% endif %}
 {% endblock %}
 {% block content %}
 {% if msg %}<div class="note">{{ msg }}</div>{% endif %}
@@ -47,7 +47,7 @@
       {% endfor %}</div>{% endif %}
   </article>
   {% else %}
-  <p class="small muted">Sem comentários lidos. Os comentários são lidos para os pedidos abertos em cada leitura do SMAX.</p>
+  <p class="small muted">Sem comentários lidos. Os comentários são lidos para os pedidos abertos em cada leitura do {{ TK }}.</p>
   {% endfor %}
 </section>
 
@@ -135,16 +135,16 @@
 <section class="card" id="fase">
   <h2>{{ 'Reabrir o pedido' if perc.closed else 'Fechar o pedido' }}</h2>
   {% if not can_update %}
-  <p class="small">Alterar pedidos no SMAX não está ativo. Defina <span class="mono">CERTWATCH_SMAX_UPDATE_ENABLED=true</span> e os campos de fecho (<span class="mono">CERTWATCH_SMAX_CLOSE_FIELDS</span>) no .env.</p>
+  <p class="small">Alterar pedidos no {{ TK }} não está ativo. Defina <span class="mono">CERTWATCH_SMAX_UPDATE_ENABLED=true</span> e os campos de fecho (<span class="mono">CERTWATCH_SMAX_CLOSE_FIELDS</span>) no .env.</p>
   {% else %}
   {% if not perc.closed and perc.current and perc.current != 'fechado' %}<div class="note warn small">Ainda falta: {{ perc.current_label|lower }}. Pode fechar na mesma, se tiver a certeza.</div>{% endif %}
   <form method="post" action="/pedidos/smax/{{ t.id }}/fase" class="stack">
     <input type="hidden" name="csrf" value="{{ csrf }}"><input type="hidden" name="acao" value="{{ 'reabrir' if perc.closed else 'fechar' }}">
     <label class="small">Comentário a registar no pedido (opcional)
       <textarea name="comentario" rows="3">{% if not perc.closed %}Certificado renovado{{ ' (válido até ' ~ perc.target.strftime('%d-%m-%Y') ~ ')' if perc.target }}{{ ' e CMDB atualizada' if perc.steps[3].done }}. Pedido fechado no Atalaia Cert.{% endif %}</textarea></label>
-    <p class="small muted">Campos enviados: <span class="mono">{{ (settings.smax_reopen_fields if perc.closed else settings.smax_close_fields)|tojson }}</span>. A fase é confirmada no SMAX depois do pedido.</p>
-    <label><input type="checkbox" name="confirmo" value="1" required> Confirmo que quero {{ 'reabrir' if perc.closed else 'fechar' }} o pedido {{ t.id }} no SMAX.</label>
-    <button class="primary">{{ 'Reabrir no SMAX' if perc.closed else 'Fechar no SMAX' }}</button>
+    <p class="small muted">Campos enviados: <span class="mono">{{ (settings.smax_reopen_fields if perc.closed else settings.smax_close_fields)|tojson }}</span>. A fase é confirmada no {{ TK }} depois do pedido.</p>
+    <label><input type="checkbox" name="confirmo" value="1" required> Confirmo que quero {{ 'reabrir' if perc.closed else 'fechar' }} o pedido {{ t.id }} no {{ TK }}.</label>
+    <button class="primary">{{ ('Reabrir no ' ~ TK ~ '') if perc.closed else ('Fechar no ' ~ TK ~ '') }}</button>
   </form>
   {% endif %}
 </section>

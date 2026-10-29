@@ -58,8 +58,24 @@ class TicketError(RuntimeError):
 
 
 # ------------------------------------------------------------------ configuração
+def _conn(settings: Settings):
+    from .conectores import ticket_connector
+
+    return ticket_connector(settings)
+
+
 def config_problems(settings: Settings) -> list[str]:
     """O que falta configurar para poder criar pedidos (vazio = pronto)."""
+    conn = _conn(settings)
+    if conn.kind != "smax":   # Jira, ServiceNow, GLPI: a ligação é configurada em Sistema → Ligações
+        out = []
+        if not conn.can("criar"):
+            out.append(f"O sistema ligado ({conn.label}) não permite criar pedidos a partir do Atalaia.")
+        elif not conn.configured():
+            out.append(f"A ligação ao {conn.label} não está completa (Sistema → Ligações).")
+        elif conn.p("criar_pedidos", "nao") != "sim":
+            out.append(f"A criação de pedidos no {conn.label} está desligada (Sistema → Ligações → Permitir criar pedidos).")
+        return out
     out = []
     if not settings.smax_create_enabled:
         out.append("A criação de pedidos está desligada (CERTWATCH_SMAX_CREATE_ENABLED=true para ligar).")
@@ -92,6 +108,8 @@ def validate(d: TicketDraft, settings: Settings) -> dict[str, str]:
         e["name"] = "Nome do certificado em falta."
     if d.expiry is None:
         e["expiry"] = "Sem data de expiração (nem do servidor nem da CMDB)."
+    if _conn(settings).kind != "smax":
+        return e   # os campos seguintes são os do modelo de change do SMAX
     if d.ambiente not in settings.smax_env_codes:
         e["ambiente"] = "Escolha o ambiente."
     if d.tipo not in settings.smax_type_options:
@@ -110,6 +128,13 @@ def _ms(dt) -> int:
 
 
 def build_payload(d: TicketDraft, settings: Settings) -> dict:
+    conn = _conn(settings)
+    if conn.kind != "smax":
+        return conn.preview(d)
+    return _smax_payload(d, settings)
+
+
+def _smax_payload(d: TicketDraft, settings: Settings) -> dict:
     """Payload do pedido, igual ao do workflow n8n (os valores vindos de fora são escapados no HTML)."""
     f = settings.smax_fields
     exp_ms = _ms(d.expiry)
@@ -346,6 +371,9 @@ def execute(batch_id: int, actor: str, settings: Settings, client: httpx.Client 
             pause: float = 0.5) -> dict:
     """Cria os pedidos do lote (já em "a_criar"). Devolve o resumo."""
     from .tickets import ingest_smax, link, tickets_by_endpoint
+    conn = _conn(settings)
+    if conn.kind != "smax":
+        return _execute_generic(batch_id, actor, settings, conn, pause)
     own = client is None
     client = client or smax.client(settings)
     summary = {"criados": 0}
@@ -425,6 +453,76 @@ def execute(batch_id: int, actor: str, settings: Settings, client: httpx.Client 
     finally:
         if own:
             client.close()
+
+
+def _exclude_duplicates(batch_id: int, settings: Settings) -> None:
+    from .tickets import link, tickets_by_endpoint
+
+    with session_scope() as s:
+        by_ep = tickets_by_endpoint(s)
+        for d in drafts_of(s, batch_id):
+            if d.status != "pendente" or d.override_duplicate:
+                continue
+            st = link(by_ep.get(d.cn, []), d.expiry, settings)
+            others = s.scalars(select(TicketDraft).where(TicketDraft.cn == d.cn, TicketDraft.batch_id != batch_id,
+                                                         TicketDraft.status.in_(("criado", "indeterminado"))))
+            same = next((o for o in others if o.expiry and d.expiry and
+                         abs((as_utc(o.expiry).date() - as_utc(d.expiry).date()).days) <= 1), None)
+            if st["state"] == "em_curso":
+                d.status, d.detail = "excluido", {"motivo": f"Já existe o pedido {st['main']['id']} em curso."}
+            elif same is not None:
+                what = f"o pedido {same.ticket_id}" if same.status == "criado" else "um pedido indeterminado"
+                d.status, d.detail = "excluido", {"motivo": f"Já foi enviado {what} no lote {same.batch_id}."}
+
+
+def _execute_generic(batch_id: int, actor: str, settings: Settings, conn, pause: float) -> dict:
+    """Jira, ServiceNow, GLPI: as mesmas garantias do SMAX (reler antes para não duplicar, um de cada vez,
+    "indeterminado" nunca se repete, parar ao primeiro erro)."""
+    from .conectores import ConnectorError
+    from .tickets import ingest_smax
+
+    summary = {"criados": 0}
+    try:
+        with session_scope() as s:
+            ingest_smax(s, settings)
+    except (ConnectorError, httpx.HTTPError) as exc:
+        _abort(batch_id, actor, f"Não foi possível confirmar no {conn.label} que não há pedidos duplicados: {exc}")
+        return {"erro": str(exc)}
+    _exclude_duplicates(batch_id, settings)
+    with session_scope() as s:
+        ids = [d.id for d in drafts_of(s, batch_id) if d.status == "pendente"]
+    stopped = False
+    for i, did in enumerate(ids):
+        with session_scope() as s:
+            d = s.get(TicketDraft, did)
+            if stopped:
+                d.status = "nao_tentado"
+                continue
+            d.status = "a_enviar"
+            s.expunge(d)
+        status, tid, detail = conn.create(d)
+        with session_scope() as s:
+            d = s.get(TicketDraft, did)
+            d.status, d.ticket_id, d.detail, d.done_at = status, tid, detail, utcnow()
+            s.add(AuditLog(actor=actor, action="pedidos.criar", target=d.cn,
+                           details={"lote": batch_id, "estado": status, "pedido": tid or None, "sistema": conn.kind}))
+        if status == "criado":
+            summary["criados"] += 1
+            if pause and i < len(ids) - 1:
+                time.sleep(pause)
+        else:
+            stopped = True
+    with session_scope() as s:
+        b = s.get(TicketBatch, batch_id)
+        left = [d for d in drafts_of(s, batch_id) if d.status in ("falhou", "indeterminado", "nao_tentado")]
+        b.status, b.finished_at = ("interrompido" if left else "concluido"), utcnow()
+        summary["estado"] = b.status
+    try:
+        with session_scope() as s:
+            ingest_smax(s, settings)
+    except (ConnectorError, httpx.HTTPError):
+        pass
+    return summary
 
 
 def _abort(batch_id: int, actor: str, reason: str) -> None:

@@ -22,7 +22,8 @@ from sqlalchemy import func, select
 
 from .. import __version__
 from ..checks import CHECK_BY_ID, CHECKS, LAYERS, STATUS_LABELS, evaluate_endpoint
-from ..fontes.smax import configured as smax_configured
+from ..conectores import tickets_on as smax_configured   # qualquer sistema de tickets ligado (SMAX, Jira…)
+from ..conectores import discussions_url as cf_discussions_url, ticket_connector, tickets_label
 from ..fontes.ssllabs import GOOD_GRADES, GRADE_ORDER, report_url
 from ..classify import (AUTO_RENEW_HELP, AUTO_RENEW_LABELS, SCOPE_HELP, SCOPE_LABELS, TYPE_HELP, TYPE_LABELS,
                         cert_type, is_auto_renew, scope_of)
@@ -43,7 +44,7 @@ from .. import report as rp
 from .. import ucmdb_access as ua
 from .. import ucmdb_write as uw
 from ..azure_rec import CLASS_LABELS as AZ_CLASSES, STATE_LABELS as AZ_STATES
-from ..fontes.smax import ticket_url
+from ..conectores import ticket_url
 from ..tickets import TICKET_HELP, TICKET_ORDER, TICKET_STATES, TICKET_VIEWS, comment_files, filter_tickets, ticket_list, tickets_by_label, link as ticket_link, tickets_by_endpoint
 from ..trust import local_trust_files
 from ..normalize import norm_label, split_api_name, is_ip, is_valid_hostname, norm_host, norm_issuer
@@ -145,6 +146,7 @@ templates.env.globals.update(
     LAYERS=LAYERS, MONTHS=MONTHS, JOB_LABELS=JOB_LABELS, JOB_HELP=JOB_HELP,
     CT_STATES=CT_STATES, CT_TABS=CT_TABS, CT_SOURCE_LABELS=SOURCE_LABELS, CT_STATE_HELP=CT_STATE_HELP, TRIAGE_LABELS=TRIAGE_LABELS,
     FINAL_FILES=cf.FILES, FINAL_FILE_LABELS=cf.FILE_LABELS, LIVE_LABELS=cf.LIVE_LABELS, FINAL_SOURCE_LABELS=cf.SOURCE_LABELS,
+    TK="SMAX",   # cada página recebe o nome do sistema de tickets ligado (render)
 )
 
 _NAV_CACHE: dict = {"at": 0.0, "data": None}
@@ -193,7 +195,8 @@ NAV_GROUPS = [
                             ("/preparar-47-dias", "Preparar os 47 dias", None), ("/relatorio", "Relatório por email", None)]),
     ("cmdb", "CMDB", [("/cmdb-final", "Atualizar a CMDB", "reconc_dif"), ("/ucmdb/certificado", "Editar um certificado", None),
                       ("/cmdb/historico", "Histórico de alterações", None)]),
-    ("sistema", "Sistema", [("/jobs", "Execuções e auditoria", None), ("/fontes", "Fontes e chamadas", None),
+    ("sistema", "Sistema", [("/jobs", "Execuções e auditoria", None), ("/ligacoes", "Ligações", None),
+                            ("/fontes", "Fontes e chamadas", None),
                             ("/cmdb-final/permissoes", "Ligação à UCMDB", None),
                             ("/cmdb-final/avi", "AVI pela API", None), ("/utilizadores", "Utilizadores", "pedidos_acesso"),
                             ("/testes/como-funciona", "Como funciona", None)]),
@@ -215,8 +218,8 @@ def nav_tree(path: str, counts: dict) -> list[dict]:
                 best, best_len = href, len(href)
     out = []
     for key, label, links in NAV_GROUPS:
-        items = [{"href": h, "label": lb, "on": h == best, "n": counts.get(c) if c else None, "hot": False}
-                 for h, lb, c in links]
+        items = [{"href": h, "label": lb.replace("SMAX", tickets_label(get_settings())), "on": h == best,
+                  "n": counts.get(c) if c else None, "hot": False} for h, lb, c in links]
         out.append({"key": key, "label": label, "href": links[0][0], "on": any(i["on"] for i in items), "items": items,
                     "n": sum(i["n"] or 0 for i in items if i["n"]) or None})
     return out
@@ -324,6 +327,7 @@ def render(request: Request, name: str, user: str, **ctx):
             for i in g["items"]:
                 if i["href"] == "/utilizadores" and i["n"]:
                     i["hot"] = True
+    ctx.setdefault("TK", tickets_label(get_settings()))   # nome do sistema de tickets ligado (SMAX, Jira…)
     r = templates.TemplateResponse(request, name, {"user": user, "csrf": request.state.csrf, "nav": counts,
                                                       "navtree": tree, "role": role, "ROLES": us.ROLES,
                                                       "via": getattr(request.state, "via", ""), "aviso": aviso,
@@ -433,12 +437,13 @@ def setup_checklist(s, settings, stats) -> list[dict]:
         items.append({"ok": None, "title": "Lista de APIs", "hint": "Opcional: definir CERTWATCH_UCMDB_TQL_APIS no .env."})
     if smax_configured(settings):
         jr, part = _last_ok(s, "ingest_smax")
-        items.append({"ok": bool(jr), "title": "Pedidos do SMAX",
+        items.append({"ok": bool(jr), "title": f"Pedidos do {tickets_label(settings)}",
                       "hint": (f"{part.get('tickets', 0)} pedidos lidos, {part.get('abertos', 0)} abertos" if jr
                                else "Ainda não lidos com sucesso. Ver Execuções e auditoria.")})
     else:
-        items.append({"ok": None, "title": "Pedidos do SMAX",
-                      "hint": "Opcional: definir CERTWATCH_SMAX_URL, CERTWATCH_SMAX_TENANT e os segredos smax_user/smax_password."})
+        items.append({"ok": None, "title": "Sistema de tickets",
+                      "hint": "Opcional: ligar o SMAX, Jira, ServiceNow ou GLPI em Sistema → Ligações "
+                              "(ou CERTWATCH_SMAX_URL, CERTWATCH_SMAX_TENANT e os segredos smax_user/smax_password)."})
     if settings.ct_domains:
         jr, part = _last_ok(s, "ingest_ct")
         items.append({"ok": bool(jr), "title": "Procura na internet",
@@ -1779,14 +1784,14 @@ def pedido_smax(request: Request, tid: str, user: str = Depends(current_user)):
                 s.expunge(x)
     return render(request, "pedido_smax.html", user, t=t, perc=p, comments=comments, files=files, others=others,
                   url=ticket_url(settings, t.id), discussao=cf_discussions(settings, t.id),
-                  can_update=smax_configured(settings) and settings.smax_update_enabled, settings=settings,
+                  can_update=smax_configured(settings) and settings.smax_update_enabled and ticket_connector(settings).can("fase"),
+                  settings=settings,
                   msg=request.query_params.get("msg", ""), erro=request.query_params.get("erro", ""),
                   ORIGIN_LABELS=rn.ORIGIN_LABELS, today=utcnow().astimezone(_tz()).date())
 
 
 def cf_discussions(settings, tid):
-    from ..fontes.smax import discussions_url
-    return discussions_url(settings, tid)
+    return cf_discussions_url(settings, tid)
 
 
 @app.get("/pedidos/ficheiro/{fid}")
@@ -1900,7 +1905,7 @@ def pedido_fase(request: Request, tid: str, csrf: str = Form(""), acao: str = Fo
                 confirmo: str = Form(""), user: str = Depends(current_user)):
     check_csrf(request, csrf)
     settings = get_settings()
-    if not (smax_configured(settings) and settings.smax_update_enabled):
+    if not (smax_configured(settings) and settings.smax_update_enabled and ticket_connector(settings).can("fase")):
         raise HTTPException(409, "Alterar pedidos no SMAX não está ativo (CERTWATCH_SMAX_UPDATE_ENABLED=true).")
     if acao not in ("fechar", "reabrir") or confirmo != "1":
         raise HTTPException(400, "Confirmação em falta.")
@@ -3311,16 +3316,114 @@ def _jsonable(v):
     return v
 
 
+# ------------------------------------------------------------------ Ligações (CMDB e tickets)
+ROLE_LABELS = {"cmdb": "CMDB (de onde vêm os certificados)", "tickets": "Sistema de tickets (pedidos de renovação)"}
+
+
+def _conn_card(role: str, chosen: str = "", form: dict | None = None, result=None) -> dict:
+    from .. import conectores as cx
+    st = get_settings()
+    cur = cx.active(st, role)
+    types = cx.registry()[role]
+    kind = chosen if chosen in types else cur.kind
+    cfg = cx.load_config(role)
+    stored = cx.decrypt(st, cfg["secrets_enc"]) if cfg and cfg["kind"] == kind else {}
+    params = (cfg["params"] if cfg and cfg["kind"] == kind else {}) | (form or {})
+    proto = types[kind](st, params, stored, origin="interface")
+    fields = [{"f": f, "value": "" if f.secret else proto.params.get(f.name, f.default),
+               "stored": bool(stored.get(f.name)) if f.secret else False} for f in proto.FIELDS]
+    return {"role": role, "label": ROLE_LABELS[role], "current": cur, "kind": kind, "types": types,
+            "fields": fields, "proto": proto, "result": result, "cfg": cfg}
+
+
+def _ligacoes(request: Request, user: str, cards: dict | None = None, notas=None, erros=None, status_code: int = 200):
+    cards = cards or {}
+    out = [cards.get(r) or _conn_card(r, request.query_params.get(r, "")) for r in ("cmdb", "tickets")]
+    r = render(request, "ligacoes.html", user, cards=out, notas=notas or [], erros=erros or [])
+    r.status_code = status_code
+    return r
+
+
+@app.get("/ligacoes")
+def ligacoes_page(request: Request, user: str = Depends(require_admin)):
+    return _ligacoes(request, user)
+
+
+@app.post("/ligacoes/{role}")
+async def ligacoes_save(request: Request, role: str, user: str = Depends(require_admin)):
+    from .. import conectores as cx
+    from ..models import ConnectorConfig
+    if role not in cx.ROLES:
+        raise HTTPException(404)
+    form = await request.form()
+    check_csrf(request, str(form.get("csrf", "")))
+    st, acao, kind = get_settings(), str(form.get("acao", "testar")), str(form.get("tipo", ""))
+    if acao == "repor":
+        with session_scope() as s:
+            row = s.get(ConnectorConfig, role)
+            if row is not None:
+                s.delete(row)
+            audit(s, user, "ligacao.repor", role)
+        cx.invalidate()
+        return _ligacoes(request, user, notas=[f"{ROLE_LABELS[role]}: voltou a usar a configuração do .env."])
+    types = cx.registry()[role]
+    if kind not in types:
+        raise HTTPException(400, "Tipo de ligação desconhecido")
+    cls = types[kind]
+    cfg = cx.load_config(role)
+    stored = cx.decrypt(st, cfg["secrets_enc"]) if cfg and cfg["kind"] == kind else {}
+    params, secrets = {}, dict(stored)
+    for f in cls.FIELDS:
+        raw = form.get(f"f_{f.name}")
+        if f.kind == "bool":
+            value = "sim" if raw in ("on", "sim", "1") else "nao"
+        else:
+            value = str(raw or "").strip()
+        if f.secret:
+            if value:
+                secrets[f.name] = value
+            elif form.get(f"apagar_{f.name}") == "on":
+                secrets.pop(f.name, None)
+        else:
+            params[f.name] = value
+    conn = cls(st, params, secrets, origin="interface")
+    try:
+        result = conn.test()
+    except Exception as exc:  # um conector mal configurado nunca deita a página abaixo
+        result = cx.TestResult(False, f"Erro inesperado: {exc.__class__.__name__}: {str(exc)[:200]}")
+    notas, erros = [], []
+    if acao == "guardar":
+        if conn.missing():
+            erros.append("Não gravado. Falta preencher: " + ", ".join(conn.missing()))
+        else:
+            with session_scope() as s:
+                row = s.get(ConnectorConfig, role) or ConnectorConfig(role=role)
+                row.kind, row.params, row.secrets_enc = kind, params, cx.encrypt(st, secrets)
+                row.enabled, row.updated_at, row.updated_by = True, utcnow(), user
+                s.merge(row)
+                audit(s, user, "ligacao.guardar", role, tipo=kind, teste_ok=result.ok)
+            cx.invalidate()
+            invalidate_nav()
+            notas.append(f"Ligação gravada: {conn.label}." + ("" if result.ok else " Atenção: o teste falhou (ver abaixo)."))
+    card = _conn_card(role, kind, params, result)
+    return _ligacoes(request, user, cards={role: card}, notas=notas, erros=erros)
+
+
 # ------------------------------------------------------------------ Portal SOC (soc-status/1)
 SOURCE_MAX_AGE_H = 48  # o mesmo limite do Painel ("lida há mais de 48 h")
 _STATUS_CACHE: dict = {}
+
+
+def _cmdb_label(settings) -> str:
+    from ..conectores import cmdb_connector
+    return cmdb_connector(settings).label.split(" (")[0]
 
 
 def _source_configured(settings, job: str) -> bool:
     if job == "ingest_apis":
         return apis_configured(settings)
     if job == "ingest_smax":
-        return smax_configured(settings)
+        return smax_configured(settings)   # qualquer sistema de tickets ligado
     if job == "ingest_ct":
         return bool(settings.ct_domains)
     return True
@@ -3353,6 +3456,10 @@ def soc_status(now: datetime | None = None) -> dict:
             j = s.scalar(select(JobRun).where(JobRun.job.in_([job, "pipeline"]), JobRun.status == "ok")
                          .order_by(JobRun.finished_at.desc()).limit(1))
             when = as_utc(j.finished_at) if j and j.finished_at else None
+            if job == "ingest_smax":
+                label = tickets_label(settings)
+            elif job == "ingest_cmdb":
+                label = f"CMDB ({_cmdb_label(settings)})"
             item = {"id": f"atalaia_{job.removeprefix('ingest_')}", "name": label,
                     "updated_at": when.isoformat() if when else None, "max_age_hours": SOURCE_MAX_AGE_H}
             if not _source_configured(settings, job):
@@ -3370,6 +3477,9 @@ def soc_status(now: datetime | None = None) -> dict:
     soon = sum(1 for d in days if 0 <= d <= 7)
     checks = [{"id": f"setup_{i}", "name": it["title"], "message": it["hint"],
                "status": {True: "ok", False: "warn", None: "off"}[it["ok"]]} for i, it in enumerate(setup)]
+    tk = ticket_connector(settings)
+    checks.append({"id": "ligacoes", "name": "Ligações (CMDB e tickets)", "status": "ok",
+                   "message": f"CMDB: {_cmdb_label(settings)} · tickets: {tk.label if tk.kind != 'nenhum' else 'nenhum'}"})
     checks.append({"id": "alertas", "name": "Alertas críticos e altos",
                    "status": "warn" if sev["critica"] or sev["alta"] else "ok",
                    "message": f"{sev['critica']} críticos · {sev['alta']} altos · {len(open_findings)} abertos no total"})

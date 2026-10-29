@@ -10,7 +10,8 @@ from datetime import datetime, timedelta, timezone
 from sqlalchemy import delete, select
 from sqlalchemy.orm import Session
 
-from .fontes.smax import discussions_url, fetch_comments, fetch_tickets, ticket_url
+from .conectores import discussions_url, ticket_connector, ticket_url
+from .fontes.smax import fetch_comments
 from .config import Settings
 from .db import as_utc, utcnow
 from .models import SmaxComment, SmaxEvent, SmaxFile, SmaxTicket
@@ -37,8 +38,10 @@ TICKET_HELP = {
 def ingest_smax(session: Session, settings: Settings, tickets: list[dict] | None = None,
                 comments: bool | None = None) -> dict:
     if tickets is None:
-        tickets = fetch_tickets(settings)
-        comments = settings.smax_comments if comments is None else comments
+        conn = ticket_connector(settings)
+        tickets = conn.fetch_tickets()   # SMAX, Jira, ServiceNow ou GLPI: o mesmo formato
+        # os comentários (com imagens e anexos) só existem na integração com o SMAX
+        comments = (settings.smax_comments if comments is None else comments) and conn.kind == "smax"
     now = utcnow()
     before = {tid: (phase or "") for tid, phase in session.execute(select(SmaxTicket.id, SmaxTicket.phase))}
     session.execute(delete(SmaxTicket))

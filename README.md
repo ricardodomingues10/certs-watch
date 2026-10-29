@@ -178,6 +178,36 @@ A lista "API secrets" da CMDB descreve sobretudo segredos de aplicações (clien
 
 Atributos com nomes como *secret*, *password*, *token* ou *key* só são guardados quando o nome descreve o segredo (data, tipo, localização, estado) e o valor é uma data, um sim/não ou um texto curto legível. Segredos expirados há mais de 30 dias dão um alerta de limpeza de gravidade baixa; os que estão a expirar seguem os prazos normais.
 
+## 3.1 Outras CMDB e outros sistemas de tickets (Sistema → Ligações)
+
+A UCMDB e o SMAX do `.env` continuam a ser o que se usa por omissão: uma instalação que nunca abre esta página
+funciona exatamente como antes. Para outro cliente, com outra infraestrutura, a ligação escolhe-se na interface
+(administradores), sem mexer em código nem no `.env`:
+
+| Papel | Tipos |
+|---|---|
+| CMDB (de onde vêm os certificados) | UCMDB · ServiceNow CMDB (`cmdb_ci_certificate`) · base de dados SQL (PostgreSQL, MySQL/MariaDB, SQL Server, Oracle) · qualquer API REST/JSON · ficheiro CSV/Excel em `import/` |
+| Tickets (pedidos de renovação) | SMAX · Jira (Cloud e Data Center) · ServiceNow · GLPI · nenhum |
+
+1. **Sistema → Ligações**, escolher o tipo e carregar em *Mudar de tipo*.
+2. Preencher o endereço e a credencial (token, API key ou utilizador/palavra-passe). Em *Mapeamento de campos*
+   diz-se que coluna/campo é o identificador, o nome (CN), a data de expiração e o emissor; datas ISO,
+   dd/mm/aaaa e epoch são reconhecidas sozinhas. Caminhos com pontos (`attrs.name`) servem para JSON aninhado.
+3. **Testar** mostra os primeiros registos já traduzidos para o formato do Atalaia, sem gravar nada.
+   **Testar e gravar** grava; **Voltar ao .env** apaga a configuração da página.
+
+Garantias:
+
+- As credenciais ficam cifradas na base de dados (Fernet) e nunca voltam a ser mostradas; deixar o campo vazio mantém a guardada.
+- A consulta SQL tem de ser um único `SELECT`/`WITH`; no PostgreSQL corre numa transação só de leitura. Dê ao utilizador apenas leitura numa vista.
+- O mínimo de registos protege de desativar certificados por engano (como o `CERTWATCH_UCMDB_MIN_CIS`).
+- Criar pedidos fora do SMAX só com *Permitir criar pedidos* ligado, com as mesmas regras: revisão e confirmação,
+  releitura antes de criar para não duplicar, um de cada vez, parar no primeiro erro, auditoria.
+- Os nomes nas páginas acompanham o sistema escolhido ("Pedidos do Jira"). Comentários com anexos, fases e a escrita na CMDB continuam a ser só do SMAX e da UCMDB.
+
+Para acrescentar um tipo novo: uma classe em `certwatch/conectores/cmdb.py` ou `tickets.py` com `FIELDS`
+(o formulário gera-se sozinho) e `rows()`/`fetch_tickets()`, registada em `TYPES`.
+
 ## 4. Procura na internet (Certificate Transparency)
 
 As autoridades públicas são obrigadas a publicar todos os certificados que emitem em registos abertos. O certwatch consulta três serviços gratuitos para os domínios em `CERTWATCH_CT_DOMAINS` (vários separados por vírgulas, ex.: `exemplo.pt,exemplo.com`; os subdomínios são incluídos) e funde os resultados pelo número de série ou pela validade e nomes, porque cada fonte escreve o emissor de forma diferente:

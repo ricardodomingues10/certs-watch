@@ -641,3 +641,21 @@ class TicketRule(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
     updated_by: Mapped[str] = mapped_column(String(254), default="")
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+class ConnectorConfig(Base):
+    """Ligação escolhida na interface (Sistema → Ligações) para a CMDB ou para os tickets.
+
+    Sem linha aqui vale a configuração do .env (UCMDB e SMAX, como sempre). As credenciais ficam cifradas
+    (conectores.cifra) e nunca voltam a ser mostradas.
+    """
+
+    __tablename__ = "connector_configs"
+
+    role: Mapped[str] = mapped_column(String(16), primary_key=True)     # cmdb | tickets
+    kind: Mapped[str] = mapped_column(String(32))
+    params: Mapped[dict] = mapped_column(JSON, default=dict)
+    secrets_enc: Mapped[str] = mapped_column(Text, default="")
+    enabled: Mapped[bool] = mapped_column(Boolean, default=True)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    updated_by: Mapped[str] = mapped_column(String(256), default="")

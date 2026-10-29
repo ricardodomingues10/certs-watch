@@ -1,0 +1,82 @@
+{% extends "base.html" %}
+{% block title %}Ligações{% endblock %}
+{% block crumb %}Sistema{% endblock %}
+{% block page_title %}Ligações: CMDB e sistema de tickets{% endblock %}
+{% block lede %}De onde vêm os certificados da organização e onde vivem os pedidos de renovação. Escolha o tipo, preencha os campos e carregue em Testar: vê os primeiros registos já traduzidos antes de gravar. As credenciais ficam cifradas na base de dados e nunca voltam a ser mostradas. Sem nada gravado aqui, vale o .env (UCMDB e SMAX), como sempre.{% endblock %}
+{% block content %}
+{% for n in notas %}<div class="note ok">{{ n }}</div>{% endfor %}
+{% for e in erros %}<div class="note bad">{{ e }}</div>{% endfor %}
+
+{% for c in cards %}
+<section class="card" id="{{ c.role }}">
+  <h2>{{ c.label }}</h2>
+  <table class="compact">
+    <tr><th>Em uso agora</th><td><b>{{ c.current.label }}</b>
+      {% if c.current.kind == 'nenhum' %}<span class="tag">desligado</span>
+      {% else %}<span class="tag {{ 'tag-ok' if c.current.configured() else 'tag-run' }}">{{ 'configurado' if c.current.configured() else 'por configurar' }}</span>{% endif %}
+      <span class="muted small">· {{ 'gravado nesta página' if c.current.origin == 'interface' else 'do ficheiro .env' }}{% if c.cfg and c.cfg.updated_by %} por {{ c.cfg.updated_by }}{% endif %}</span></td></tr>
+    <tr><th>Faz</th><td class="small">{{ c.current.description }}</td></tr>
+  </table>
+
+  <form method="get" action="/ligacoes#{{ c.role }}" class="inline mt">
+    <label class="small">Tipo
+      <select name="{{ c.role }}">
+        {% for k, cls in c.types.items() %}<option value="{{ k }}" {{ 'selected' if k == c.kind }}>{{ cls.label }}</option>{% endfor %}
+      </select></label>
+    <button>Mudar de tipo</button>
+  </form>
+
+  <form method="post" action="/ligacoes/{{ c.role }}#{{ c.role }}" class="mt">
+    <input type="hidden" name="csrf" value="{{ csrf }}">
+    <input type="hidden" name="tipo" value="{{ c.kind }}">
+    <p class="small muted">{{ c.proto.description }}</p>
+    {% set basic = c.fields | rejectattr('f.advanced') | list %}
+    {% set adv = c.fields | selectattr('f.advanced') | list %}
+    {% macro field(x) %}
+      {% set f = x.f %}
+      <label class="field">
+        <span>{{ f.label }}{% if f.required %} <span class="muted">*</span>{% endif %}</span>
+        {% if f.kind == 'select' %}
+          <select name="f_{{ f.name }}">{% for v, l in f.options %}<option value="{{ v }}" {{ 'selected' if v == x.value }}>{{ l }}</option>{% endfor %}</select>
+        {% elif f.kind == 'textarea' %}
+          <textarea name="f_{{ f.name }}" rows="4" class="mono">{{ x.value }}</textarea>
+        {% elif f.kind == 'bool' %}
+          <span><input type="checkbox" name="f_{{ f.name }}" {{ 'checked' if x.value == 'sim' }}> sim</span>
+        {% elif f.secret %}
+          <input type="password" name="f_{{ f.name }}" autocomplete="new-password" placeholder="{{ '•••••• (guardado; deixe vazio para manter)' if x.stored else '' }}">
+          {% if x.stored %}<span class="small"><input type="checkbox" name="apagar_{{ f.name }}"> apagar o guardado</span>{% endif %}
+        {% else %}
+          <input type="{{ 'number' if f.kind == 'number' else 'text' }}" name="f_{{ f.name }}" value="{{ x.value }}">
+        {% endif %}
+        {% if f.help %}<small class="muted">{{ f.help }}</small>{% endif %}
+      </label>
+    {% endmacro %}
+    <div class="grid2">{% for x in basic %}{{ field(x) }}{% endfor %}</div>
+    {% if adv %}
+    <details class="mt" {{ 'open' if c.kind not in ('ucmdb', 'smax', 'nenhum') }}><summary>Mapeamento de campos e opções avançadas ({{ adv|length }})</summary>
+      <div class="grid2 mt">{% for x in adv %}{{ field(x) }}{% endfor %}</div>
+    </details>
+    {% endif %}
+    <div class="inline mt">
+      <button name="acao" value="testar">Testar</button>
+      <button class="primary" name="acao" value="guardar">Testar e gravar</button>
+      {% if c.cfg %}<button name="acao" value="repor">Voltar ao .env</button>{% endif %}
+    </div>
+  </form>
+
+  {% if c.result %}
+  <div class="mt">
+    <p><span class="tag {{ 'tag-ok' if c.result.ok else 'tag-err' }}">{{ 'ligação ok' if c.result.ok else 'falhou' }}</span> {{ c.result.message }}
+      {% if c.result.total is not none %}<span class="muted small">· {{ c.result.total }} registos</span>{% endif %}</p>
+    {% if c.result.sample %}
+      {% set cols = c.result.sample[0].keys() | list %}
+      <div class="scroll"><table class="compact"><thead><tr>{% for k in cols %}<th>{{ k }}</th>{% endfor %}</tr></thead>
+        {% for r in c.result.sample %}<tr>{% for k in cols %}<td class="small mono">{{ r[k] if r[k] is not none else '—' }}</td>{% endfor %}</tr>{% endfor %}
+      </table></div>
+      <p class="small muted">Os primeiros registos, já no formato que o Atalaia usa. Se uma coluna estiver vazia, ajuste o mapeamento.</p>
+    {% endif %}
+  </div>
+  {% endif %}
+</section>
+{% endfor %}
+{% endblock %}

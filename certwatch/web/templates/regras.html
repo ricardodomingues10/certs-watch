@@ -2,13 +2,13 @@
 {% block title %}Regras de pedidos{% endblock %}
 {% block crumb %}Renovar{% endblock %}
 {% block page_title %}Regras para abrir pedidos <small>{{ regras|selectattr('r.enabled')|list|length }} ativa{{ 's' if regras|selectattr('r.enabled')|list|length != 1 }} de {{ regras|length }}</small>{% endblock %}
-{% block lede %}Cada regra diz quando um certificado deve ter um pedido de renovação aberto: quantos dias antes, para que certificados e com que grupo do SMAX.{% endblock %}
+{% block lede %}Cada regra diz quando um certificado deve ter um pedido de renovação aberto: quantos dias antes, para que certificados e com que grupo do {{ TK }}.{% endblock %}
 {% block content %}
 {% for n in notas %}<p class="note" role="status">{{ n }}</p>{% endfor %}
 {% for e in erros %}<p class="note bad" role="alert">{{ e }}</p>{% endfor %}
 
 <div class="ru-how">
-  <div><b>Nada abre sozinho.</b> Nesta versão nenhuma regra cria pedidos no SMAX por si.</div>
+  <div><b>Nada abre sozinho.</b> Nesta versão nenhuma regra cria pedidos no {{ TK }} por si.</div>
   <div><b>Ativar</b> põe a regra a contar: o Painel passa a mostrar os pedidos que ela abriria hoje, e aqui pode abrir o rascunho deles.</div>
   <div><b>Mais tarde</b> as regras ativas podem passar a correr na execução diária, sem mudar nada aqui.</div>
 </div>
@@ -18,7 +18,7 @@
   <div class="ru-head">
     <div>
       <h2 id="ru-{{ r.id }}">{{ r.name }} {% if r.enabled %}<span class="tag tag-ok">ativa</span>{% else %}<span class="tag tag-off">desligada</span>{% endif %}</h2>
-      <p class="small">Abrir pedido quando {{ x.desc }}. Grupo no SMAX: <b>{{ r.smax_group or 'o da equipa dona' }}</b>.</p>
+      <p class="small">Abrir pedido quando {{ x.desc }}. Grupo no {{ TK }}: <b>{{ r.smax_group or 'o da equipa dona' }}</b>.</p>
       <p class="small muted">Criada por {{ r.created_by or '—' }}; alterada por {{ r.updated_by or '—' }} em {{ r.updated_at|dt }}.</p>
     </div>
     <div class="ru-acts">
@@ -35,7 +35,7 @@
     {% if r.enabled and can_create and x.criaveis %}
     <form method="post" action="/pedidos/novo"><input type="hidden" name="csrf" value="{{ csrf }}"><input type="hidden" name="next" value="/pedidos/regras">
       {% for cn in x.criaveis %}<input type="hidden" name="cn" value="{{ cn }}">{% endfor %}
-      <button class="small-btn">Abrir o rascunho dos {{ x.criaveis|length }} pedidos</button> <span class="small muted">Revê-se antes de criar no SMAX.{% if x.criaveis|length < x.matches|length %} As APIs pedem-se à mão.{% endif %}</span></form>
+      <button class="small-btn">Abrir o rascunho dos {{ x.criaveis|length }} pedidos</button> <span class="small muted">Revê-se antes de criar no {{ TK }}.{% if x.criaveis|length < x.matches|length %} As APIs pedem-se à mão.{% endif %}</span></form>
     {% endif %}
     {% endif %}
   </div>
@@ -60,7 +60,7 @@
     <label>Renovação<select name="renovacao">{% for k, v in RENEWALS.items() %}<option value="{{ k }}" {{ 'selected' if ed and ed.renewal == k }}>{{ v }}</option>{% endfor %}</select></label>
     <label>Emissor contém (opcional)<input type="text" name="emissor" maxlength="128" value="{{ ed.issuer_contains if ed else '' }}" placeholder="DigiCert"></label>
     <label>Só da equipa (opcional)<select name="equipa"><option value="">Qualquer equipa</option>{% for t in equipas %}<option value="{{ t.id }}" {{ 'selected' if ed and ed.team_id == t.id }}>{{ t.name }}</option>{% endfor %}</select></label>
-    <label>Grupo no SMAX (opcional)<input type="text" name="grupo" maxlength="256" value="{{ ed.smax_group if ed else '' }}" placeholder="vazio = o da equipa dona"></label>
+    <label>Grupo no {{ TK }} (opcional)<input type="text" name="grupo" maxlength="256" value="{{ ed.smax_group if ed else '' }}" placeholder="vazio = o da equipa dona"></label>
     <button class="primary">{{ 'Guardar a regra' if ed else 'Criar a regra (desligada)' }}</button>
   </form>
   {% if ed %}<p class="small"><a href="/pedidos/regras">Cancelar</a></p>{% endif %}

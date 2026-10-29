@@ -9,6 +9,7 @@ from datetime import timedelta
 from sqlalchemy import delete, select
 from sqlalchemy.orm import Session
 
+from .conectores import cmdb_connector, tickets_on
 from .fontes.ucmdb import fetch_apis, fetch_certificates
 from .config import Settings
 from .db import LOCK_PIPELINE, JobBusy, advisory_lock, session_scope, utcnow
@@ -30,12 +31,15 @@ class IngestAborted(RuntimeError):
 
 # ---------------------------------------------------------------- ingestão CMDB
 def ingest_cmdb(session: Session, settings: Settings, records: list[dict] | None = None) -> dict:
+    conn = cmdb_connector(settings)
+    minimum = conn.min_records if records is None else settings.ucmdb_min_cis
     if records is None:
-        records = fetch_certificates(settings)
+        # UCMDB (o de sempre), ServiceNow, SQL, REST ou ficheiro: todos no mesmo formato
+        records = fetch_certificates(settings) if conn.kind == "ucmdb" else conn.fetch_certificates()
     valid = [r for r in records if r.get("ucmdb_id")]
-    if len(valid) < settings.ucmdb_min_cis:
+    if len(valid) < minimum:
         raise IngestAborted(
-            f"A UCMDB devolveu {len(valid)} certificados (mínimo configurado: {settings.ucmdb_min_cis}). "
+            f"A CMDB ({conn.label}) devolveu {len(valid)} certificados (mínimo configurado: {minimum}). "
             "Ingestão abortada para não desativar registos por engano."
         )
 
@@ -167,7 +171,12 @@ def ingest_apis(session: Session, settings: Settings, records: list[dict] | None
 
 def apis_configured(settings: Settings) -> bool:
     from .reconcile import find_api_file
-    return bool(settings.ucmdb_tql_apis) or find_api_file(settings) is not None
+    return _apis_rest(settings) or find_api_file(settings) is not None
+
+
+def _apis_rest(settings: Settings) -> bool:
+    """A lista de APIs por REST é da UCMDB; com outra CMDB fica o ficheiro api-cmdb* em import/."""
+    return bool(settings.ucmdb_tql_apis) and cmdb_connector(settings).kind == "ucmdb"
 
 
 def load_api_records(settings: Settings) -> tuple[list[dict], dict]:
@@ -175,7 +184,7 @@ def load_api_records(settings: Settings) -> tuple[list[dict], dict]:
     from .fontes.ucmdb import UcmdbError
     from .reconcile import find_api_file, read_api_file
     records, fields, rest_error = None, {}, None
-    if settings.ucmdb_tql_apis:
+    if _apis_rest(settings):
         try:
             records, fields = fetch_apis(settings)
         except UcmdbError as exc:
@@ -384,8 +393,7 @@ def _run(job: str, settings: Settings) -> dict:
                 log.exception("Ingestão de APIs falhou")
                 summary["ingest_apis"] = {"erro": str(exc)}
         from .discovery import ingest_ct
-        from .fontes.smax import configured as smax_configured
-        if smax_configured(settings):
+        if tickets_on(settings):
             from .tickets import ingest_smax
             try:
                 with session_scope() as s:
