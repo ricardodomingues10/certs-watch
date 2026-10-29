@@ -574,6 +574,17 @@ Atualizar: `git pull && docker compose up -d --build`. O esquema da base de dado
 
 ---
 
+## 11.1 Portal SOC
+
+O Atalaia Cert publica o seu estado para o Portal SOC (repositório `vuln-flux`, pasta `portal/`) em
+`GET /api/status`, no contrato `soc-status/1`: as fontes (CMDB, APIs, SMAX, servidores, internet) com a data da
+última leitura bem-sucedida (o portal mostra-as como listas desatualizadas ao fim de 48 h), as contagens de
+certificados e alertas, o que falta configurar e o pipeline diário. Fica desligado até haver um token:
+`CERTWATCH_STATUS_TOKEN` no ambiente ou o ficheiro `/run/secrets/status_token`. O pedido usa
+`Authorization: Bearer <token>` (o login normal não serve) e o resultado fica em cache 60 s.
+
+No portal: modelo **Atalaia Cert** do Catálogo, com o tipo de verificação `soc-status/1` e o caminho `/api/status`.
+
 ## 12. Desenvolvimento e testes
 
 ```bash

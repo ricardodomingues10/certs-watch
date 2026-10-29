@@ -3311,6 +3311,110 @@ def _jsonable(v):
     return v
 
 
+# ------------------------------------------------------------------ Portal SOC (soc-status/1)
+SOURCE_MAX_AGE_H = 48  # o mesmo limite do Painel ("lida há mais de 48 h")
+_STATUS_CACHE: dict = {}
+
+
+def _source_configured(settings, job: str) -> bool:
+    if job == "ingest_apis":
+        return apis_configured(settings)
+    if job == "ingest_smax":
+        return smax_configured(settings)
+    if job == "ingest_ct":
+        return bool(settings.ct_domains)
+    return True
+
+
+def _next_daily(settings, now: datetime) -> datetime | None:
+    try:
+        hh, mm = (int(x) for x in settings.pipeline_daily_at.split(":", 1))
+        local = now.astimezone(_tz())
+        nxt = local.replace(hour=hh, minute=mm, second=0, microsecond=0)
+        if nxt <= local:
+            nxt += timedelta(days=1)
+        return nxt
+    except (ValueError, TypeError):
+        return None
+
+
+def soc_status(now: datetime | None = None) -> dict:
+    """Estado no contrato soc-status/1 (docs/soc-status.md do VulnFlux): fontes com a data da última leitura,
+    contagens de certificados e alertas, o que falta configurar e o pipeline diário."""
+    now, settings = now or utcnow(), get_settings()
+    with session_scope() as s:
+        snap = load_snapshot(s)
+        inv = build_inventory(s, settings, now, snap)
+        stats = dashboard_stats(inv, check_matrix(s, settings, now, snap), now)
+        open_findings = list(s.scalars(select(Finding).where(Finding.status == "aberto")))
+        setup = setup_checklist(s, settings, stats)
+        freshness = []
+        for job, label in SOURCE_JOBS:
+            j = s.scalar(select(JobRun).where(JobRun.job.in_([job, "pipeline"]), JobRun.status == "ok")
+                         .order_by(JobRun.finished_at.desc()).limit(1))
+            when = as_utc(j.finished_at) if j and j.finished_at else None
+            item = {"id": f"atalaia_{job.removeprefix('ingest_')}", "name": label,
+                    "updated_at": when.isoformat() if when else None, "max_age_hours": SOURCE_MAX_AGE_H}
+            if not _source_configured(settings, job):
+                item.update(status="off", message="não configurada")
+            elif when is None:
+                item.update(status="unknown", message="ainda não foi lida com sucesso")
+            else:
+                item.update(status="ok")
+            freshness.append(item)
+        last = s.scalar(select(JobRun).where(JobRun.job == "pipeline", JobRun.status.in_(("ok", "error")))
+                        .order_by(JobRun.id.desc()).limit(1))
+    sev = {sv: sum(1 for f in open_findings if f.severity == sv) for sv in SEVERITIES}
+    days = [r["dias"] for r in inv if r["dias"] is not None]
+    expired = sum(1 for d in days if d < 0)
+    soon = sum(1 for d in days if 0 <= d <= 7)
+    checks = [{"id": f"setup_{i}", "name": it["title"], "message": it["hint"],
+               "status": {True: "ok", False: "warn", None: "off"}[it["ok"]]} for i, it in enumerate(setup)]
+    checks.append({"id": "alertas", "name": "Alertas críticos e altos",
+                   "status": "warn" if sev["critica"] or sev["alta"] else "ok",
+                   "message": f"{sev['critica']} críticos · {sev['alta']} altos · {len(open_findings)} abertos no total"})
+    problems = [c for c in checks if c["status"] == "warn"]
+    stale = [f for f in freshness if f["status"] == "ok" and f["updated_at"]
+             and now - datetime.fromisoformat(f["updated_at"]) > timedelta(hours=SOURCE_MAX_AGE_H)]
+    status = "warn" if problems or stale or expired else "ok"
+    message = (f"{len(inv)} certificados · {expired} expirados · {soon} expiram em 7 dias · "
+               f"{sev['critica']} alertas críticos")
+    nxt = _next_daily(settings, now)
+    return {
+        "schema": "soc-status/1", "service": "atalaia-cert", "version": __version__,
+        "status": status, "message": message, "generated_at": now.isoformat(),
+        "checks": checks, "freshness": freshness, "dependencies": {}, "components": {},
+        "jobs": [{"id": "pipeline", "name": f"Pipeline diário ({settings.pipeline_daily_at})",
+                  "next_run": nxt.isoformat() if nxt else None,
+                  "last_status": {"ok": "ok", "error": "fail"}.get(last.status) if last else None,
+                  "last_finished": as_utc(last.finished_at).isoformat() if last and last.finished_at else None}],
+    }
+
+
+@app.get("/api/status", include_in_schema=False)
+def api_status(request: Request):
+    """Para o Portal SOC: Authorization: Bearer <CERTWATCH_STATUS_TOKEN> (ou secrets/status_token)."""
+    import hmac
+    expected = get_settings().status_token
+    if not expected:
+        return JSONResponse({"error": "desligado: define secrets/status_token ou CERTWATCH_STATUS_TOKEN"}, status_code=404)
+    supplied = request.headers.get("authorization", "").removeprefix("Bearer ").strip()
+    if not supplied or not hmac.compare_digest(supplied.encode(), expected.encode()):
+        return JSONResponse({"error": "token inválido"}, status_code=401)
+    cached = _STATUS_CACHE.get("v")
+    if cached and time.monotonic() - cached[0] < 60:    # o portal pergunta de minuto a minuto
+        return JSONResponse(cached[1])
+    try:
+        data = soc_status()
+    except Exception as exc:  # a base de dados em baixo também é um estado
+        logging.getLogger(__name__).exception("estado para o Portal SOC falhou")
+        data = {"schema": "soc-status/1", "service": "atalaia-cert", "version": __version__, "status": "fail",
+                "message": f"erro a calcular o estado: {exc.__class__.__name__}", "checks": [], "freshness": []}
+        return JSONResponse(data)
+    _STATUS_CACHE["v"] = (time.monotonic(), data)
+    return JSONResponse(data)
+
+
 @app.get("/api/inventario")
 def api_inventory(user: str = Depends(current_user)):
     with session_scope() as s:

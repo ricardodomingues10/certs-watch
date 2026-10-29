@@ -231,6 +231,8 @@ class Settings:
     # Interface web
     admin_user: str = "admin"
     admin_password: str | None = None
+    # Token para GET /api/status (contrato soc-status/1, lido pelo Portal SOC). Vazio = desligado.
+    status_token: str | None = None
     cookie_secure: bool = False
     public_url: str = ""                           # endereço da aplicação nos links dos convites (ex.: https://atalaia.exemplo.pt)
     invite_hours: int = 72                         # validade do link de convite ou de nova palavra-passe
@@ -389,6 +391,7 @@ class Settings:
             timezone=_env("CERTWATCH_TIMEZONE", "Europe/Lisbon"),
             admin_user=_env("CERTWATCH_ADMIN_USER", "admin"),
             admin_password=_secret("admin_password", "CERTWATCH_ADMIN_PASSWORD", required=True),
+            status_token=_secret("status_token", "CERTWATCH_STATUS_TOKEN"),
             cookie_secure=_env("CERTWATCH_COOKIE_SECURE", "false").lower() == "true",
             public_url=_env("CERTWATCH_PUBLIC_URL", "").rstrip("/"),
             invite_hours=max(1, int(_env("CERTWATCH_INVITE_HOURS", "72"))),
