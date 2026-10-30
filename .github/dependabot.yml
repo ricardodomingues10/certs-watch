@@ -1,0 +1,14 @@
+# Atualizações automáticas das dependências (pull requests semanais).
+version: 2
+updates:
+  - package-ecosystem: pip
+    directory: "/"
+    schedule: {interval: weekly, day: monday, time: "06:00", timezone: Europe/Lisbon}
+    groups:
+      python: {patterns: ["*"], update-types: [minor, patch]}
+  - package-ecosystem: docker
+    directory: "/"
+    schedule: {interval: weekly, day: monday, time: "06:00", timezone: Europe/Lisbon}
+  - package-ecosystem: docker-compose
+    directory: "/"
+    schedule: {interval: weekly, day: monday, time: "06:00", timezone: Europe/Lisbon}
