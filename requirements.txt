@@ -11,4 +11,4 @@ tzdata
 # Conectores de CMDB por base de dados (Sistema → Ligações). PostgreSQL já vem com o psycopg acima.
 pymysql>=1.1,<2
 oracledb>=2,<4
-pymssql>=2.3,<3
+pymssql>=2.4.5,<3
