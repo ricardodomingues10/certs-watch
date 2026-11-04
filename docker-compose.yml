@@ -8,11 +8,11 @@ name: certwatch
 
 x-app: &app
   build: .
-  image: certwatch:0.30.0
+  image: certwatch:0.32.0
   network_mode: host
   restart: unless-stopped
   env_file: .env
-  secrets: [db_password, ucmdb_user, ucmdb_password, admin_password, smax_user, smax_password, smtp_password, avi_user, avi_password]
+  secrets: [db_password, ucmdb_user, ucmdb_password, admin_password, smax_user, smax_password, smtp_password, avi_user, avi_password, azure_client_secret]
   volumes:
     - ./trust:/app/trust:ro
     - ./import:/app/import:ro
@@ -83,6 +83,10 @@ secrets:
     file: ./secrets/avi_user
   avi_password:
     file: ./secrets/avi_password
+  # Azure pelo Microsoft Graph (opcional): client secret da App Registration do Atalaia; se não for usado, criar o
+  # ficheiro vazio (touch secrets/azure_client_secret)
+  azure_client_secret:
+    file: ./secrets/azure_client_secret
 
 volumes:
   pgdata:

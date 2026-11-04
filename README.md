@@ -44,6 +44,7 @@ openssl rand -base64 32 | tr -d '\n' > secrets/db_password
 printf '%s' 'conta-servico-ucmdb'      > secrets/ucmdb_user
 printf '%s' 'PASSWORD_DA_CONTA'        > secrets/ucmdb_password
 touch secrets/smax_user secrets/smax_password                   # preencher só se usar o SMAX (secção 7)
+touch secrets/smtp_password secrets/avi_user secrets/avi_password secrets/azure_client_secret   # opcionais (7.4, 5.10, 5.11)
 openssl rand -base64 18 | tr -d '\n' > secrets/admin_password   # login da interface (utilizador: admin)
 S='secrets/db_password secrets/ucmdb_user secrets/ucmdb_password secrets/admin_password secrets/smax_user secrets/smax_password'
 sudo chown 10001:10001 $S && sudo chmod 400 $S     # o contentor corre como UID 10001
@@ -355,6 +356,30 @@ Em vez do ficheiro exportado pelo script, o certwatch pode ler os certificados d
 **Diagnosticar a ligação** (na mesma página) testa passo a passo, sem proxy: DNS, ligação TCP à porta, TLS (com a verificação do certificado do controlador), login e uma leitura, e para no primeiro que falha com o que fazer (por exemplo, o IP e a porta a pedir na firewall). A ligação ao AVI nunca usa o `HTTPS_PROXY` do `.env`: o controlador é interno.
 
 O ficheiro em `import/` e o script não são tocados: até mudar `CERTWATCH_AVI_SOURCE`, a reconciliação usa o ficheiro como hoje. A leitura pela API pede só o nome e o certificado (`fields=name,certificate,type`) e descarta tudo o resto em memória, incluindo a chave privada. Cada teste, exportação e uso fica na auditoria (`avi.testar`, `avi.exportar`, `avi.usar`).
+
+### 5.11 Azure pela API (Microsoft Graph)
+
+Em vez da exportação das App Registrations, o Atalaia pode ler os segredos e certificados diretamente no Microsoft Graph (só leitura). Produz um CSV com as mesmas colunas da exportação (EnterpriseApplication, AppRegistration, AppId, CredentialType, KeyId, StartDate, EndDate, Status), lido pelo mesmo leitor.
+
+**No Entra ID** (feito por um administrador):
+1. **App registrations → New registration.** Nome «Atalaia Cert», «Accounts in this organizational directory only», sem Redirect URI.
+2. **API permissions → Add a permission → Microsoft Graph → Application permissions → Application.Read.All → Add.** Depois **Grant admin consent**. Tem de ser uma permissão de *aplicação*, não *delegada*. Não é preciso mais nenhuma: esta lê as App Registrations e as Enterprise Applications, e não deixa alterar nada.
+3. **Certificates & secrets → New client secret.** Dar uma validade curta (por exemplo 6 meses) e copiar o **Value** logo, porque só aparece nesse momento. O «Secret ID» não serve.
+4. Na **Overview** copiar o **Directory (tenant) ID** e o **Application (client) ID**.
+
+**No servidor:**
+1. Guardar o segredo sem o deixar no histórico da shell: `read -rsp 'Client secret: ' S && printf '%s' "$S" > secrets/azure_client_secret && unset S`, depois `sudo chown 10001:10001 secrets/azure_client_secret && sudo chmod 400 secrets/azure_client_secret`.
+2. No `.env`: `CERTWATCH_AZURE_TENANT_ID=<tenant>`, `CERTWATCH_AZURE_CLIENT_ID=<client>`. O Graph está na internet: se o servidor só sair por proxy, `HTTPS_PROXY` também tem de estar definido. Se o proxy inspecionar o TLS, a CA do proxy vai para `trust/`. É preciso deixar passar `login.microsoftonline.com` e `graph.microsoft.com` (porta 443).
+3. `docker compose up -d`.
+4. **CMDB → Atualizar a CMDB → Azure → Ler pela API do Azure → Diagnosticar a ligação.** Mostra se sai direto ou pelo proxy, se obtém o token e se tem a permissão. Os erros AADSTS mais comuns aparecem com o que fazer (segredo errado ou expirado, tenant ou aplicação errados, Acesso Condicional).
+5. **Testar e comparar com o ficheiro** compara cada credencial com a exportação atual, pelo KeyId (ou, se a exportação não o tiver, pela App Registration, tipo e data de fim): iguais, com diferenças, só no ficheiro, só na API. Mostra também quando expira o segredo da própria aplicação do Atalaia.
+6. Quando a comparação estiver certa: **Usar a API do Azure na próxima reconciliação** (só uma vez), ou `CERTWATCH_AZURE_SOURCE=auto` (sempre pela API; se falhar, usa o ficheiro e diz porquê em Erros nas fontes) ou `api` (se falhar, a reconciliação para).
+
+**Segurança.**
+- Só faz GET, e só pede as datas e o KeyId de cada credencial. O «hint» dos segredos e o conteúdo dos certificados são descartados, e o Graph nunca devolve o valor de um segredo.
+- O token só é enviado para o endereço do Graph: uma página seguinte que aponte para outro sítio é recusada.
+- O client secret só existe no ficheiro de segredo. Cada teste, exportação e uso fica na auditoria (`azure.testar`, `azure.exportar`, `azure.usar`).
+- O próprio segredo do Atalaia expira: antes disso cria-se outro, substitui-se o ficheiro e faz-se `docker compose up -d`.
 
 ### 5.9 Histórico de alterações na CMDB
 

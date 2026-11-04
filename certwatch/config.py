@@ -218,6 +218,13 @@ class Settings:
     dash_expiry_days: int = 20          # painel: "expiram sem pedido" nos próximos N dias
     dash_stale_days: int = 10           # painel: pedido aberto sem movimento há N dias = parado
     avi_source: str = "ficheiro"        # ficheiro | api | auto (API, e o ficheiro se a API falhar)
+    # Azure (Microsoft Graph) pela API: App Registration própria, Application.Read.All, client secret em ficheiro
+    azure_tenant_id: str = ""
+    azure_client_id: str = ""
+    azure_client_secret: str | None = None
+    azure_source: str = "ficheiro"      # ficheiro | api | auto (API, e o ficheiro se a API falhar)
+    azure_login_url: str = "https://login.microsoftonline.com"
+    azure_graph_url: str = "https://graph.microsoft.com"
     expiry_thresholds: dict[str, int] = field(default_factory=dict)
     lifetime_warn_pct: float = 0.2
     # Renovação automática (ACME / Let's Encrypt): emissores reconhecidos e prazo a partir do qual se alerta
@@ -362,6 +369,12 @@ class Settings:
             avi_version=_env("CERTWATCH_AVI_VERSION", ""),
             avi_page_size=int(_env("CERTWATCH_AVI_PAGE_SIZE", "100")),
             avi_source=(_env("CERTWATCH_AVI_SOURCE", "ficheiro") or "ficheiro").lower(),
+            azure_tenant_id=_env("CERTWATCH_AZURE_TENANT_ID", ""),
+            azure_client_id=_env("CERTWATCH_AZURE_CLIENT_ID", ""),
+            azure_client_secret=_secret("azure_client_secret", "CERTWATCH_AZURE_CLIENT_SECRET"),
+            azure_source=(_env("CERTWATCH_AZURE_SOURCE", "ficheiro") or "ficheiro").lower(),
+            azure_login_url=(_env("CERTWATCH_AZURE_LOGIN_URL", "https://login.microsoftonline.com") or "").rstrip("/"),
+            azure_graph_url=(_env("CERTWATCH_AZURE_GRAPH_URL", "https://graph.microsoft.com") or "").rstrip("/"),
             ui_palette=(_env("CERTWATCH_UI_PALETTE", "consola") or "consola").lower(),
             client_name=_env("CERTWATCH_CLIENT_NAME", ""),
             branding_dir=Path(_env("CERTWATCH_BRANDING_DIR", "/app/branding")),

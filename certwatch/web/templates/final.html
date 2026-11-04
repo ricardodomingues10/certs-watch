@@ -133,7 +133,7 @@
         <a class="button" href="/pedidos">Abrir Pedidos {{ TK }}</a>
       {% else %}
         {% if x.id == 'AVI' %}<p>{% if x.kind == 'api' %}Pela REST API do controlador ({{ x.mode }}).{% else %}Por ficheiro; também pode ser lido pela API do controlador.{% endif %} <a href="/cmdb-final/avi">Ler pela API do AVI</a></p>
-        {% elif x.id == AZURE %}<p>Por ficheiro: a exportação das App Registrations.{% if apis_at %} Lista de APIs da CMDB lida {{ apis_at|ago }}.{% endif %}</p>
+        {% elif x.id == AZURE %}<p>{% if x.kind == 'api' %}Pelo Microsoft Graph ({{ x.mode }}).{% else %}Por ficheiro: a exportação das App Registrations; também pode ser lida pelo Microsoft Graph.{% endif %}{% if apis_at %} Lista de APIs da CMDB lida {{ apis_at|ago }}.{% endif %} <a href="/cmdb-final/azure">Ler pela API do Azure</a></p>
         {% else %}<p>Por ficheiro: o mais recente da diretoria <span class="mono">import/</span>, ou o carregado aqui se for mais recente.</p>{% endif %}
         {{ file_rows(x) }}
       {% endif %}
@@ -165,7 +165,7 @@
         <a class="rc-way" href="/cmdb-final?fonte={{ x.id }}#fontes"><b>{{ x.name }}</b><span class="rc-mode k-{{ x.kind }}">{{ x.mode }}</span><span class="small muted">{{ x.fresh }}</span></a>
         {% endfor %}
       </div>
-      <p class="small"><a href="/cmdb-final/avi">Ler pela API do AVI</a> · <a href="/cmdb-final/permissoes">Ligação à UCMDB</a></p>
+      <p class="small"><a href="/cmdb-final/avi">Ler pela API do AVI</a> · <a href="/cmdb-final/azure">Ler pela API do Azure</a> · <a href="/cmdb-final/permissoes">Ligação à UCMDB</a></p>
       {% if dir_files %}
       <details class="small"><summary>Ficheiros na diretoria import/ ({{ dir_files|length }}) e o que acontece a cada um</summary>
         <table class="compact mt"><thead><tr><th>Ficheiro</th><th class="num">Tamanho</th><th>Uso</th></tr></thead>

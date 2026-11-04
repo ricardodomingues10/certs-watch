@@ -1,0 +1,88 @@
+{% extends "base.html" %}
+{% block title %}Azure pela API{% endblock %}
+{% block crumb %}CMDB · <a href="/cmdb-final">Atualizar a CMDB</a>{% endblock %}
+{% block page_title %}Azure pela API{% endblock %}
+{% block lede %}Lê os segredos e certificados das App Registrations diretamente no Microsoft Graph (só leitura), no mesmo formato da exportação, e compara com a exportação que a reconciliação usa hoje. Testar não muda nada: o ficheiro continua a ser a fonte até escolher usar a API.{% endblock %}
+{% block content %}
+{% if erro %}<div class="note bad">{{ erro }}</div>{% endif %}
+
+<section class="card">
+  <h2>Ligação</h2>
+  <table class="compact">
+    <tr><th>Tenant</th><td class="mono small">{{ settings.azure_tenant_id or '(não definido: CERTWATCH_AZURE_TENANT_ID)' }}</td></tr>
+    <tr><th>Aplicação do Atalaia</th><td class="mono small">{{ settings.azure_client_id or '(não definido: CERTWATCH_AZURE_CLIENT_ID)' }}</td></tr>
+    <tr><th>Client secret</th><td class="small">{% if settings.azure_client_secret %}definido no ficheiro de segredo{% else %}<span class="tag tag-err">em falta</span> secrets/azure_client_secret{% endif %}</td></tr>
+    <tr><th>Permissão</th><td class="small">Microsoft Graph, permissão de aplicação <b>Application.Read.All</b>, com consentimento de administrador</td></tr>
+    <tr><th>Saída</th><td class="small">{{ 'pelo proxy ' ~ proxy if proxy else 'direta (sem HTTPS_PROXY)' }} · verificação TLS ligada (CAs públicas e pasta trust/)</td></tr>
+    <tr><th>Fonte Azure na reconciliação</th><td class="small">{{ {'ficheiro': 'a exportação (import/ ou carregada)', 'api': 'a API; se falhar, a reconciliação para', 'auto': 'a API; se falhar, o ficheiro'}.get(settings.azure_source, settings.azure_source) }} <span class="muted">(CERTWATCH_AZURE_SOURCE={{ settings.azure_source }})</span></td></tr>
+  </table>
+  {% if problem %}<p class="small mt"><span class="tag tag-run">por configurar</span> {{ problem }}</p>{% endif %}
+  <div class="inline mt">
+    <form method="post" action="/cmdb-final/azure/testar"><input type="hidden" name="csrf" value="{{ csrf }}">
+      <button class="primary" {{ 'disabled' if problem }}>Testar e comparar com o ficheiro</button></form>
+    <form method="post" action="/cmdb-final/azure/diagnosticar"><input type="hidden" name="csrf" value="{{ csrf }}">
+      <button>Diagnosticar a ligação</button></form>
+    {% if not problem %}<a class="button" href="/cmdb-final/azure/csv">Descarregar CSV</a>{% endif %}
+  </div>
+</section>
+
+{% if diag %}
+<section class="card">
+  <h2>Diagnóstico da ligação</h2>
+  <p class="small muted">Do servidor do Atalaia Cert até ao Microsoft Graph. Para no primeiro passo que falha.</p>
+  <table class="compact"><thead><tr><th>Passo</th><th>Resultado</th><th>O que fazer</th></tr></thead>
+  {% for x in diag %}<tr><td><b>{{ x.passo }}</b></td>
+    <td class="small"><span class="tag {{ 'tag-ok' if x.ok else 'tag-err' }}">{{ 'ok' if x.ok else 'falhou' }}</span> {{ x.detalhe }}</td>
+    <td class="small">{{ x.fazer or '—' }}</td></tr>{% endfor %}
+  </table>
+</section>
+{% endif %}
+
+{% if res %}
+<section class="card">
+  <h2>Resultado da leitura</h2>
+  <p><b>{{ res.rows|length }}</b> segredos e certificados de <b>{{ res.apps }}</b> App Registrations ({{ res.sem_credenciais }} sem nenhum), em {{ res.segundos }} s ({{ res.pedidos }} pedidos ao Graph).</p>
+  {% for a in res.avisos %}<p class="small"><span class="tag tag-run">aviso</span> {{ a }}</p>{% endfor %}
+  {% for r in proprio %}
+  <p class="small"><span class="tag {{ 'tag-err' if r.dias is not none and r.dias <= 30 else 'tag-acc' }}">segredo do Atalaia</span>
+    O {{ 'certificado' if r.CredentialType == 'Certificate' else 'client secret' }} da própria aplicação do Atalaia expira a {{ r.EndDate[:10] }}{% if r.dias is not none %} ({{ r.dias|ndias }}){% endif %}. Antes disso: criar um novo, pô-lo em secrets/azure_client_secret e reiniciar.</p>
+  {% endfor %}
+  {% if cmp %}
+  <p class="small">Comparado com o ficheiro {{ ficheiro }}, {{ 'pelo KeyId de cada credencial' if cmp.por_keyid else 'pela App Registration, tipo e data de fim (o ficheiro não tem KeyId)' }}:</p>
+  <table class="compact">
+    <tr><th>Iguais</th><td class="num"><b>{{ cmp.iguais }}</b></td></tr>
+    <tr><th>Com diferenças</th><td class="num">{{ cmp.diferentes|length }}</td></tr>
+    <tr><th>Só no ficheiro</th><td class="num">{{ cmp.so_ficheiro|length }}</td></tr>
+    <tr><th>Só na API</th><td class="num">{{ cmp.so_api|length }}</td></tr>
+  </table>
+  {% if not cmp.diferentes and not cmp.so_ficheiro and not cmp.so_api %}
+  <p class="small mt"><span class="tag tag-ok">iguais</span> O Graph dá exatamente as mesmas credenciais da exportação: pode passar a usá-lo.</p>
+  {% else %}
+  <p class="small mt muted">Diferenças são esperadas se a exportação for de outro dia (segredos criados ou apagados entretanto) ou se o script filtrava aplicações.</p>
+  {% endif %}
+  {% elif ficheiro %}<p class="small muted">Sem comparação: {{ ficheiro }}</p>
+  {% else %}<p class="small muted">Sem exportação do Azure para comparar (nem em import/ nem carregada).</p>{% endif %}
+  <form method="post" action="/cmdb-final/azure/usar" class="mt"><input type="hidden" name="csrf" value="{{ csrf }}">
+    <button data-confirm="Ler o Azure pela API e usar essa leitura como fonte Azure da próxima reconciliação? O ficheiro em import/ não é apagado.">Usar a API do Azure na próxima reconciliação</button>
+    <span class="small muted">Guarda a leitura como a exportação do Azure (só desta vez). Para ser sempre pela API: CERTWATCH_AZURE_SOURCE=auto.</span>
+  </form>
+</section>
+
+{% if cmp and cmp.diferentes %}
+<section class="card flush scroll">
+  <h2>Com diferenças ({{ cmp.diferentes|length }})</h2>
+  <table class="compact"><thead><tr><th>App Registration</th><th>Tipo</th><th>KeyId</th><th>Diferenças</th></tr></thead>
+  {% for d in cmp.diferentes[:300] %}<tr><td class="small">{{ d.nome }}</td><td class="small">{{ d.tipo }}</td><td class="mono small">{{ d.key_id }}</td><td class="small">{{ d.diferencas|join('; ') }}</td></tr>{% endfor %}
+  </table>
+</section>
+{% endif %}
+{% for titulo, lista in [('Só no ficheiro', cmp.so_ficheiro if cmp else []), ('Só na API', cmp.so_api if cmp else [])] %}{% if lista %}
+<section class="card flush scroll">
+  <h2>{{ titulo }} ({{ lista|length }})</h2>
+  <table class="compact"><thead><tr><th>App Registration</th><th>Enterprise Application</th><th>Tipo</th><th>KeyId</th><th>Fim</th></tr></thead>
+  {% for r in lista[:300] %}<tr><td class="small">{{ r.nome }}</td><td class="small">{{ r.app }}</td><td class="small">{{ r.tipo }}</td><td class="mono small">{{ r.key_id }}</td><td class="small nowrap">{{ r.fim }}</td></tr>{% endfor %}
+  </table>
+</section>
+{% endif %}{% endfor %}
+{% endif %}
+{% endblock %}

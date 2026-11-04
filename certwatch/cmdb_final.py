@@ -1446,6 +1446,59 @@ def store_avi_api(session: Session, settings: Settings, today: date, client=None
                 "pedidos": res.pedidos, "segundos": res.segundos}
 
 
+AZURE_API_ACTOR = "API do Azure"
+
+
+def store_azure_api(session: Session, settings: Settings, today: date, client=None) -> tuple[FinalInput, dict]:
+    """Lê as App Registrations pelo Microsoft Graph e guarda-as como a exportação do Azure (o mesmo formato).
+    O ficheiro da diretoria import/ não é tocado."""
+    from .fontes import azure as az
+    res = az.fetch(settings, client)
+    if not res.rows:
+        raise az.AzureError("O Graph não devolveu nenhum segredo nem certificado.")
+    data = az.to_csv(res.rows)
+    name = f"azure-api-{datetime.now(ZoneInfo(settings.timezone)):%Y%m%d-%H%M}.csv"
+    from .azure_rec import read_azure
+    items, info = read_azure(data, name, today)              # o mesmo leitor do ficheiro
+    up = FinalInput(source=AZURE_SOURCE, name=name, sha256=hashlib.sha256(data).hexdigest(), size=len(data), data=data,
+                    uploaded_by=AZURE_API_ACTOR)
+    session.add(up)
+    session.flush()
+    return up, {"credenciais": len(res.rows), "aplicacoes": res.apps, "validas": info.get("validas", len(items)),
+                "pedidos": res.pedidos, "segundos": res.segundos}
+
+
+def azure_compare(file_name: str, file_data: bytes, api_csv: bytes, today: date) -> dict:
+    """Compara a exportação do Azure com a leitura pelo Graph, credencial a credencial (App Registration + KeyId;
+    sem KeyId no ficheiro, App Registration + tipo + data de fim)."""
+    from .azure_rec import read_azure
+    f_rows, _ = read_azure(file_data, file_name, today)
+    a_rows, _ = read_azure(api_csv, "api.csv", today)
+    has_key = any(r["key_id"] for r in f_rows)
+
+    def key(r):
+        base = (r["nome"].lower(),)
+        return base + ((r["key_id"].lower(),) if has_key else (r["tipo_credencial"].lower(), r["fim"].isoformat()))
+
+    f = {key(r): r for r in f_rows}
+    a = {key(r): r for r in a_rows}
+    view = lambda r: {"nome": r["nome"], "app": r["app"], "tipo": r["tipo_credencial"], "key_id": r["key_id"],  # noqa: E731
+                      "fim": r["fim"].strftime("%d-%m-%Y")}
+    diffs = []
+    for k in sorted(set(f) & set(a)):
+        x, y = f[k], a[k]
+        what = []
+        if abs((x["fim"] - y["fim"]).days) > 1:
+            what.append(f"fim: ficheiro {x['fim']:%d-%m-%Y}, API {y['fim']:%d-%m-%Y}")
+        if x["tipo_credencial"].lower()[:4] != y["tipo_credencial"].lower()[:4]:
+            what.append(f"tipo: ficheiro {x['tipo_credencial']}, API {y['tipo_credencial']}")
+        if what:
+            diffs.append({**view(y), "diferencas": what})
+    return {"ficheiro": len(f), "api": len(a), "iguais": len(set(f) & set(a)) - len(diffs), "por_keyid": has_key,
+            "diferentes": diffs, "so_ficheiro": [view(f[k]) for k in sorted(set(f) - set(a))],
+            "so_api": [view(a[k]) for k in sorted(set(a) - set(f))]}
+
+
 def _rows_by_name(headers: list[str], rows: list[list]) -> dict[str, dict]:
     idx = {norm_header(h): i for i, h in enumerate(headers)}
     get = lambda r, k: (str(r[idx[k]]).strip() if k in idx and idx[k] < len(r) and r[idx[k]] is not None else "")
@@ -1520,7 +1573,18 @@ def generate(run_id: int, settings: Settings, fetch: Callable | None = None,
                     if settings.avi_source == "api":
                         raise FinalError(f"AVI pela API: {exc}") from None
                     avi_note = f"AVI pela API falhou ({exc}); foi usado o ficheiro."
+            az_note = ""
+            if use(AZURE_SOURCE) and settings.azure_source in ("api", "auto") and settings.azure_tenant_id:
+                from .fontes.azure import AzureError
+                try:
+                    store_azure_api(s, settings, today)
+                except AzureError as exc:
+                    if settings.azure_source == "api":
+                        raise FinalError(f"Azure pela API: {exc}") from None
+                    az_note = f"Azure pela API falhou ({exc}); foi usado o ficheiro."
             inputs = current_inputs(s, settings)
+            if az_note and (inputs.get(AZURE_SOURCE) or {}).get("por") == AZURE_API_ACTOR:
+                az_note = az_note.replace("foi usado o ficheiro", f"foi usada a leitura anterior ({inputs[AZURE_SOURCE]['nome']})")
             files = [src for src in settings.final_sources if use(src)]
             missing = [src for src in files if src not in inputs]
             if scope is not None and AZURE_SOURCE in scope and AZURE_SOURCE not in inputs:
@@ -1557,13 +1621,16 @@ def generate(run_id: int, settings: Settings, fetch: Callable | None = None,
                 try:
                     res.extra["azure"], ainfo = azure_view(s, table, az_info["nome"], az_data, today)
                     src_info[AZURE_SOURCE] = {**{k: v for k, v in ainfo.items() if k != "problemas"},
-                                              "origem": az_info["origem"], "quando": az_info["quando"].isoformat(),
+                                              "origem": "api" if az_info.get("por") == AZURE_API_ACTOR else az_info["origem"],
+                                              "quando": az_info["quando"].isoformat(),
                                               "sha256": hashlib.sha256(az_data).hexdigest()}
                     res.problems.extend(ainfo["problemas"])
                 except ValueError as exc:
                     res.problems.append({"fonte": AZURE_SOURCE, "cn": "", "erro": f"Ficheiro do Azure ignorado: {exc}"})
             if avi_note:
                 res.problems.append({"fonte": AVI, "cn": "", "erro": avi_note})
+            if az_note:
+                res.problems.append({"fonte": AZURE_SOURCE, "cn": "", "erro": az_note})
             decisions = {d.key: d for d in s.scalars(select(FinalDecision))}
             for c in res.changes:
                 c["incluir"], c["porque"] = default_include(c, decisions)

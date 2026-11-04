@@ -198,7 +198,7 @@ NAV_GROUPS = [
     ("sistema", "Sistema", [("/jobs", "Execuções e auditoria", None), ("/ligacoes", "Ligações", None),
                             ("/fontes", "Fontes e chamadas", None),
                             ("/cmdb-final/permissoes", "Ligação à UCMDB", None),
-                            ("/cmdb-final/avi", "AVI pela API", None), ("/utilizadores", "Utilizadores", "pedidos_acesso"),
+                            ("/cmdb-final/avi", "AVI pela API", None), ("/cmdb-final/azure", "Azure pela API", None), ("/utilizadores", "Utilizadores", "pedidos_acesso"),
                             ("/testes/como-funciona", "Como funciona", None)]),
 ]
 _NAV_ALIASES = {"/cert/": "/certificados", "/reconciliacao": "/cmdb-final"}
@@ -2648,9 +2648,10 @@ def recon_sources(settings, inputs: dict, files: dict, runs: list, ct, renewals:
             has = bool(renewals)
             fresh = f"{renewals} registada{'s' if renewals != 1 else ''} nos pedidos" if renewals else "nenhuma por refletir"
         else:
-            api = src == cf.AVI and settings.avi_source != "ficheiro"
+            how = settings.avi_source if src == cf.AVI else settings.azure_source if src == cf.AZURE_SOURCE else "ficheiro"
+            api = how != "ficheiro"
             kind = "api" if api else "file"
-            mode = ({"api": "API", "auto": "API, ficheiro se falhar"}.get(settings.avi_source, "API") if api else "ficheiro")
+            mode = ({"api": "API", "auto": "API, ficheiro se falhar"}.get(how, "API") if api else "ficheiro")
             has = i is not None
             if i:
                 where = f"import/{i['nome']}" if i["origem"] == "diretoria" else i["nome"]
@@ -2846,6 +2847,110 @@ def avi_csv(tipo: str = "vs", user: str = Depends(current_user)):
     name = f"avi-{'ca' if tipo == 'ca' else 'certificados'}-api.csv"
     return Response(data, media_type="text/csv; charset=utf-8",
                     headers={"Content-Disposition": f'attachment; filename="{name}"'})
+
+
+AZURE_CLIENT = None     # testes: cliente httpx para o Graph
+
+
+def _azure_file(s, settings):
+    """A exportação do Azure que a reconciliação usa sem a API: a da diretoria import/ ou a última carregada à mão."""
+    f = cf.source_files(s, settings).get(cf.AZURE_SOURCE) or {}
+    up = s.scalar(select(FinalInput).where(FinalInput.source == cf.AZURE_SOURCE, FinalInput.uploaded_by != cf.AZURE_API_ACTOR)
+                  .order_by(FinalInput.id.desc()).limit(1))
+    d = f.get("diretoria")
+    if up is not None and (d is None or as_utc(up.uploaded_at) >= d["quando"]):
+        return up.name, up.data, f"carregado por {up.uploaded_by}, {fmt_dt(up.uploaded_at, True)}"
+    if d is not None:
+        return d["nome"], Path(d["path"]).read_bytes(), f"import/{d['nome']}, {fmt_dt(d['quando'], True)}"
+    return None, None, ""
+
+
+def _azure_render(request, user, **kw):
+    from ..fontes import azure as az
+    settings = get_settings()
+    return render(request, "azure.html", user, settings=settings, problem=az.configured(settings), proxy=az._proxy_host(),
+                  **{"res": None, "cmp": None, "erro": "", "ficheiro": "", "diag": None, "proprio": [], **kw})
+
+
+@app.get("/cmdb-final/azure")
+def azure_page(request: Request, user: str = Depends(current_user)):
+    return _azure_render(request, user)
+
+
+@app.post("/cmdb-final/azure/testar")
+def azure_test(request: Request, csrf: str = Form(""), user: str = Depends(current_user)):
+    """Lê as App Registrations pelo Graph (só leitura) e compara com a exportação atual. Não muda a fonte."""
+    from ..fontes import azure as az
+    check_csrf(request, csrf)
+    settings = get_settings()
+    now = utcnow()
+    try:
+        res = az.fetch(settings, AZURE_CLIENT, now)
+    except az.AzureError as exc:
+        with session_scope() as s:
+            audit(s, user, "azure.testar", settings.azure_tenant_id, resultado="erro", erro=str(exc)[:300])
+        return _azure_render(request, user, erro=str(exc))
+    today = now.astimezone(_tz()).date()
+    cmp, ficheiro = None, ""
+    with session_scope() as s:
+        try:
+            name, data, ficheiro = _azure_file(s, settings)
+        except OSError as exc:
+            name, data, ficheiro = None, None, f"não foi possível ler o ficheiro: {exc}"
+        if data is not None:
+            try:
+                cmp = cf.azure_compare(name, data, az.to_csv(res.rows), today)
+            except Exception as exc:  # exportação ilegível: a leitura pela API continua a ser mostrada
+                ficheiro += f" (não comparado: {exc})"
+        audit(s, user, "azure.testar", settings.azure_tenant_id, resultado="ok", aplicacoes=res.apps,
+              credenciais=len(res.rows), pedidos=res.pedidos)
+    proprio = []
+    for r in res.proprio:
+        d = cf.parse_day(r["EndDate"]).day
+        proprio.append({**r, "dias": (d - today).days if d else None})
+    return _azure_render(request, user, res=res, cmp=cmp, ficheiro=ficheiro, proprio=proprio)
+
+
+@app.post("/cmdb-final/azure/diagnosticar")
+def azure_diagnose(request: Request, csrf: str = Form(""), user: str = Depends(current_user)):
+    """Configuração, saída para a internet, token e leitura: diz em que passo a ligação ao Graph para."""
+    from ..fontes import azure as az
+    check_csrf(request, csrf)
+    settings = get_settings()
+    steps = az.diagnose(settings, AZURE_CLIENT)
+    with session_scope() as s:
+        audit(s, user, "azure.diagnosticar", settings.azure_tenant_id, passos={x["passo"]: x["ok"] for x in steps})
+    return _azure_render(request, user, diag=steps)
+
+
+@app.post("/cmdb-final/azure/usar")
+def azure_use(request: Request, csrf: str = Form(""), user: str = Depends(current_user)):
+    """Lê pelo Graph e guarda a leitura como a exportação do Azure da próxima reconciliação (o ficheiro fica onde está)."""
+    from ..fontes import azure as az
+    check_csrf(request, csrf)
+    settings = get_settings()
+    try:
+        with session_scope() as s:
+            up, info = cf.store_azure_api(s, settings, utcnow().astimezone(_tz()).date(), AZURE_CLIENT)
+            audit(s, user, "azure.usar", up.name, **info)
+    except (az.AzureError, cf.FinalError) as exc:
+        return _azure_render(request, user, erro=str(exc))
+    return RedirectResponse(f"/cmdb-final?fonte={cf.AZURE_SOURCE}#fontes", status_code=303)
+
+
+@app.get("/cmdb-final/azure/csv")
+def azure_csv(user: str = Depends(current_user)):
+    """A exportação no formato do ficheiro, lida agora pelo Graph."""
+    from ..fontes import azure as az
+    settings = get_settings()
+    try:
+        res = az.fetch(settings, AZURE_CLIENT)
+    except az.AzureError as exc:
+        raise HTTPException(502, str(exc))
+    with session_scope() as s:
+        audit(s, user, "azure.exportar", settings.azure_tenant_id, credenciais=len(res.rows))
+    return Response(az.to_csv(res.rows), media_type="text/csv; charset=utf-8",
+                    headers={"Content-Disposition": 'attachment; filename="azure-app-registrations-api.csv"'})
 
 
 @app.post("/cmdb-final/fonte/{source}/diretoria")
