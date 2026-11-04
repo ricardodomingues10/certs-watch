@@ -18,7 +18,7 @@ from fastapi import Depends, FastAPI, File, Form, HTTPException, Request, Upload
 from fastapi.responses import JSONResponse, RedirectResponse, Response
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
-from sqlalchemy import func, select
+from sqlalchemy import func, or_, select
 
 from .. import __version__
 from ..checks import CHECK_BY_ID, CHECKS, LAYERS, STATUS_LABELS, evaluate_endpoint
@@ -51,7 +51,7 @@ from ..normalize import norm_label, split_api_name, is_ip, is_valid_hostname, no
 from .security import (SESSION_COOKIE, PermissionDenied, check_csrf, check_login, clear_failures, current_user, forget_logins, note_failure,
                        require_admin, security_middleware, too_many)
 from .. import users as us
-from ..models import CertOwner, Team, TicketRule, User, UserPref
+from ..models import CertOwner, CmdbChange, DomainChange, DomainRecord, SiteCheck, Team, TicketRule, User, UserPref
 from .. import owners as ow
 
 BASE = Path(__file__).parent
@@ -60,15 +60,18 @@ JOB_LABELS = {"pipeline": "Executar tudo", "ingest_cmdb": "Importar certificados
               "ingest_apis": "Importar lista de APIs",
               "ingest_smax": "Ler pedidos do SMAX",
               "ingest_ct": "Procurar na internet (CT)", "scan": "Verificar servidores",
-              "ssllabs": "Avaliação externa (SSL Labs)", "evaluate": "Reavaliar regras"}
-JOB_HELP = {"pipeline": "Faz todos os passos pela ordem: CMDB, APIs, SMAX, internet, servidores, SSL Labs e regras.",
+              "ssllabs": "Avaliação externa (SSL Labs)", "evaluate": "Reavaliar regras",
+              "sites": "Verificar os sites públicos", "dominios": "Ler o registo dos domínios (RDAP)"}
+JOB_HELP = {"pipeline": "Faz todos os passos pela ordem: CMDB, APIs, SMAX, internet, servidores, SSL Labs, regras, sites públicos e domínios.",
             "ingest_cmdb": "Lê os certificados da UCMDB (nome, validade e emissor).",
             "ingest_apis": "Lê a lista de APIs da UCMDB.",
             "ingest_smax": "Lê os pedidos (changes) de certificados do SMAX, só leitura.",
             "ingest_ct": "Consulta crt.sh, Cert Spotter e ctlogs.dev para os domínios configurados.",
             "scan": "Liga-se a cada servidor e recolhe o certificado e a cadeia.",
             "ssllabs": "Pede ao Qualys SSL Labs a nota dos nomes externos (demora 1 a 2 minutos por nome).",
-            "evaluate": "Volta a aplicar as regras e atualiza os alertas, sem novas ligações."}
+            "evaluate": "Volta a aplicar as regras e atualiza os alertas, sem novas ligações.",
+            "sites": "Liga-se a cada IP de cada nome externo, visto de dentro e de fora, e compara com a CMDB e os pedidos.",
+            "dominios": "Lê no RDAP a validade do registo, o registrar, os nameservers e os estados de cada domínio."}
 
 
 @asynccontextmanager
@@ -136,6 +139,19 @@ def fmt_ago(value) -> str:
 
 
 templates.env.filters["ago"] = fmt_ago
+def fmt_hist(v) -> str:
+    """Valor de um atributo no histórico: datas ISO ou epoch (ms) como data de Lisboa; o resto como está."""
+    t = str(v or "").strip()
+    if re.fullmatch(r"\d{4}-\d{2}-\d{2}([T ][\d:.]+(Z|[+-]\d{2}:?\d{2})?)?", t) or re.fullmatch(r"\d{12,14}", t):
+        try:
+            d = datetime.fromtimestamp(int(t) / 1000, tz=timezone.utc) if t.isdigit() else datetime.fromisoformat(t.replace("Z", "+00:00"))
+            return fmt_dt(d if d.tzinfo else d.replace(tzinfo=timezone.utc), "T" in t or " " in t or t.isdigit())
+        except (ValueError, OverflowError):
+            return t
+    return t
+
+
+templates.env.filters["hist"] = fmt_hist
 templates.env.filters["ndias"] = lambda v: "—" if v is None else f"{v} dia" if v in (1, -1) else f"{v} dias"
 templates.env.globals.update(
     FINDING_TYPES=FINDING_TYPES, FINDING_CHECK=FINDING_CHECK, SEVERITIES=SEVERITIES, version=__version__,
@@ -156,7 +172,7 @@ def nav_counts() -> dict:
     """Contadores da navegação lateral (cache de 30 s para não pesar em cada página)."""
     if _NAV_CACHE["data"] is not None and time.monotonic() - _NAV_CACHE["at"] < 30:
         return _NAV_CACHE["data"]
-    data = {"alertas": 0, "alertas_altos": 0, "ct_por_triar": 0, "reconc_dif": 0, "pedidos_acesso": 0}
+    data = {"alertas": 0, "alertas_altos": 0, "ct_por_triar": 0, "reconc_dif": 0, "pedidos_acesso": 0, "sites_problemas": 0}
     try:
         settings = get_settings()
         with session_scope() as s:
@@ -164,6 +180,9 @@ def nav_counts() -> dict:
             data["alertas"] = len(sevs)
             data["alertas_altos"] = sum(1 for x in sevs if x in ("alta", "critica"))
             data["pedidos_acesso"] = s.scalar(select(func.count()).select_from(User).where(User.status == "pendente")) or 0
+            from ..sites import PROBLEMS as SITE_PROBLEMS
+            data["sites_problemas"] = s.scalar(select(func.count()).select_from(SiteCheck)
+                                               .where(SiteCheck.estado.in_(SITE_PROBLEMS))) or 0
             if s.scalar(select(CtCert.id).limit(1)) is not None:
                 data["ct_por_triar"] = sum(1 for r in classify_ct(s, settings)
                                            if r["state"] != "na_cmdb" and r["ct"].triage == "por_triar" and not r["expired"])
@@ -190,18 +209,16 @@ NAV_GROUPS = [
     ("hoje", "", [("/", "Painel", None)]),                       # os alertas estão no sino, ao pé do utilizador
     ("inventario", "Inventário", [("/certificados", "Certificados", None), ("/apis", "APIs e segredos", None),
                                   ("/endpoints", "Servidores", None), ("/donos", "Donos", None)]),
-    ("vigilancia", "Vigilância", [("/testes", "Testes", None), ("/descoberta", "Na internet", "ct_por_triar")]),
-    ("renovar", "Renovar", [("/pedidos", "Pedidos SMAX", None), ("/pedidos/regras", "Regras de pedidos", None),
-                            ("/preparar-47-dias", "Preparar os 47 dias", None), ("/relatorio", "Relatório por email", None)]),
-    ("cmdb", "CMDB", [("/cmdb-final", "Atualizar a CMDB", "reconc_dif"), ("/ucmdb/certificado", "Editar um certificado", None),
-                      ("/cmdb/historico", "Histórico de alterações", None)]),
-    ("sistema", "Sistema", [("/jobs", "Execuções e auditoria", None), ("/ligacoes", "Ligações", None),
-                            ("/fontes", "Fontes e chamadas", None),
-                            ("/cmdb-final/permissoes", "Ligação à UCMDB", None),
-                            ("/cmdb-final/avi", "AVI pela API", None), ("/cmdb-final/azure", "Azure pela API", None), ("/utilizadores", "Utilizadores", "pedidos_acesso"),
-                            ("/testes/como-funciona", "Como funciona", None)]),
+    ("vigilancia", "Vigilância", [("/testes", "Testes", None), ("/sites-publicos", "Sites públicos", "sites_problemas"),
+                                  ("/descoberta", "Na internet", "ct_por_triar")]),
+    ("renovar", "Renovar", [("/pedidos", "Pedidos SMAX", None), ("/relatorio", "Relatório por email", None)]),
+    ("cmdb", "CMDB", [("/cmdb-final", "Atualizar a CMDB", "reconc_dif"), ("/cmdb/historico", "Histórico da CMDB", None)]),
+    ("sistema", "Sistema", [("/jobs", "Execuções e auditoria", None), ("/fontes", "Fontes e ligações", None),
+                            ("/utilizadores", "Utilizadores", "pedidos_acesso"), ("/testes/como-funciona", "Como funciona", None)]),
 ]
-_NAV_ALIASES = {"/cert/": "/certificados", "/reconciliacao": "/cmdb-final"}
+_NAV_ALIASES = {"/cert/": "/certificados", "/reconciliacao": "/cmdb-final", "/ucmdb/certificado": "/certificados",
+                "/preparar-47-dias": "/", "/ligacoes": "/fontes", "/cmdb-final/permissoes": "/fontes",
+                "/cmdb-final/avi": "/fontes", "/cmdb-final/azure": "/fontes", "/ucmdb/": "/cmdb-final"}
 PALETTES = {"consola": "Consola (escuro)", "assinatura": "Assinatura (escuro)", "relatorio": "Relatório (claro)"}
 
 
@@ -343,15 +360,39 @@ def render(request: Request, name: str, user: str, **ctx):
     return r
 
 
-@app.get("/fontes")
-def sources_page(request: Request, user: str = Depends(current_user)):
-    """Cada sistema com que o Atalaia Cert fala, como, e cada chamada (lida de certwatch/fontes/*.py)."""
+def _sources_page(request: Request, user: str, resultados: dict | None = None):
     from ..fontes import all_sources
+    from ..fontes import testes as ft
     fontes = all_sources(get_settings())
     totals = {"em_uso": sum(1 for f in fontes for c in f["chamadas"] if c["estado"].startswith("em uso")),
               "planeadas": sum(1 for f in fontes for c in f["chamadas"] if c["estado"] == "planeado"),
               "escrita": sum(1 for f in fontes for c in f["chamadas"] if c["acesso"] == "escrita")}
-    return render(request, "fontes.html", user, fontes=fontes, totals=totals)
+    return render(request, "fontes.html", user, fontes=fontes, totals=totals, resultados=resultados or {},
+                  testaveis=set(ft.TESTS), config=ft.CONFIG)
+
+
+@app.get("/fontes")
+def sources_page(request: Request, user: str = Depends(current_user)):
+    """Cada sistema com que o Atalaia Cert fala: estado, teste de ligação, configuração e chamadas."""
+    return _sources_page(request, user)
+
+
+@app.post("/fontes/{fonte}/testar")
+def sources_test(request: Request, fonte: str, csrf: str = Form(""), user: str = Depends(current_user)):
+    """Teste rápido de uma fonte (só leitura). Fica na auditoria, sem segredos."""
+    from ..fontes import testes as ft
+    check_csrf(request, csrf)
+    if fonte not in ft.TESTS:
+        raise HTTPException(404)
+    steps = ft.TEST_OVERRIDE(fonte) if ft_override_set() else ft.run(fonte, get_settings())
+    with session_scope() as s:
+        audit(s, user, "fonte.testar", fonte, passos={x["passo"]: x["ok"] for x in steps})
+    return _sources_page(request, user, {fonte: steps})
+
+
+def ft_override_set() -> bool:
+    from ..fontes import testes as ft
+    return getattr(ft, "TEST_OVERRIDE", None) is not None
 
 
 @app.get("/estado/ocupado")
@@ -974,7 +1015,13 @@ def dashboard(request: Request, janela: int = 24, vista: str = "", user: str = D
     with session_scope() as s:
         inv_by_cn = {r["cn"]: r for r in inv}
         regras = [{"name": r.name, "n": len(rl.matches(r, items, inv_by_cn))} for r in rl.rules(s) if r.enabled]
-    return render(request, "dashboard.html", user, s=stats, items=items, activity=activity, stale=stale, nis=nis, k=k,
+        from .. import domains as dm
+        from .. import sites as st
+        graves = [r for r in st.latest(s) if st.STATES.get(r["estado"], ("", "", ""))[2] in ("x", "r")]
+        dom = dm.overview(s, settings, now) if settings.domains else {"alertas": 0, "rows": []}
+    sites_mal = {"n": len(graves), "nomes": [r["name"] for r in graves[:3]]}
+    dom_mal = {"n": dom["alertas"], "nomes": [d["domain"] for d in dom["rows"] if d["alerta"]][:3]}
+    return render(request, "dashboard.html", user, sites_mal=sites_mal, dom_mal=dom_mal, s=stats, items=items, activity=activity, stale=stale, nis=nis, k=k,
                   janela=janela, vista=vista, fresh=fresh, sev_counts=sev_counts, setup=setup, smax_on=smax_configured(settings),
                   can_create=can_create, limit=settings.dash_expiry_days, stale_days=settings.dash_stale_days,
                   now=now, prazos=prazos, camadas=db_.layer_summary(matrix), fases=db_.open_by_phase(open_rows),
@@ -1101,6 +1148,65 @@ def certificados_csv(q: str = "", dias: str = "", estado: str = "", tipo: str = 
                           (r["dono"] or {}).get("equipa", ""), (r["dono"] or {}).get("pessoa", ""),
                           {"atribuido": "atribuído", "smax": "pedido SMAX"}.get((r["dono"] or {}).get("origem"), "")]
                          for r in rows])
+
+
+# ------------------------------------------------------------------ sites públicos e domínios
+def _site_rows(estado: str = "", q: str = ""):
+    from .. import sites as st
+    with session_scope() as s:
+        rows = st.latest(s)
+    allr = rows
+    if estado == "problemas":
+        rows = [r for r in rows if r["estado"] in st.PROBLEMS]
+    elif estado in st.STATES:
+        rows = [r for r in rows if r["estado"] == estado]
+    if q:
+        ql = q.lower().strip()
+        rows = [r for r in rows if ql in r["name"] or any(ql in n.get("ip", "") for n in r.get("nos") or [])
+                or ql in (r.get("dono") or "").lower()]
+    return rows, allr
+
+
+def site_flag_text(r) -> str:
+    from .. import sites as st
+    return "; ".join(st.STATES[f][0] for f in r.get("flags") or [] if f in st.STATES)
+
+
+@app.get("/sites-publicos")
+def sites_page(request: Request, estado: str = "", q: str = "", user: str = Depends(current_user)):
+    """Cada site público: o certificado servido (em cada IP, dentro e fora), a CMDB e o pedido, lado a lado."""
+    from .. import domains as dm
+    from .. import sites as st
+    settings = get_settings()
+    rows, allr = _site_rows(estado, q)
+    with session_scope() as s:
+        dom = dm.overview(s, settings)
+        jobs_busy = s.scalar(select(JobRun.id).where(JobRun.job.in_(("sites", "pipeline")),
+                                                     JobRun.status.in_(("pending", "running"))).limit(1)) is not None
+    return render(request, "sites.html", user, rows=rows, sm=st.summary(allr), STATES=st.STATES, NOTES=st.NOTES,
+                  PROBLEMS=st.PROBLEMS, f={"estado": estado, "q": q}, dom=dom, settings=settings, busy=jobs_busy,
+                  now=utcnow())
+
+
+@app.get("/sites-publicos/exportar")
+def sites_csv(estado: str = "", q: str = "", user: str = Depends(current_user)):
+    from .. import sites as st
+    rows, _ = _site_rows(estado, q)
+    out = []
+    for r in rows:
+        sv, ped = r.get("servido") or {}, r.get("pedido") or {}
+        out.append([r["name"], st.STATES.get(r["estado"], (r["estado"],))[0], site_flag_text(r),
+                    fmt_dt(sv.get("not_after")), r.get("dias"), sv.get("emissor", ""), sv.get("serial", ""),
+                    fmt_dt((r.get("cmdb") or {}).get("valid_to")), ped.get("id", ""), ped.get("fase", ""), fmt_dt(ped.get("expira")),
+                    ", ".join(r.get("pedidos_desatualizados") or []),
+                    ", ".join(f"{n['ip']} ({'/'.join(n['vistas'])}): " + (fmt_dt(n.get('not_after')) if n.get("sha256") else n["status"])
+                              for n in r.get("nos") or []),
+                    ", ".join((r.get("fora") or {}).get("ips") or []), ", ".join((r.get("dentro") or {}).get("ips") or []),
+                    r.get("cdn", ""), r.get("dono", ""), fmt_dt(r.get("checked_at"), True)])
+    return csv_response("sites-publicos.csv",
+                        ["Site", "Estado", "Todas as marcas", "Servido: expira", "Dias", "Emissor", "Série", "CMDB: expira",
+                         "Pedido", "Fase", "Pedido: expira", "Pedidos desatualizados", "Nós (IP: expira)", "IPs públicos",
+                         "IPs internos", "CDN", "Equipa dona", "Verificado em"], out)
 
 
 @app.get("/certificados/detalhe")
@@ -1630,7 +1736,9 @@ def pedidos_smax(request: Request, vista: str = "abertos", q: str = "", fase: st
                 p = rn.pipeline(r["t"], settings, ctx)
                 r["percurso"] = {"done": p["done"], "current": p["current"], "current_label": p["current_label"]}
     filtros = {"q": q, "fase": fase, "desde": desde, "ate": ate, "sem_comentario": sem_comentario, "ordem": ordem}
-    return render(request, "pedidos_smax.html", user, rows=rows[:1000], n_rows=len(rows), counts=counts, vista=vista,
+    with session_scope() as s2:
+        n_regras = s2.scalar(select(func.count()).select_from(TicketRule).where(TicketRule.enabled.is_(True))) or 0
+    return render(request, "pedidos_smax.html", user, rows=rows[:1000], n_rows=len(rows), counts=counts, vista=vista, n_regras=n_regras,
                   q=q, views=TICKET_VIEWS, n_lotes=n_lotes, fetched=fetched, smax_on=smax_configured(settings),
                   fases=fases, filtros=filtros, ordens=TICKET_ORDER,
                   qs="&".join(f"{k}={quote(str(v))}" for k, v in filtros.items() if v))
@@ -1945,7 +2053,8 @@ def _report_data(rep: EmailReport, settings):
     with session_scope() as s:
         rows = rp.build_rows(s, settings)
         internet = rp.internet_rows(s, settings, rep.ct_dias if rep.ct_dias is not None else 30)
-    return rows, rp.select_rows(rows, rep.desde, rep.ate, set(rep.excluded or []), internet)
+        sites = rp.sites_data(s, settings)
+    return rows, rp.select_rows(rows, rep.desde, rep.ate, set(rep.excluded or []), internet, sites)
 
 
 def _template(s) -> EmailTemplate | None:
@@ -1972,7 +2081,7 @@ def _subject(key: str, sel: dict, rep: EmailReport, texts: dict) -> str:
 
 
 def _group_subject(group: list[str], sel: dict, rep: EmailReport, texts: dict) -> str:
-    key = "alertas" if "alertas" in group else ("reconciliacao" if "reconciliacao" in group else "internet")
+    key = next((k for k in ("alertas", "reconciliacao", "internet", "sites") if k in group), "alertas")
     return _subject(key, sel, rep, texts)
 
 
@@ -1982,6 +2091,8 @@ def _group_attachments(group: list[str], sel: dict, rep: EmailReport) -> list[tu
         att.append((rp.excel_name(rep.ate), rp.excel(sel, rep.alerta)))
     if "internet" in group:
         att.append((rp.INTERNET_EXCEL, rp.internet_excel(sel)))
+    if "sites" in group:
+        att.append((rp.SITES_EXCEL, rp.sites_excel(sel)))
     return att
 
 
@@ -2036,13 +2147,14 @@ def relatorio_ver(request: Request, rid: int, user: str = Depends(current_user))
     return render(request, "relatorio_ver.html", user, rep=rep, janela=janela, extra=extra, excl=excl, sel=sel,
                   n_alerta=len(alerta), problems=rp.smtp_problems(settings), settings=settings,
                   para=prev_to or ", ".join(settings.report_to),
-                  assuntos={k: _subject(k, sel, rep, texts) for k in ("alertas", "reconciliacao", "internet")},
+                  assuntos={k: _subject(k, sel, rep, texts) for k in rp.PARTS},
                   texts=texts, base_texts=base, text_groups=groups, TEXT_GROUPS=rp.TEXT_GROUPS, TEXT_LABELS=rp.TEXT_LABELS,
                   TEXT_VARS=rp.TEXT_VARS, ORIGINAL=rp.DEFAULT_TEXTS, modelo=modelo, MAX_TEXT=rp.MAX_TEXT,
                   n_proprios=len(rep.textos or {}),
                   editado={k: k in _edits(rep) or k in ((rep.editados or {}).get("assuntos") or {}) for k in rp.PARTS},
                   comum_editado=bool({"inicio", "fim"} & set(_edits(rep))), editados=rep.editados or {},
-                  internet=sel["todos_internet"], INTERNET_EXCEL=rp.INTERNET_EXCEL,
+                  internet=sel["todos_internet"], INTERNET_EXCEL=rp.INTERNET_EXCEL, SITES_EXCEL=rp.SITES_EXCEL,
+                  sites_ctx=rp._sites_ctx(sel["sites"], utcnow().astimezone(_tz())),
                   msg=request.query_params.get("msg", ""), erro=request.query_params.get("erro", ""))
 
 
@@ -2099,7 +2211,7 @@ async def relatorio_textos(request: Request, rid: int, user: str = Depends(curre
 
 @app.get("/relatorio/{rid}/previsao/{parte}")
 def relatorio_previsao(rid: int, parte: str, user: str = Depends(current_user)):
-    if parte not in ("alertas", "reconciliacao", "internet", "ambos"):
+    if parte not in (*rp.PARTS, "ambos"):
         raise HTTPException(404)
     settings = get_settings()
     with session_scope() as s:
@@ -2182,6 +2294,7 @@ def relatorio_excel(rid: int, parte: str = "reconciliacao", user: str = Depends(
         s.expunge(rep)
     _, sel = _report_data(rep, settings)
     data, name = ((rp.internet_excel(sel), rp.INTERNET_EXCEL) if parte == "internet"
+                  else (rp.sites_excel(sel), rp.SITES_EXCEL) if parte == "sites"
                   else (rp.excel(sel, rep.alerta), rp.excel_name(rep.ate)))
     return Response(data, media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                     headers={"Content-Disposition": f'attachment; filename="{name}"'})
@@ -2192,14 +2305,14 @@ async def relatorio_enviar(request: Request, rid: int, user: str = Depends(curre
     form = await request.form()
     check_csrf(request, form.get("csrf"))
     settings = get_settings()
-    partes = [p for p in ("alertas", "reconciliacao", "internet") if p in form.getlist("parte")]
+    partes = [p for p in rp.PARTS if p in form.getlist("parte")]
     modo = str(form.get("modo") or "junto")
     back = f"/relatorio/{rid}"
     if form.get("confirmo") != "1":
         raise HTTPException(400, "Confirmação em falta.")
     try:
         if not partes:
-            raise rp.ReportError("Escolha o que enviar: alertas, reconciliação e/ou certificados novos na internet.")
+            raise rp.ReportError("Escolha o que enviar: alertas, reconciliação, certificados novos na internet e/ou sites públicos.")
         to = rp.parse_recipients(str(form.get("para") or ""), settings)
         with session_scope() as s:
             rep = _report_or_404(s, rid)
@@ -2365,6 +2478,75 @@ def _history_args(q: str, ci: str, por: str, origem: str, resultado: str, acao: 
     conds = uw.history_conditions(f["q"], f["ci"], f["por"], f["origem"], f["resultado"], f["acao"],
                                   day(f["de"]), day(f["ate"], 1))
     return conds, f
+
+
+CMDB_KINDS = {"criado": "Criado", "alterado": "Alterado", "removido": "Removido"}
+
+
+def _changes_query(q: str, origem: str, tipo: str, atributo: str, quem: str, de: str, ate: str):
+    tz = _tz()
+
+    def day(v: str, plus: int = 0):
+        try:
+            d = datetime.strptime(v.strip(), "%Y-%m-%d").date() if v.strip() else None
+        except ValueError:
+            return None
+        return datetime.combine(d + timedelta(days=plus), datetime.min.time(), tzinfo=tz).astimezone(timezone.utc) if d else None
+    f = {"q": q[:200].strip(), "origem": origem if origem in ("fora", "atalaia") else "", "tipo": tipo if tipo in CMDB_KINDS else "",
+         "atributo": atributo[:128], "quem": quem[:256], "de": de[:10] if day(de) else "", "ate": ate[:10] if day(ate) else ""}
+    conds = []
+    if f["q"]:
+        like = f"%{f['q'].lower()}%"
+        conds.append(or_(func.lower(CmdbChange.cn).like(like), CmdbChange.ucmdb_id == f["q"]))
+    if f["origem"]:
+        conds.append(CmdbChange.by_atalaia.is_(f["origem"] == "atalaia"))
+    if f["tipo"]:
+        conds.append(CmdbChange.kind == f["tipo"])
+    if f["atributo"]:
+        conds.append(CmdbChange.attribute == f["atributo"])
+    if f["quem"]:
+        conds.append(CmdbChange.changed_by == f["quem"])
+    if day(f["de"]):
+        conds.append(CmdbChange.detected_at >= day(f["de"]))
+    if day(f["ate"]):
+        conds.append(CmdbChange.detected_at < day(f["ate"], 1))
+    return conds, f
+
+
+@app.get("/cmdb/historico/fora")
+def cmdb_changes(request: Request, q: str = "", origem: str = "", tipo: str = "", atributo: str = "", quem: str = "",
+                 de: str = "", ate: str = "", user: str = Depends(current_user)):
+    """Todas as alterações à CMDB detetadas entre leituras (incluindo as feitas à mão fora do Atalaia)."""
+    from .. import cmdb_history as ch
+    conds, f = _changes_query(q, origem, tipo, atributo, quem, de, ate)
+    with session_scope() as s:
+        total = s.scalar(select(func.count()).select_from(CmdbChange).where(*conds)) or 0
+        rows = list(s.scalars(select(CmdbChange).where(*conds).order_by(CmdbChange.id.desc()).limit(500)))
+        for r in rows:
+            s.expunge(r)
+        atributos = sorted(x for x in s.scalars(select(CmdbChange.attribute).distinct()) if x)
+        pessoas = sorted(x for x in s.scalars(select(CmdbChange.changed_by).distinct()) if x and not x.startswith("Atalaia"))
+        baseline = s.scalar(select(CmdbRecord.id).where(CmdbRecord.attrs_hash != "").limit(1)) is not None
+        quem_ok = ch.who_available(s)
+    from urllib.parse import urlencode
+    qs = urlencode({k: v for k, v in f.items() if v})
+    return render(request, "cmdb_alteracoes.html", user, rows=rows, total=total, f=f, qs=qs, KINDS=CMDB_KINDS,
+                  atributos=atributos, pessoas=pessoas, label=ch.label, baseline=baseline, quem=quem_ok,
+                  settings=get_settings())
+
+
+@app.get("/cmdb/historico/fora.csv")
+def cmdb_changes_csv(q: str = "", origem: str = "", tipo: str = "", atributo: str = "", quem: str = "",
+                     de: str = "", ate: str = "", user: str = Depends(current_user)):
+    from .. import cmdb_history as ch
+    conds, _ = _changes_query(q, origem, tipo, atributo, quem, de, ate)
+    with session_scope() as s:
+        rows = list(s.scalars(select(CmdbChange).where(*conds).order_by(CmdbChange.id.desc()).limit(50000)))
+        out = [[fmt_dt(c.detected_at, True), c.cn, c.ucmdb_id, CMDB_KINDS.get(c.kind, c.kind), ch.label(c.attribute),
+                c.old, c.new, fmt_dt(c.changed_at, True) if c.changed_at else "", c.changed_by,
+                "Sim" if c.by_atalaia else "Não"] for c in rows]
+    return csv_response("cmdb-alteracoes.csv", ["Detetado", "Certificado", "CI", "Tipo", "Atributo", "Antes", "Depois",
+                                                "Alterado em", "Por", "Pelo Atalaia"], out)
 
 
 @app.get("/cmdb/historico")

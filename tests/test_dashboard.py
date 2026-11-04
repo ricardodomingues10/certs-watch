@@ -117,12 +117,17 @@ def test_dashboard_page_and_evidence(env, monkeypatch):
 def test_navigation_and_theme(env):
     from certwatch.web.app import app, nav_tree
     tree = {g["key"]: g for g in nav_tree("/cmdb-final/avi", {})}
-    assert tree["sistema"]["on"] and not tree["cmdb"]["on"]                       # o prefixo mais longo ganha
-    assert [i["label"] for i in tree["sistema"]["items"] if i["on"]] == ["AVI pela API"]
+    assert tree["sistema"]["on"] and not tree["cmdb"]["on"]                       # as páginas de detalhe ficam em Fontes
+    assert [i["label"] for i in tree["sistema"]["items"] if i["on"]] == ["Fontes e ligações"]
     assert nav_tree("/cert/abc", {})[1]["on"] and nav_tree("/", {})[0]["on"]
+    assert nav_tree("/preparar-47-dias", {})[0]["on"]                              # um separador do Painel
+    assert [i["label"] for g in nav_tree("/pedidos/regras", {}) for i in g["items"] if i["on"]] == ["Pedidos SMAX"]
     groups = {g["key"]: [i["label"] for i in g["items"]] for g in nav_tree("/", {})}
     assert groups["hoje"] == ["Painel"] and groups["inventario"] == ["Certificados", "APIs e segredos", "Servidores", "Donos"]
-    assert groups["vigilancia"] == ["Testes", "Na internet"] and not any("Alertas" in v for v in groups.values())
+    assert groups["vigilancia"] == ["Testes", "Sites públicos", "Na internet"] and not any("Alertas" in v for v in groups.values())
+    assert groups["renovar"] == ["Pedidos SMAX", "Relatório por email"]
+    assert groups["cmdb"] == ["Atualizar a CMDB", "Histórico da CMDB"]
+    assert groups["sistema"] == ["Execuções e auditoria", "Fontes e ligações", "Utilizadores", "Como funciona"]
     with TestClient(app) as c:
         page = c.get("/certificados", auth=AUTH).text
         assert 'data-palette="consola"' in page and 'aria-current="page"><span>Certificados</span>' in page

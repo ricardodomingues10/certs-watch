@@ -1,0 +1,96 @@
+{% extends "base.html" %}
+{% block title %}Sites públicos{% endblock %}
+{% block crumb %}Vigilância{% endblock %}
+{% block page_title %}Sites públicos <small>{{ sm.total }}</small>{% endblock %}
+{% block lede %}Para cada nome externo: o certificado servido em cada IP, visto de dentro da rede e de fora (DNS público), lado a lado com a CMDB e com o pedido do SMAX. Só leitura.{% endblock %}
+{% block actions %}
+<form method="post" action="/jobs/sites"><input type="hidden" name="csrf" value="{{ csrf }}"><input type="hidden" name="next" value="/sites-publicos"><button class="primary" {{ 'disabled' if busy }}>{{ 'A verificar…' if busy else 'Verificar agora' }}</button></form>
+<a class="button" href="/sites-publicos/exportar?estado={{ f.estado }}&q={{ f.q|urlencode }}">Exportar (CSV)</a>
+{% endblock %}
+{% block content %}
+<p class="small muted">
+  {% if sm.quando %}Última verificação {{ sm.quando|dtt }}{% if sm.antigo %} <span class="tag tag-run">há mais de 36 horas</span>{% endif %}.{% else %}Ainda não houve nenhuma verificação: carregue em «Verificar agora» (corre também na execução diária).{% endif %}
+  Visão de fora: {% if settings.sites_external %}DNS público ({{ settings.public_dns_urls|map('replace', 'https://', '')|map('truncate', 40)|join(', ') }}) e ligação direta ao IP público{% else %}desligada (CERTWATCH_SITES_EXTERNAL=false){% endif %}. Até {{ settings.sites_max_ips }} IPs por nome.
+</p>
+
+<nav class="tabs" aria-label="Estados">
+  <a href="/sites-publicos?estado=problemas" class="{{ 'on' if f.estado == 'problemas' }}">Com problemas <span class="n">{{ sm.problemas }}</span></a>
+  {% for k, v in STATES.items() %}{% if sm.counts.get(k) %}
+  <a href="/sites-publicos?estado={{ k }}" class="{{ 'on' if f.estado == k }}" title="{{ v[1] }}">{{ v[0] }} <span class="n">{{ sm.counts[k] }}</span></a>
+  {% endif %}{% endfor %}
+  <a href="/sites-publicos" class="{{ 'on' if not f.estado }}">Todos <span class="n">{{ sm.total }}</span></a>
+</nav>
+{% if f.estado in STATES %}<p class="muted"><b>{{ STATES[f.estado][0] }}.</b> {{ STATES[f.estado][1] }}</p>{% endif %}
+
+<form class="filters" method="get">
+  {% if f.estado %}<input type="hidden" name="estado" value="{{ f.estado }}">{% endif %}
+  <input type="search" name="q" value="{{ f.q }}" placeholder="nome, IP ou equipa" aria-label="Filtrar">
+  <button>Filtrar</button>
+</form>
+
+<section class="card flush" aria-label="Sites">
+  {% if rows %}
+  <div class="scroll"><table class="st-table">
+    <thead><tr><th>Site</th><th>Estado</th><th>Servido</th><th>CMDB</th><th>Pedido</th><th>Nós</th></tr></thead>
+    <tbody>
+    {% for r in rows %}{% set sv = r.servido or {} %}{% set v = STATES.get(r.estado, (r.estado, '', 'n')) %}
+    <tr>
+      <td><a class="mono" href="/certificados/detalhe?cn={{ r.name|urlencode }}">{{ r.name }}</a>
+        {% if r.dono %}<div class="small muted">{{ r.dono }}</div>{% endif %}</td>
+      <td><span class="pn-pill t-{{ v[2] }}">{{ v[0] }}</span>
+        {% for fl in r.flags if fl != r.estado %}<div class="small muted">+ {{ STATES[fl][0] }}</div>{% endfor %}</td>
+      <td class="nowrap">{% if sv %}{{ sv.not_after|dt }}{% set dm = r.dias_max if r.dias_max is defined and r.dias_max is not none else r.dias %}{% if dm is not none %} <span class="small muted">({{ dm|ndias }})</span>{% endif %}
+        <div class="small muted">{{ sv.emissor }}</div>
+        {% if r.servido_min and r.servido_min[:10] != sv.not_after[:10] %}<div class="small"><span class="tag tag-run">um nó: {{ r.servido_min|dt }} ({{ r.dias|ndias }})</span></div>{% endif %}{% if sv.nome_ok == false %}<div class="small"><span class="tag tag-err">nome não coincide</span></div>{% endif %}{% else %}—{% endif %}</td>
+      <td class="nowrap">{% if r.cmdb and r.cmdb.in_cmdb %}{{ r.cmdb.valid_to|dt }}{% else %}<span class="muted">não está</span>{% endif %}</td>
+      <td class="nowrap">{% if r.pedido %}<a href="{{ r.pedido.url or '#' }}" rel="noopener" target="_blank">{{ r.pedido.id }}</a> <span class="small muted">{{ r.pedido.fase }}</span>
+        {% if r.pedido.expira %}<div class="small muted">para {{ r.pedido.expira|dt }}</div>{% endif %}
+        {% if r.pedidos_desatualizados %}<div class="small"><span class="tag tag-run">desatualizado: {{ r.pedidos_desatualizados|join(', ') }}</span></div>{% endif %}
+        {% else %}<span class="muted">—</span>{% endif %}</td>
+      <td>
+        <details class="st-nodes"><summary>{{ r.nos|length }} IP{{ 's' if r.nos|length != 1 }}{% if r.cdn %} · CDN{% endif %}</summary>
+          <ul>{% for n in r.nos %}
+            <li><span class="mono">{{ n.ip }}</span> {% for vv in n.vistas %}<span class="chip {{ 'sc-externo' if vv == 'fora' else 'sc-interno' }}">{{ vv }}</span>{% endfor %}
+              {% if n.sha256 %}expira {{ n.not_after|dt }} · série <span class="mono">{{ n.serial[:16] }}</span>{% elif n.status == 'sem_ipv6' %}<span class="muted">sem IPv6 neste servidor</span>{% else %}<span class="tag tag-err">{{ n.status }}</span> <span class="small muted">{{ n.erro }}</span>{% endif %}</li>
+          {% else %}<li class="muted">{{ (r.dentro or {}).erro or 'sem IPs' }}</li>{% endfor %}</ul>
+          {% if r.fora %}<p class="small muted">DNS público ({{ r.fora.resolvedor }}): {{ r.fora.ips|join(', ') or (r.fora.erro or '—') }}{% if r.fora.cnames %} · CNAME {{ r.fora.cnames|join(' → ') }}{% endif %}</p>{% endif %}
+          {% if r.dentro %}<p class="small muted">DNS interno: {{ r.dentro.ips|join(', ') or (r.dentro.erro or '—') }}</p>{% endif %}
+          {% for nt in r.notas %}<p class="small">{{ NOTES.get(nt, nt) }}</p>{% endfor %}
+          {% if r.erro %}<p class="small bad">{{ r.erro }}</p>{% endif %}
+        </details>
+      </td>
+    </tr>
+    {% endfor %}
+    </tbody>
+  </table></div>
+  {% else %}
+  <div class="empty"><b>{{ 'Nenhum site neste estado' if f.estado or f.q else 'Ainda sem resultados' }}</b>{{ '' if f.estado or f.q else 'Os nomes externos do inventário são verificados na execução diária ou em «Verificar agora».' }}</div>
+  {% endif %}
+</section>
+
+<section class="card" id="dominios" aria-labelledby="h-dom">
+  <div class="pn-card-h"><h2 id="h-dom">Domínios <small>registo (RDAP)</small></h2>
+    {% if settings.domains %}<form method="post" action="/jobs/dominios" class="pn-link"><input type="hidden" name="csrf" value="{{ csrf }}"><input type="hidden" name="next" value="/sites-publicos#dominios"><button class="small-btn">Ler agora</button></form>{% endif %}</div>
+  {% if not settings.domains %}
+  <p class="small">Defina os domínios da organização em <span class="mono">CERTWATCH_DOMAINS</span> (por omissão usa os de <span class="mono">CERTWATCH_CT_DOMAINS</span>) para vigiar a validade do registo, o registrar, os nameservers e o bloqueio de transferência.</p>
+  {% elif not dom.rows %}
+  <p class="small muted">Ainda não lidos: corre na execução diária ou em «Ler agora».</p>
+  {% else %}
+  <div class="scroll"><table class="compact">
+    <thead><tr><th>Domínio</th><th>Registo expira</th><th>Registrar</th><th>Nameservers</th><th>Proteção</th><th>Lido</th></tr></thead>
+    <tbody>{% for d in dom.rows %}<tr>
+      <td class="mono">{{ d.domain }}</td>
+      <td class="nowrap">{% if d.erro %}<span class="tag tag-err">erro</span> <span class="small">{{ d.erro }}</span>{% elif d.expires %}{{ d.expires|dt }} <span class="pn-pill {{ 't-r' if d.dias <= 30 else 't-a' if d.alerta else 't-n' }}">{{ d.dias|ndias }}</span>{% else %}<span class="muted">o registo não indica</span>{% endif %}</td>
+      <td class="small">{{ d.registrar or '—' }}</td>
+      <td class="small mono">{{ d.nameservers|join(', ') or '—' }}</td>
+      <td class="small">{% if d.bloqueado %}<span class="tag tag-ok">transferência bloqueada</span>{% elif not d.erro %}<span class="tag tag-run">sem bloqueio de transferência</span>{% endif %}{% if d.dnssec %} <span class="tag tag-acc">DNSSEC</span>{% endif %}</td>
+      <td class="small nowrap">{{ d.checked_at|dtt }}</td></tr>{% endfor %}</tbody>
+  </table></div>
+  {% if dom.changes %}
+  <h3 class="mt">Alterações nos últimos 90 dias</h3>
+  <ul class="st-changes">{% for c in dom.changes %}<li>{% if c.sensivel %}<span class="tag tag-err">verificar</span>{% endif %} <b class="mono">{{ c.domain }}</b> · {{ c.campo }}: <span class="muted">{{ c.old or '—' }}</span> → {{ c.new or '—' }} <span class="small muted">({{ c.quando|dtt }})</span></li>{% endfor %}</ul>
+  <p class="small muted">Mudanças de registrar, nameservers ou estados que ninguém pediu podem ser sinal de sequestro do domínio: confirmar com quem gere os domínios.</p>
+  {% endif %}
+  {% endif %}
+</section>
+{% endblock %}

@@ -1,9 +1,14 @@
 {% extends "base.html" %}
 {% block title %}Regras de pedidos{% endblock %}
-{% block crumb %}Renovar{% endblock %}
+{% block crumb %}Renovar · <a href="/pedidos">Pedidos SMAX</a>{% endblock %}
 {% block page_title %}Regras para abrir pedidos <small>{{ regras|selectattr('r.enabled')|list|length }} ativa{{ 's' if regras|selectattr('r.enabled')|list|length != 1 }} de {{ regras|length }}</small>{% endblock %}
 {% block lede %}Cada regra diz quando um certificado deve ter um pedido de renovação aberto: quantos dias antes, para que certificados e com que grupo do {{ TK }}.{% endblock %}
 {% block content %}
+{% set n_on = regras|selectattr('r.enabled')|list|length %}
+<nav class="pn-views" aria-label="Pedidos">
+  <a href="/pedidos">Pedidos</a>
+  <a href="/pedidos/regras" class="on" aria-current="page">Regras para abrir pedidos <span class="n">{{ n_on }} ativa{{ 's' if n_on != 1 }}</span></a>
+</nav>
 {% for n in notas %}<p class="note" role="status">{{ n }}</p>{% endfor %}
 {% for e in erros %}<p class="note bad" role="alert">{{ e }}</p>{% endfor %}
 

@@ -9,14 +9,15 @@ Sistema → Fontes e chamadas mostra tudo isto.
   azure.py       Azure App Registrations (ficheiro; Graph planeado)
   ct.py          Certificate Transparency          ssllabs.py   SSL Labs
   servidores.py  ligação TLS direta aos servidores email.py     servidor de email (SMTP)
-  teams.py       Microsoft Teams (planeado)        dns.py       DNS (resolução; CAA planeado)
+  teams.py       Microsoft Teams (planeado)        dns.py       DNS interno e público (DoH; CAA planeado)
+  rdap.py        RDAP: registo dos domínios
   acme.py        ACME, renovação automática (planeado)
 """
 from __future__ import annotations
 
 from importlib import import_module
 
-ORDER = ("ucmdb", "smax", "avi", "ca", "azure", "ct", "servidores", "ssllabs", "email", "teams", "dns", "acme")
+ORDER = ("ucmdb", "smax", "avi", "ca", "azure", "ct", "servidores", "dns", "rdap", "ssllabs", "email", "teams", "acme")
 
 
 def all_sources(settings) -> list[dict]:

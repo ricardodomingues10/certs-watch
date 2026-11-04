@@ -225,6 +225,18 @@ class Settings:
     azure_source: str = "ficheiro"      # ficheiro | api | auto (API, e o ficheiro se a API falhar)
     azure_login_url: str = "https://login.microsoftonline.com"
     azure_graph_url: str = "https://graph.microsoft.com"
+    # Sites públicos: DNS público (DNS-over-HTTPS), visão de fora e todos os IPs de cada nome
+    public_dns_urls: list[str] = field(default_factory=lambda: ["https://cloudflare-dns.com/dns-query", "https://dns.google/resolve"])
+    sites_external: bool = True          # testar também os IPs públicos (o que a internet vê)
+    sites_max_ips: int = 8               # IPs testados por nome (e por visão)
+    sites_extra: list[str] = field(default_factory=list)      # nomes públicos a mais, além dos externos do inventário
+    # Domínios (RDAP): validade do registo, registrar, nameservers e estados
+    domains: list[str] = field(default_factory=list)          # por omissão: os de CERTWATCH_CT_DOMAINS
+    rdap_bootstrap_url: str = "https://data.iana.org/rdap/dns.json"
+    domain_alert_days: int = 60
+    # CMDB: atributo com quem alterou o CI (se a CMDB o expuser); vazio = deteta pelo nome
+    cmdb_updated_by_attr: str = ""
+    final_daily: bool = False            # reconciliação na execução diária (só lê e compara; não escreve na CMDB)
     expiry_thresholds: dict[str, int] = field(default_factory=dict)
     lifetime_warn_pct: float = 0.2
     # Renovação automática (ACME / Let's Encrypt): emissores reconhecidos e prazo a partir do qual se alerta
@@ -369,6 +381,15 @@ class Settings:
             avi_version=_env("CERTWATCH_AVI_VERSION", ""),
             avi_page_size=int(_env("CERTWATCH_AVI_PAGE_SIZE", "100")),
             avi_source=(_env("CERTWATCH_AVI_SOURCE", "ficheiro") or "ficheiro").lower(),
+            public_dns_urls=_str_list(_env("CERTWATCH_PUBLIC_DNS", "https://cloudflare-dns.com/dns-query,https://dns.google/resolve")),
+            sites_external=_env("CERTWATCH_SITES_EXTERNAL", "true").lower() != "false",
+            sites_max_ips=max(1, min(32, int(_env("CERTWATCH_SITES_MAX_IPS", "8")))),
+            sites_extra=_str_list(_env("CERTWATCH_SITES_EXTRA", "")),
+            domains=_str_list(_env("CERTWATCH_DOMAINS", "")) or _str_list(_env("CERTWATCH_CT_DOMAINS", "")),
+            rdap_bootstrap_url=_env("CERTWATCH_RDAP_BOOTSTRAP", "https://data.iana.org/rdap/dns.json"),
+            domain_alert_days=int(_env("CERTWATCH_DOMAIN_ALERT_DAYS", "60")),
+            cmdb_updated_by_attr=_env("CERTWATCH_CMDB_UPDATED_BY_ATTR", ""),
+            final_daily=_env("CERTWATCH_FINAL_DAILY", "false").lower() == "true",
             azure_tenant_id=_env("CERTWATCH_AZURE_TENANT_ID", ""),
             azure_client_id=_env("CERTWATCH_AZURE_CLIENT_ID", ""),
             azure_client_secret=_secret("azure_client_secret", "CERTWATCH_AZURE_CLIENT_SECRET"),

@@ -1,6 +1,6 @@
 {% extends "base.html" %}
 {% block title %}Ligação à UCMDB{% endblock %}
-{% block crumb %}Sistema{% endblock %}
+{% block crumb %}Sistema · <a href="/fontes">Fontes e ligações</a>{% endblock %}
 {% block page_title %}Ligação à UCMDB{% endblock %}
 {% block lede %}Verifica o que a conta configurada no Atalaia Cert (segredo <span class="mono">ucmdb_user</span>) consegue fazer pela REST API da UCMDB: entrar, ler as listas (TQL) e, se pedir, atualizar um CI ou criar um certificado de teste. A password nunca aparece aqui nem nos registos.{% endblock %}
 {% block content %}

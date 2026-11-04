@@ -1,6 +1,6 @@
 {% extends "base.html" %}
 {% block title %}Pedidos {{ TK }}{% endblock %}
-{% block crumb %}Operação{% endblock %}
+{% block crumb %}Renovar{% endblock %}
 {% block page_title %}Pedidos {{ TK }}{% endblock %}
 {% block lede %}Pedidos de certificados lidos do {{ TK }}{% if fetched %} (última leitura {{ fetched|dtt }}){% endif %}, ligados ao certificado ou à API a que se referem. Os comentários dos pedidos abertos mostram o que os técnicos escreveram, mesmo quando o estado não mudou.{% endblock %}
 {% block actions %}
@@ -8,6 +8,10 @@
 {% if smax_on %}<form method="post" action="/jobs/ingest_smax"><input type="hidden" name="csrf" value="{{ csrf }}"><input type="hidden" name="next" value="/pedidos"><button>Ler o {{ TK }} agora</button></form>{% endif %}
 {% endblock %}
 {% block content %}
+<nav class="pn-views" aria-label="Pedidos">
+  <a href="/pedidos" class="on" aria-current="page">Pedidos</a>
+  <a href="/pedidos/regras">Regras para abrir pedidos <span class="n">{{ n_regras }} ativa{{ 's' if n_regras != 1 }}</span></a>
+</nav>
 {% if not smax_on %}<div class="note warn">A leitura do {{ TK }} não está configurada (README, secção 7).</div>{% endif %}
 <nav class="tabs" aria-label="Vistas">
   {% for k, label in views.items() %}

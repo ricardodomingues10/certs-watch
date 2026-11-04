@@ -43,8 +43,18 @@ def test_sources_registry_and_page(env, web):
     assert {"ucmdb", "smax", "avi", "ct", "ssllabs", "servidores", "email", "ca", "azure", "teams", "dns", "acme"} <= set(ids)
     assert any(c["estado"] == "planeado" for f in fontes if f["id"] == "teams" for c in f["chamadas"])
     page = web.get("/fontes", auth=AUTH)
-    assert page.status_code == 200 and "Fontes e chamadas" in page.text and "UCMDB" in page.text and "Teams" in page.text
-    assert "planead" in page.text
+    assert page.status_code == 200 and "Fontes e ligações" in page.text and "UCMDB" in page.text and "Teams" in page.text
+    assert "planead" in page.text and "Testar a ligação" in page.text and "/cmdb-final/azure" in page.text
+    from certwatch.fontes import testes as ft
+    ft.TEST_OVERRIDE = lambda fonte: [{"passo": "Ligação", "ok": False, "detalhe": "sem rota", "fazer": "abrir a firewall"}]
+    try:
+        r = web.post("/fontes/dns/testar", data={"csrf": csrf(web)}, auth=AUTH)
+    finally:
+        ft.TEST_OVERRIDE = None
+    assert r.status_code == 200 and "abrir a firewall" in r.text and "Testar outra vez" in r.text
+    assert web.post("/fontes/inventada/testar", data={"csrf": csrf(web)}, auth=AUTH).status_code == 404
+    steps = ft.run("ca", env)
+    assert steps[0]["ok"] is False and "não tem teste" in steps[0]["detalhe"]
 
 
 def test_teams_webhooks_are_secret_file_only(env, tmp_path, monkeypatch):

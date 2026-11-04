@@ -82,8 +82,9 @@ def _context(cafile: str | None) -> ssl.SSLContext:
     return ctx
 
 
-def _handshake(host: str, port: int, ctx: ssl.SSLContext, timeout: float, out: "ScanOutcome"):
-    with socket.create_connection((host, port), timeout=timeout) as sock:
+def _handshake(host: str, port: int, ctx: ssl.SSLContext, timeout: float, out: "ScanOutcome", connect_to: str = ""):
+    # connect_to: ligar a este IP em vez de resolver o nome (o nome vai na mesma no SNI)
+    with socket.create_connection((connect_to or host, port), timeout=timeout) as sock:
         sock.settimeout(timeout)
         try:
             out.resolved_ip = sock.getpeername()[0]
@@ -95,12 +96,13 @@ def _handshake(host: str, port: int, ctx: ssl.SSLContext, timeout: float, out: "
             return chain, ss.version() or "", (cipher[0] if cipher else "")
 
 
-def scan_endpoint(host: str, port: int, cafile: str, timeout: float = 8.0) -> ScanOutcome:
+def scan_endpoint(host: str, port: int, cafile: str, timeout: float = 8.0, connect_to: str = "") -> ScanOutcome:
+    """Liga a host:port (ou a connect_to:port, com o nome host no SNI) e recolhe a cadeia apresentada."""
     out = ScanOutcome(host=host, port=port)
     t0 = time.monotonic()
     try:
         try:
-            out.chain_der, out.tls_version, out.cipher = _handshake(host, port, _context(cafile), timeout, out)
+            out.chain_der, out.tls_version, out.cipher = _handshake(host, port, _context(cafile), timeout, out, connect_to)
             out.verify_ok = True
         except ssl.SSLCertVerificationError as exc:
             out.verify_ok = False
@@ -112,7 +114,7 @@ def scan_endpoint(host: str, port: int, cafile: str, timeout: float = 8.0) -> Sc
 
         if not out.chain_der:
             try:
-                out.chain_der, out.tls_version, out.cipher = _handshake(host, port, _context(None), timeout, out)
+                out.chain_der, out.tls_version, out.cipher = _handshake(host, port, _context(None), timeout, out, connect_to)
             except ssl.SSLError as exc:
                 out.status = "tls_error"
                 out.error = f"{out.error}; handshake permissivo falhou: {exc.reason or exc}".strip("; ")

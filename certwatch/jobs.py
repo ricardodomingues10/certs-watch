@@ -21,7 +21,8 @@ from .trust import build_bundle
 
 log = logging.getLogger(__name__)
 
-JOBS = ("pipeline", "ingest_cmdb", "ingest_apis", "ingest_smax", "ingest_ct", "scan", "ssllabs", "evaluate")
+JOBS = ("pipeline", "ingest_cmdb", "ingest_apis", "ingest_smax", "ingest_ct", "scan", "ssllabs", "evaluate", "sites",
+        "dominios")
 SCAN_RETENTION_DAYS = 90
 
 
@@ -47,6 +48,8 @@ def ingest_cmdb(session: Session, settings: Settings, records: list[dict] | None
     existing = {r.ucmdb_id: r for r in session.scalars(select(CmdbRecord))}
     seen: set[str] = set()
     created = updated = no_cn = 0
+    from .cmdb_history import Tracker
+    history = Tracker(session, settings, existing)
 
     for r in valid:
         cn = r.get("common_name") or ""
@@ -55,6 +58,7 @@ def ingest_cmdb(session: Session, settings: Settings, records: list[dict] | None
             continue
         cn_norm = norm_host(cn)
         rec = existing.get(r["ucmdb_id"])
+        is_new = rec is None or not rec.active
         if rec is None:
             rec = CmdbRecord(ucmdb_id=r["ucmdb_id"], first_seen=now)
             session.add(rec)
@@ -62,6 +66,7 @@ def ingest_cmdb(session: Session, settings: Settings, records: list[dict] | None
             created += 1
         else:
             updated += 1
+        history.seen(rec, r, is_new)
         rec.global_id = r.get("global_id")
         rec.common_name = cn
         rec.cn_norm = cn_norm
@@ -77,6 +82,7 @@ def ingest_cmdb(session: Session, settings: Settings, records: list[dict] | None
     deactivated = 0
     for ucmdb_id, rec in existing.items():
         if ucmdb_id not in seen and rec.active:
+            history.gone(rec)
             rec.active = False
             deactivated += 1
     session.flush()
@@ -106,6 +112,7 @@ def ingest_cmdb(session: Session, settings: Settings, records: list[dict] | None
         "desativados": deactivated,
         "endpoints_criados": ep_created,
         "endpoints_desativados": ep_disabled,
+        "historico": history.finish(),
     }
 
 
@@ -377,6 +384,14 @@ def _run(job: str, settings: Settings) -> dict:
     if job == "evaluate":
         with session_scope() as s:
             return {"evaluate": evaluate(s, settings)}
+    if job == "sites":
+        from .sites import run as run_sites
+        with session_scope() as s:
+            return {"sites": run_sites(s, settings)}
+    if job == "dominios":
+        from .domains import run as run_domains
+        with session_scope() as s:
+            return {"dominios": run_domains(s, settings)}
     if job == "pipeline":
         summary: dict = {}
         try:
@@ -421,6 +436,31 @@ def _run(job: str, settings: Settings) -> dict:
                 summary["ssllabs"] = {"erro": str(exc)}
         with session_scope() as s:
             summary["evaluate"] = evaluate(s, settings)
+        from .sites import run as run_sites
+        try:
+            with session_scope() as s:
+                summary["sites"] = run_sites(s, settings)
+        except Exception as exc:
+            log.exception("Sites públicos falhou")
+            summary["sites"] = {"erro": str(exc)}
+        if settings.domains:
+            from .domains import run as run_domains
+            try:
+                with session_scope() as s:
+                    summary["dominios"] = run_domains(s, settings)
+            except Exception as exc:
+                log.exception("Domínios (RDAP) falhou")
+                summary["dominios"] = {"erro": str(exc)}
+        if settings.final_daily:
+            from . import cmdb_final as cf
+            try:
+                with session_scope() as s:
+                    run_id = cf.start_run(s, "execução diária").id
+                cf.generate(run_id, settings)
+                summary["reconciliacao"] = {"execucao": run_id}
+            except Exception as exc:
+                log.exception("Reconciliação diária falhou")
+                summary["reconciliacao"] = {"erro": str(exc)}
         return summary
     raise ValueError(f"Job desconhecido: {job}")
 

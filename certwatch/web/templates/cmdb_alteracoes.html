@@ -1,0 +1,65 @@
+{% extends "base.html" %}
+{% block title %}Histórico da CMDB{% endblock %}
+{% block crumb %}CMDB{% endblock %}
+{% block page_title %}Histórico da CMDB{% endblock %}
+{% block lede %}Todas as alterações aos certificados da CMDB detetadas entre duas leituras, incluindo as feitas à mão por outras pessoas: o quê, o valor antes e depois, quando e, se a CMDB disser, quem.{% endblock %}
+{% block actions %}
+<a class="button" href="/cmdb/historico/fora.csv{{ '?' ~ qs if qs }}">Exportar (CSV)</a>
+{% endblock %}
+{% block content %}
+<nav class="tabs" aria-label="Vistas">
+  <a href="/cmdb/historico">Feitas pelo Atalaia</a>
+  <a href="/cmdb/historico/fora" class="on" aria-current="page">Todas as alterações detetadas <span class="n">{{ total }}</span></a>
+</nav>
+
+{% if not baseline %}
+<div class="note">A primeira leitura da CMDB depois desta versão serve de ponto de partida: as alterações aparecem a partir da leitura seguinte (a execução diária, ou <b>Importar certificados da CMDB</b> em Execuções).</div>
+{% endif %}
+<p class="small {{ 'muted' if quem else '' }}">{% if quem %}A CMDB indica quem fez cada alteração.{% else %}<span class="tag tag-run">sem «quem»</span> A CMDB não está a dizer quem altera os CIs: aparecem o quê e quando, mas não quem. Para ter também o quem, acrescente ao layout da TQL <span class="mono">{{ settings.ucmdb_tql }}</span> o atributo do CI que guarda quem o alterou (na UCMDB, normalmente «Updated By»); se tiver outro nome, indique-o em <span class="mono">CERTWATCH_CMDB_UPDATED_BY_ATTR</span>.{% endif %}
+Deteta-se a cada leitura da CMDB (sem leituras extra); duas alterações ao mesmo atributo entre duas leituras aparecem como uma.</p>
+
+<form class="filters" method="get" action="/cmdb/historico/fora">
+  <input type="search" name="q" value="{{ f.q }}" placeholder="certificado (nome) ou CI" aria-label="Certificado ou CI">
+  <select name="origem" aria-label="Origem">
+    <option value="">Feitas por qualquer um</option>
+    <option value="fora" {{ 'selected' if f.origem == 'fora' }}>Só fora do Atalaia</option>
+    <option value="atalaia" {{ 'selected' if f.origem == 'atalaia' }}>Só pelo Atalaia</option>
+  </select>
+  <select name="tipo" aria-label="Tipo">
+    <option value="">Criados, alterados e removidos</option>
+    {% for k, v in KINDS.items() %}<option value="{{ k }}" {{ 'selected' if f.tipo == k }}>{{ v }}</option>{% endfor %}
+  </select>
+  <select name="atributo" aria-label="Atributo">
+    <option value="">Todos os atributos</option>
+    {% for a in atributos %}<option value="{{ a }}" {{ 'selected' if f.atributo == a }}>{{ label(a) }}</option>{% endfor %}
+  </select>
+  {% if pessoas %}<select name="quem" aria-label="Quem">
+    <option value="">Qualquer pessoa</option>
+    {% for p in pessoas %}<option value="{{ p }}" {{ 'selected' if f.quem == p }}>{{ p }}</option>{% endfor %}
+  </select>{% endif %}
+  <label class="small">De <input type="date" name="de" value="{{ f.de }}"></label>
+  <label class="small">Até <input type="date" name="ate" value="{{ f.ate }}"></label>
+  <button>Filtrar</button>
+  {% if qs %}<a class="small" href="/cmdb/historico/fora">Limpar</a>{% endif %}
+</form>
+
+<section class="card flush">
+  {% if rows %}
+  <div class="scroll"><table>
+    <thead><tr><th>Detetado</th><th>Certificado</th><th>O quê</th><th>Antes</th><th>Depois</th><th>Alterado em</th><th>Por</th></tr></thead>
+    <tbody>{% for c in rows %}<tr>
+      <td class="small nowrap">{{ c.detected_at|dtt }}</td>
+      <td><a class="mono" href="/certificados/detalhe?cn={{ c.cn|lower|urlencode }}">{{ c.cn or '—' }}</a><div class="small muted mono">{{ c.ucmdb_id }}</div></td>
+      <td class="small">{% if c.kind == 'alterado' %}{{ label(c.attribute) }}{% else %}<span class="tag {{ 'tag-ok' if c.kind == 'criado' else 'tag-err' }}">{{ KINDS[c.kind] }}</span>{% endif %}</td>
+      <td class="small hist-val">{{ c.old|hist or '—' }}</td>
+      <td class="small hist-val">{{ c.new|hist or '—' }}</td>
+      <td class="small nowrap">{{ c.changed_at|dtt if c.changed_at else '—' }}</td>
+      <td class="small">{% if c.by_atalaia %}<span class="tag tag-acc">Atalaia</span> {% if c.write_id %}<a href="/cmdb/historico?ci={{ c.ucmdb_id }}">ver escrita</a>{% endif %}<div class="muted">{{ c.changed_by }}</div>{% elif c.changed_by %}{{ c.changed_by }}{% else %}<span class="muted">a CMDB não diz</span>{% endif %}</td>
+    </tr>{% endfor %}</tbody>
+  </table></div>
+  {% if total > rows|length %}<p class="small pad">A mostrar {{ rows|length }} de {{ total }}. Use os filtros ou exporte.</p>{% endif %}
+  {% else %}
+  <div class="empty"><b>Nenhuma alteração detetada{{ ' com estes filtros' if qs }}</b>As alterações aparecem depois da segunda leitura da CMDB.</div>
+  {% endif %}
+</section>
+{% endblock %}

@@ -31,6 +31,68 @@ class CmdbRecord(Base):
     active: Mapped[bool] = mapped_column(Boolean, default=True, index=True)
     first_seen: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
     last_seen: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    # Histórico: os atributos lidos na última leitura (sem os técnicos que mudam sozinhos) e o seu resumo
+    attrs: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    attrs_hash: Mapped[str] = mapped_column(String(64), default="")
+
+
+class CmdbChange(Base):
+    """Uma alteração na CMDB detetada entre duas leituras: feita pelo Atalaia ou fora dele."""
+
+    __tablename__ = "cmdb_changes"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    detected_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, index=True)
+    ucmdb_id: Mapped[str] = mapped_column(String(64), index=True)
+    cn: Mapped[str] = mapped_column(String(512), default="", index=True)
+    kind: Mapped[str] = mapped_column(String(16))            # criado | alterado | removido
+    attribute: Mapped[str] = mapped_column(String(128), default="")
+    old: Mapped[str] = mapped_column(Text, default="")
+    new: Mapped[str] = mapped_column(Text, default="")
+    changed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)   # da própria CMDB
+    changed_by: Mapped[str] = mapped_column(String(256), default="")                              # se a CMDB disser
+    by_atalaia: Mapped[bool] = mapped_column(Boolean, default=False, index=True)
+    write_id: Mapped[int | None] = mapped_column(Integer, nullable=True)                          # UcmdbWrite
+
+
+class SiteCheck(Base):
+    """Último resultado de cada site público: o certificado servido em cada IP, visto de dentro e de fora,
+    comparado com a CMDB e com o pedido."""
+
+    __tablename__ = "site_checks"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    name: Mapped[str] = mapped_column(String(512), unique=True, index=True)
+    checked_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    estado: Mapped[str] = mapped_column(String(32), index=True)
+    data: Mapped[dict] = mapped_column(JSON, default=dict)
+
+
+class DomainRecord(Base):
+    """Registo de um domínio (RDAP): validade, registrar, nameservers e estados."""
+
+    __tablename__ = "domain_records"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    domain: Mapped[str] = mapped_column(String(253), unique=True, index=True)
+    checked_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    expires: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    registrar: Mapped[str] = mapped_column(String(256), default="")
+    nameservers: Mapped[list] = mapped_column(JSON, default=list)
+    status: Mapped[list] = mapped_column(JSON, default=list)
+    data: Mapped[dict] = mapped_column(JSON, default=dict)
+    erro: Mapped[str] = mapped_column(Text, default="")
+
+
+class DomainChange(Base):
+    __tablename__ = "domain_changes"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    domain: Mapped[str] = mapped_column(String(253), index=True)
+    detected_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    field: Mapped[str] = mapped_column(String(32))
+    old: Mapped[str] = mapped_column(Text, default="")
+    new: Mapped[str] = mapped_column(Text, default="")
 
 
 class Endpoint(Base):

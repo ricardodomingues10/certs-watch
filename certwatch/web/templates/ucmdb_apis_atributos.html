@@ -1,6 +1,6 @@
 {% extends "base.html" %}
 {% block title %}Atributos das APIs{% endblock %}
-{% block crumb %}Sistema · <a href="/cmdb-final/permissoes">Ligação à UCMDB</a>{% endblock %}
+{% block crumb %}Sistema · <a href="/fontes">Fontes e ligações</a> · <a href="/cmdb-final/permissoes">Permissões da UCMDB</a>{% endblock %}
 {% block page_title %}Atributos das APIs na UCMDB{% endblock %}
 {% block lede %}Os atributos do tipo de CI da lista de APIs, segundo o modelo de classes da UCMDB e o que as APIs existentes têm preenchido. Serve para escolher <span class="mono">CERTWATCH_APIS_FIELD_EXPIRY</span> e <span class="mono">CERTWATCH_APIS_CREATE_DEFAULTS</span> no <span class="mono">.env</span>. Só leitura; valores de atributos sensíveis não são mostrados.{% endblock %}
 {% block actions %}<a class="button" href="/cmdb-final/permissoes/apis?ver=1">Ler de novo</a>{% endblock %}

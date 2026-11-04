@@ -50,7 +50,19 @@ S='secrets/db_password secrets/ucmdb_user secrets/ucmdb_password secrets/admin_p
 sudo chown 10001:10001 $S && sudo chmod 400 $S     # o contentor corre como UID 10001
 ```
 
-Use uma **conta de serviço UCMDB só de leitura**, não uma conta pessoal nem `sysadmin`. Para fazer `printf` de uma password com plicas, use `read -rs P; printf '%s' "$P" > secrets/ucmdb_password; unset P`.
+Use uma **conta de serviço UCMDB só de leitura**, não uma conta pessoal nem `sysadmin`.
+
+**Mudar um segredo depois** (o ficheiro já pertence ao UID 10001, por isso só o `sudo` lhe escreve). O `read` corre na sua shell, sem `sudo`, e o valor não aparece no ecrã, no histórico nem na lista de processos:
+
+```bash
+read -rsp 'Valor: ' S; echo
+printf '%s' "$S" | sudo tee secrets/NOME > /dev/null; unset S
+sudo chown 10001:10001 secrets/NOME && sudo chmod 400 secrets/NOME
+sudo wc -c secrets/NOME          # só o tamanho, para confirmar que não ficou vazio
+docker compose up -d
+```
+
+`sudo read …` não funciona (o `read` tem de correr na shell) e `sudo … > secrets/NOME` também não (quem escreve no ficheiro é a sua shell, sem permissão).
 
 ### 1.2 Confiança TLS (raízes internas)
 
@@ -179,7 +191,7 @@ A lista "API secrets" da CMDB descreve sobretudo segredos de aplicações (clien
 
 Atributos com nomes como *secret*, *password*, *token* ou *key* só são guardados quando o nome descreve o segredo (data, tipo, localização, estado) e o valor é uma data, um sim/não ou um texto curto legível. Segredos expirados há mais de 30 dias dão um alerta de limpeza de gravidade baixa; os que estão a expirar seguem os prazos normais.
 
-## 3.1 Outras CMDB e outros sistemas de tickets (Sistema → Ligações)
+## 3.1 Outras CMDB e outros sistemas de tickets (Sistema → Fontes e ligações → Configurar)
 
 A UCMDB e o SMAX do `.env` continuam a ser o que se usa por omissão: uma instalação que nunca abre esta página
 funciona exatamente como antes. Para outro cliente, com outra infraestrutura, a ligação escolhe-se na interface
@@ -190,7 +202,7 @@ funciona exatamente como antes. Para outro cliente, com outra infraestrutura, a 
 | CMDB (de onde vêm os certificados) | UCMDB · ServiceNow CMDB (`cmdb_ci_certificate`) · base de dados SQL (PostgreSQL, MySQL/MariaDB, SQL Server, Oracle) · qualquer API REST/JSON · ficheiro CSV/Excel em `import/` |
 | Tickets (pedidos de renovação) | SMAX · Jira (Cloud e Data Center) · ServiceNow · GLPI · nenhum |
 
-1. **Sistema → Ligações**, escolher o tipo e carregar em *Mudar de tipo*.
+1. **Sistema → Fontes e ligações**, no cartão da UCMDB ou do SMAX carregar em *Escolher a CMDB* / *Escolher o sistema de tickets*, escolher o tipo e carregar em *Mudar de tipo*.
 2. Preencher o endereço e a credencial (token, API key ou utilizador/palavra-passe). Em *Mapeamento de campos*
    diz-se que coluna/campo é o identificador, o nome (CN), a data de expiração e o emissor; datas ISO,
    dd/mm/aaaa e epoch são reconhecidas sozinhas. Caminhos com pontos (`attrs.name`) servem para JSON aninhado.
@@ -347,7 +359,7 @@ Cada linha da reconciliação mostra o resultado (criado / atualizado / aviso / 
 Em vez do ficheiro exportado pelo script, o certwatch pode ler os certificados diretamente no controlador AVI (REST API, só leitura). Faz o mesmo que o script (login, páginas de `/api/sslkeyandcertificate`, logout) e produz um CSV com as mesmas colunas (Nome, Subject_CommonName, Validity_NotBefore, Validity_NotAfter, SerialNumber em hexadecimal, Issuer_CommonName, SubjectAlternativeName), lido pelo mesmo leitor do ficheiro.
 
 1. Pedir uma conta do AVI **só de leitura** (papel com leitura em SSL/TLS Certificates, no tenant certo).
-2. No servidor: `echo -n 'utilizador' > secrets/avi_user`, `echo -n 'password' > secrets/avi_password`, `sudo chown 10001:10001 secrets/avi_* && sudo chmod 400 secrets/avi_*` (os contentores correm como o UID 10001; com outro dono o segredo não é lido e a página do AVI diz isso).
+2. No servidor, guardar o utilizador e a palavra-passe em `secrets/avi_user` e `secrets/avi_password` como em 1.1 («Mudar um segredo depois»): `read`, `sudo tee`, `chown 10001:10001` e `chmod 400` (os contentores correm como o UID 10001; com outro dono o segredo não é lido e a página do AVI diz isso).
 3. Colocar em `trust/` a raiz (e o intermédio) da CA que emitiu o certificado do controlador. Ao contrário do script, a verificação TLS fica ligada.
 4. No `.env`: `CERTWATCH_AVI_URL=https://<controlador>` (e, se forem outros, o tenant e os endpoints do script). `docker compose up -d`.
 5. **CMDB → Reconciliar e atualizar → AVI → Ler pela API do AVI → Testar e comparar com o ficheiro.** Mostra quantos certificados e CAs leu, e compara com o ficheiro atual pelo nome do objeto: iguais, com diferenças (data de fim, série, CommonName), só no ficheiro, só na API. Também lista as CAs do AVI pela data de fim. Testar não muda a fonte da reconciliação. **Descarregar CSV** dá o ficheiro no formato do script.
@@ -368,7 +380,7 @@ Em vez da exportação das App Registrations, o Atalaia pode ler os segredos e c
 4. Na **Overview** copiar o **Directory (tenant) ID** e o **Application (client) ID**.
 
 **No servidor:**
-1. Guardar o segredo sem o deixar no histórico da shell: `read -rsp 'Client secret: ' S && printf '%s' "$S" > secrets/azure_client_secret && unset S`, depois `sudo chown 10001:10001 secrets/azure_client_secret && sudo chmod 400 secrets/azure_client_secret`.
+1. Guardar o segredo em `secrets/azure_client_secret` como em 1.1 («Mudar um segredo depois»): `read -rsp 'Client secret: ' S; echo`, `printf '%s' "$S" | sudo tee secrets/azure_client_secret > /dev/null; unset S`, `sudo chown 10001:10001` e `sudo chmod 400`. Um client secret do Entra ID tem 40 caracteres (`sudo wc -c`).
 2. No `.env`: `CERTWATCH_AZURE_TENANT_ID=<tenant>`, `CERTWATCH_AZURE_CLIENT_ID=<client>`. O Graph está na internet: se o servidor só sair por proxy, `HTTPS_PROXY` também tem de estar definido. Se o proxy inspecionar o TLS, a CA do proxy vai para `trust/`. É preciso deixar passar `login.microsoftonline.com` e `graph.microsoft.com` (porta 443).
 3. `docker compose up -d`.
 4. **CMDB → Atualizar a CMDB → Azure → Ler pela API do Azure → Diagnosticar a ligação.** Mostra se sai direto ou pelo proxy, se obtém o token e se tem a permissão. Os erros AADSTS mais comuns aparecem com o que fazer (segredo errado ou expirado, tenant ou aplicação errados, Acesso Condicional).
@@ -381,9 +393,20 @@ Em vez da exportação das App Registrations, o Atalaia pode ler os segredos e c
 - O client secret só existe no ficheiro de segredo. Cada teste, exportação e uso fica na auditoria (`azure.testar`, `azure.exportar`, `azure.usar`).
 - O próprio segredo do Atalaia expira: antes disso cria-se outro, substitui-se o ficheiro e faz-se `docker compose up -d`.
 
-### 5.9 Histórico de alterações na CMDB
+### 5.9 Histórico da CMDB
 
-Menu **CMDB → Histórico de alterações**: tudo o que o certwatch escreveu na UCMDB, a partir de uma reconciliação, do Azure ou editado à mão. Para cada escrita: quando, quem, origem, certificado e CI, cada atributo com o valor que tinha e o que foi enviado, o resultado e se a UCMDB o confirmou.
+Menu **CMDB → Histórico da CMDB**, com dois separadores.
+
+**Todas as alterações detetadas** (incluindo as feitas à mão, fora do Atalaia):
+- Em cada leitura da CMDB (a diária, que já existe) guarda-se por CI os atributos lidos e um resumo. Se o resumo mudou desde a leitura anterior, fica registado cada atributo que mudou: o valor antes, o depois, a data da alteração na CMDB (`last_modified_time`) e, se a CMDB disser, **quem**. Também os certificados criados e os que desapareceram (apagados ou fora da TQL).
+- Não há leituras extra: a comparação é em memória e só se guardam as diferenças (poucos KB por dia). Fica 2 anos.
+- As escritas do próprio Atalaia são reconhecidas e marcadas «Atalaia (utilizador)».
+- **Quem**: só aparece se a TQL trouxer o atributo do CI com quem o alterou (na UCMDB normalmente «Updated By»). Acrescente-o ao layout da TQL; se tiver outro nome, indique-o em `CERTWATCH_CMDB_UPDATED_BY_ATTR`. A página diz se está a chegar ou não. No ServiceNow é o `sys_updated_by`.
+- Não contam: atributos técnicos que mudam sozinhos (último acesso…) e atributos que entram ou saem do layout da TQL. Duas alterações ao mesmo atributo entre duas leituras aparecem como uma.
+- A primeira leitura depois de atualizar serve de ponto de partida.
+- Filtros por certificado ou CI, feitas fora ou pelo Atalaia, tipo, atributo, pessoa e período; exportação CSV.
+
+**Feitas pelo Atalaia**: tudo o que o Atalaia Cert escreveu na UCMDB, a partir de uma reconciliação, do Azure ou editado à mão. Para cada escrita: quando, quem, origem, certificado e CI, cada atributo com o valor que tinha e o que foi enviado, o resultado e se a UCMDB o confirmou.
 - Filtros: certificado (nome) ou CI, utilizador, origem (reconciliação, Azure, edição à mão), criadas ou atualizadas, resultado (aplicadas, com aviso, com erro, não aplicadas, na fila) e período.
 - **Histórico deste certificado**: na página de edição de um certificado, e em cada linha (todas as alterações daquele CI).
 - **Exportar (CSV)** exporta o que está filtrado, uma linha por atributo alterado.
@@ -502,6 +525,7 @@ Depois pré-visualiza-se e envia-se:
 - **Alertas**: caixa de alerta com os certificados a N dias ou menos (com os dias restantes) e as tabelas dos internos e externos do intervalo. As tabelas têm as colunas CommonName, ValidTo, Alteração (pedido aberto, vários pedidos ou sem pedido ativo) e Renovação automática.
 - **Reconciliação**: os certificados cujo servidor já apresenta uma validade posterior à da CMDB, com o Excel `Certificados_<Y>_Dias.xlsx` em anexo. O Excel tem a análise de cada certificado: validades, pedidos e Estado_Analise.
 - **Certificados novos na internet, para aprovação**: os certificados encontrados na internet (Certificate Transparency) nos últimos N dias que não estão na CMDB e não foram ignorados na triagem. Ficam separados em "nome desconhecido" e "nome já na CMDB, com outro certificado". O email pede à equipa de Sistemas que aprove ou não o registo de cada um e leva em anexo `Certificados_Internet.xlsx`, com uma coluna "Aprovado (Sim/Não)" para preencher.
+- **Sites públicos e domínios**: uma caixa com os sites que precisam de ação (sem resposta, expirados, dentro ≠ fora, nós diferentes, renovados por instalar), as tabelas da CMDB desatualizada (para atualizar a CMDB), dos pedidos desatualizados (para fechar no SMAX) e dos que não estão na CMDB, e o registo dos domínios com as alterações a verificar. Leva em anexo `Sites_Publicos.xlsx` (folhas Sites, Nós e Domínios). Usa a última verificação de Sites públicos.
 - **Várias partes**: num só email ou um email por parte.
 
 **Editar os emails.** Cada email aparece na página tal como vai ser enviado. Em **Editar este email** escreve-se e apaga-se diretamente no email, como num documento:
@@ -509,7 +533,7 @@ Depois pré-visualiza-se e envia-se:
 - **Tirar uma linha de uma tabela:** tocar na linha (ou apontar com o rato) e carregar no ✕ vermelho. Também se pode selecionar várias linhas e carregar em Delete. Se todas as linhas de uma tabela saírem, a tabela sai também.
 - **Tirar uma coluna:** clicar numa célula da coluna e carregar em **Apagar a coluna**.
 - **Desfazer** (ou Ctrl+Z) volta atrás. **Guardar o email** grava; a pré-visualização e o envio passam a usar exatamente esse texto. **Voltar ao email gerado** descarta as alterações.
-- A saudação e o fecho são os mesmos nos três emails.
+- A saudação e o fecho são os mesmos em todos os emails.
 - O texto editado fica como está, mesmo que os dados mudem. O anexo Excel não muda: para tirar um certificado também do Excel, usa-se **Retirar certificados do email e do Excel**.
 - Segurança: o email editado passa por uma lista de permissões antes de ser guardado e enviado (só texto, tabelas e estilos simples; sem scripts, imagens, links ou eventos). As alterações ficam na auditoria (`relatorio.editar_email`).
 
@@ -552,18 +576,53 @@ A página separa os certificados em:
 
 Para os de renovação manual, calcula as renovações por ano e as horas por equipa em cada fase (as horas por renovação são configuráveis). Mostra também a lista desses certificados e o que falta fazer: donos, regras, canais das equipas, calendários, renovação automática e validação do domínio.
 
-## 7.6 Fontes e chamadas
+## 7.6 Fontes e ligações
 
 Cada sistema com que o Atalaia Cert fala tem o seu ficheiro em `certwatch/fontes/`:
-- `ucmdb.py`, `smax.py`, `avi.py`, `ct.py`, `ssllabs.py`, `servidores.py`, `email.py`, `ca.py`, `azure.py`, `teams.py`, `dns.py` e `acme.py`;
-- cada um tem no topo um dicionário `FONTE` com as chamadas que faz: método, endereço, para quê, se lê, escreve ou envia, se está em uso ou planeada, e a função onde está;
-- a página **Sistema → Fontes e chamadas** lê esses dicionários e mostra tudo, incluindo se a fonte está configurada neste servidor (sem nunca mostrar segredos).
+- `ucmdb.py`, `smax.py`, `avi.py`, `ca.py`, `azure.py`, `ct.py`, `servidores.py`, `dns.py`, `rdap.py`, `ssllabs.py`, `email.py`, `teams.py` e `acme.py`;
+- cada um tem no topo um dicionário `FONTE` com as chamadas que faz: método, endereço, para quê, se lê, escreve ou envia, se está em uso ou planeada, e a função onde está.
 
-As fontes **planeadas** já têm o ficheiro e a lista de chamadas, mas as chamadas ainda não estão implementadas:
-- `teams.py`: o envio de avisos;
-- `dns.py`: o CAA;
-- `acme.py`: a renovação automática e o ARI;
-- `azure.py` e `ca.py`: a leitura pela API em vez de ficheiro.
+A página **Sistema → Fontes e ligações** tem um cartão por fonte:
+- se está ligada neste servidor (sem nunca mostrar segredos);
+- **Testar a ligação**: um teste rápido, só de leitura, passo a passo, que para no primeiro que falha e diz o que fazer (o email liga-se e autentica-se, mas não envia nada). Fica na auditoria (`fonte.testar`);
+- os botões para configurar: escolher a CMDB ou o sistema de tickets, as permissões da UCMDB, o AVI e o Azure pela API (estas páginas já não estão no menu; abrem daqui);
+- **as chamadas** que faz, num painel que se abre.
+
+As fontes **planeadas** já têm o ficheiro e a lista de chamadas, mas as chamadas ainda não estão implementadas: `teams.py` (o envio de avisos), o CAA em `dns.py`, `acme.py` (a renovação automática e o ARI) e `ca.py` (a leitura das CAs pela API).
+
+**Menu.** Regras de pedidos é um separador de **Pedidos SMAX**; Preparar os 47 dias é um separador do **Painel**; «Editar um certificado» abre a partir da página de cada certificado (e em Atualizar a CMDB).
+
+## 7.7 Sites públicos e domínios
+
+Menu **Vigilância → Sites públicos**. Para cada nome externo do inventário (mais `CERTWATCH_SITES_EXTRA`):
+1. resolve-se no **DNS interno** (o do servidor) e no **DNS público** (DNS-over-HTTPS na Cloudflare; se falhar, na Google). Com DNS diferente dentro e fora, o mesmo nome pode apontar para sítios diferentes;
+2. liga-se a **cada IP** (até `CERTWATCH_SITES_MAX_IPS`, 8 por omissão, por visão), sempre com o nome no SNI, e lê-se o certificado. Numa CDN (Cloudflare, Akamai, CloudFront, Azure Front Door…) testa-se só uma amostra;
+3. compara-se: os nós entre si, o que se vê de dentro com o que se vê de fora, o servido com a CMDB e com o pedido aberto.
+
+| Estado | Quer dizer |
+|---|---|
+| Sem resposta | nenhum IP respondeu com um certificado (ou o nome não resolve) |
+| Expirado | há um IP a servir um certificado expirado |
+| Dentro ≠ fora | a internet vê um certificado diferente do que se vê de dentro |
+| Nós diferentes | IPs do mesmo nome com certificados diferentes (um nó esquecido) |
+| Renovado mas não instalado | a CMDB tem uma data mais recente do que a servida |
+| CMDB desatualizada | o servidor já tem um certificado mais recente do que a CMDB |
+| Pedido desatualizado | há um pedido aberto para um certificado já renovado (pode fechar) |
+| Não está na CMDB | servido, mas sem certificado registado |
+| Só no DNS interno | o nome não existe no DNS público |
+| Tudo certo | servidor, CMDB e pedido de acordo |
+
+- A **visão de fora** liga diretamente ao IP público. Se a firewall não deixar voltar a entrar pelo IP público (sem «hairpin»), o site fica com a visão de dentro e uma nota a dizê-lo. Se o servidor sair por proxy, o DNS público vai pelo `HTTPS_PROXY`.
+- É preciso deixar sair para `cloudflare-dns.com` e `dns.google` (HTTPS) e para a porta 443 dos IPs públicos da organização.
+- Corre na execução diária e em **Verificar agora** (cerca de um minuto para 200 nomes). Os problemas aparecem no Painel («O que está mal») e no menu.
+- Só leitura: nada é escrito na CMDB nem no SMAX. Exportação CSV.
+
+**Domínios (RDAP).** Na mesma página, para cada domínio de `CERTWATCH_DOMAINS` (por omissão os de `CERTWATCH_CT_DOMAINS`):
+- a validade do **registo** do domínio (se expirar, caem todos os sites e certificados), o registrar, os nameservers, os estados (incluindo o bloqueio de transferência) e o DNSSEC;
+- o histórico de alterações; mudanças de registrar, nameservers ou estados aparecem como «verificar» (podem ser sequestro do domínio);
+- alerta a `CERTWATCH_DOMAIN_ALERT_DAYS` dias (60 por omissão). Uma consulta por domínio por dia, a `data.iana.org` e ao servidor RDAP do registo (o .pt é o da DNS.pt).
+
+**Reconciliação na execução diária** (opcional): com `CERTWATCH_FINAL_DAILY=true`, a execução diária também gera uma reconciliação (só lê e compara; aplicar na UCMDB continua a ser à mão).
 
 ## 8. Classificação
 

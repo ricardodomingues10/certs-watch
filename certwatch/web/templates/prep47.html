@@ -1,9 +1,14 @@
 {% extends "base.html" %}
 {% block title %}Preparar os 47 dias{% endblock %}
-{% block crumb %}Renovar{% endblock %}
+{% block crumb %}<a href="/">Painel</a>{% endblock %}
 {% block page_title %}Preparar os 47 dias{% endblock %}
 {% block lede %}Os certificados públicos vão durar cada vez menos: 200 dias desde março de 2026, 100 em 2027 e 47 em 2029. Aqui está o que isso muda para os certificados da organização e quanto trabalho de renovação traz a cada equipa.{% endblock %}
 {% block content %}
+<nav class="pn-views" aria-label="Vista do painel">
+  <a href="/">Resumo</a>
+  <a href="/?vista=trabalho">Por semana e mês</a>
+  <a href="/preparar-47-dias" class="on" aria-current="page">Preparar os 47 dias</a>
+</nav>
 <section class="card p47-time" aria-label="Calendário das mudanças">
   <ol class="p47-steps">
     {% for ph in a.phases %}

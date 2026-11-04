@@ -41,6 +41,8 @@ def test_fetch_extracts_only_trusted_fields(env):
     client = httpx.Client(base_url="https://cmdb.test/rest-api", transport=transport(
         [ci("a1", "Portal.exemplo.pt", "2027-01-10T10:00:00.000Z")], seen=seen))
     out = fetch_certificates(env, client)
+    props = out[0].pop("props")                      # só para o histórico de alterações (não para os dados)
+    assert props["custom_responsavel_instalacao"] == "???" and props["serial_number"] == "lixo"
     assert seen["auth"] == {"username": "u", "password": "p", "clientContext": 1}
     assert seen["tql"] == "Certificados_Exemplo"
     assert seen["authz"] == "Bearer tok123"

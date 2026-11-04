@@ -23,7 +23,7 @@ from .config import Settings
 from .db import as_utc, utcnow
 
 PARTS = {"alertas": "Alertas", "reconciliacao": "Reconciliação com o Excel em anexo",
-         "internet": "Certificados novos na internet, para aprovação"}
+         "internet": "Certificados novos na internet, para aprovação", "sites": "Sites públicos e domínios"}
 _EMAIL = re.compile(r"^[A-Za-z0-9.!#$%&'*+/=?^_`{|}~-]+@[A-Za-z0-9-]+(\.[A-Za-z0-9-]+)+$")
 MAX_TO = 20
 
@@ -135,8 +135,17 @@ def internet_rows(session: Session, settings: Settings, dias: int = 0, now: date
     return out
 
 
+def sites_data(session: Session, settings: Settings, now: datetime | None = None) -> dict:
+    """O último resultado de Sites públicos e dos domínios (RDAP), para o email «Sites públicos»."""
+    from . import domains as dm
+    from . import sites as st
+    rows = st.latest(session)
+    return {"rows": rows, "resumo": st.summary(rows),
+            "dominios": dm.overview(session, settings, now) if settings.domains else {"rows": [], "changes": [], "alertas": 0}}
+
+
 def select_rows(rows: list[dict], desde: int, ate: int, excluded: set[str] | None = None,
-                internet: list[dict] | None = None) -> dict:
+                internet: list[dict] | None = None, sites: dict | None = None) -> dict:
     excluded = excluded or set()
     window = [r for r in rows if desde <= r["dias"] <= ate]
     renewed = [r for r in rows if r["cmdb_atualizada"] == "Não"]
@@ -144,7 +153,9 @@ def select_rows(rows: list[dict], desde: int, ate: int, excluded: set[str] | Non
     internet = internet or []
     return {"janela": pick(window), "renovados": pick(renewed),
             "todos_janela": window, "todos_renovados": renewed,
-            "internet": [r for r in internet if r["key"] not in excluded], "todos_internet": internet}
+            "internet": [r for r in internet if r["key"] not in excluded], "todos_internet": internet,
+            "sites": sites or {"rows": [], "resumo": {"total": 0, "counts": {}, "problemas": 0, "quando": None},
+                               "dominios": {"rows": [], "changes": [], "alertas": 0}}}
 
 
 # ------------------------------------------------------------------ HTML (estilos inline, como no workflow)
@@ -213,9 +224,24 @@ DEFAULT_TEXTS = {
     "internet.sem": "**Certificados novos na internet:** {periodo} não foram encontrados certificados emitidos para os "
                     "domínios da organização que não constem da CMDB.",
     "internet.anexo": "Segue em anexo o ficheiro Excel com o detalhe de cada certificado.",
+    "sites.assunto": "Sites públicos | {n_sites_acao} a precisar de ação, {n_cmdb_desat} CMDB e {n_pedidos_desat} pedido(s) por atualizar",
+    "sites.assunto_sem": "Sites públicos | servidores, CMDB e pedidos de acordo",
+    "sites.intro": "Verificámos o certificado servido pelos {n_sites} sites públicos da organização, em cada endereço IP, "
+                   "visto de dentro da rede e da internet, e comparámo-lo com a CMDB e com os pedidos do SMAX "
+                   "(verificação de {verificado}).",
+    "sites.acao_titulo": "⚠ Sites que precisam de ação",
+    "sites.acao_texto": "Sem resposta, certificado expirado, a internet a ver outro certificado, nós com certificados "
+                        "diferentes ou certificado renovado ainda por instalar:",
+    "sites.sem_acao": "**Sites que precisam de ação:** nenhum. Todos os sites respondem com o certificado esperado.",
+    "sites.cmdb": "Certificados já renovados no servidor que a CMDB ainda não reflete (atualizar a CMDB):",
+    "sites.pedidos": "Pedidos abertos para certificados que já foram renovados (podem ser fechados no SMAX):",
+    "sites.sem_cmdb": "Sites servidos com um certificado que não está na CMDB:",
+    "sites.dominios": "Registo dos domínios da organização (RDAP): validade, registrar e proteção contra transferência.",
+    "sites.dominios_alteracoes": "**Atenção:** o registo destes domínios mudou. Confirme que as alterações foram pedidas:",
+    "sites.anexo": "Segue em anexo o ficheiro Excel com todos os sites, cada IP e as datas no servidor, na CMDB e no pedido.",
 }
 TEXT_GROUPS = {"comum": "Em todos os emails", "alertas": "Alertas", "reconciliacao": "Reconciliação",
-               "internet": "Certificados novos na internet"}
+               "internet": "Certificados novos na internet", "sites": "Sites públicos e domínios"}
 TEXT_LABELS = {
     "comum.saudacao": "Saudação", "comum.inicio": "Texto a seguir à saudação (opcional)",
     "comum.fim": "Texto antes do fecho (opcional)", "comum.fecho": "Fecho", "comum.assinatura": "Assinatura",
@@ -230,6 +256,12 @@ TEXT_LABELS = {
     "internet.intro": "Introdução e pedido de aprovação", "internet.desconhecidos": "Antes da tabela dos nomes desconhecidos",
     "internet.diferentes": "Antes da tabela dos nomes já na CMDB", "internet.sem": "Texto quando não há certificados",
     "internet.anexo": "Texto sobre o anexo",
+    "sites.assunto": "Assunto, quando há algo a fazer", "sites.assunto_sem": "Assunto, quando está tudo de acordo",
+    "sites.intro": "Introdução", "sites.acao_titulo": "Título da caixa de ação", "sites.acao_texto": "Texto da caixa de ação",
+    "sites.sem_acao": "Texto quando nenhum site precisa de ação", "sites.cmdb": "Antes da tabela da CMDB desatualizada",
+    "sites.pedidos": "Antes da tabela dos pedidos desatualizados", "sites.sem_cmdb": "Antes da tabela dos que não estão na CMDB",
+    "sites.dominios": "Antes da tabela dos domínios", "sites.dominios_alteracoes": "Antes das alterações aos domínios",
+    "sites.anexo": "Texto sobre o anexo",
 }
 TEXT_VARS = {
     "saudacao": "Bom dia / Boa tarde, conforme a hora", "assinatura": "assinatura do .env (CERTWATCH_REPORT_SIGNATURE)",
@@ -238,6 +270,9 @@ TEXT_VARS = {
     "n_internos": "n.º de internos no intervalo", "n_externos": "n.º de externos no intervalo",
     "n_renovados": "n.º de renovados por refletir na CMDB", "n_internet": "n.º de certificados novos na internet",
     "periodo": "\"nos últimos 30 dias\" ou \"até à data\"", "data": "data de hoje (DD/MM/AAAA)",
+    "n_sites": "n.º de sites públicos verificados", "n_sites_acao": "n.º de sites que precisam de ação",
+    "n_cmdb_desat": "n.º de sites com a CMDB desatualizada", "n_pedidos_desat": "n.º de sites com pedidos desatualizados",
+    "n_dominios_alerta": "n.º de domínios a expirar ou alterados", "verificado": "data da última verificação dos sites",
 }
 MAX_TEXT = 3000
 _VAR = re.compile(r"\{(\w+)\}")
@@ -262,7 +297,23 @@ def text_context(sel: dict, desde: int, ate: int, alert_days: int, ct_dias: int,
             "n_internos": sum(1 for r in rel if r["scope"] == "interno"),
             "n_externos": sum(1 for r in rel if r["scope"] != "interno"),
             "n_renovados": len(sel["renovados"]), "n_internet": len(sel.get("internet") or []),
-            "periodo": f"nos últimos {ct_dias} dias" if ct_dias > 0 else "até à data", "data": now.strftime("%d/%m/%Y")}
+            "periodo": f"nos últimos {ct_dias} dias" if ct_dias > 0 else "até à data", "data": now.strftime("%d/%m/%Y"),
+            **_sites_ctx(sel.get("sites"), now)}
+
+
+ACTION_STATES = ("sem_resposta", "expirado", "fora_diferente", "nos_diferentes", "renovado_nao_instalado")
+
+
+def _sites_ctx(sites: dict | None, now: datetime) -> dict:
+    rows = (sites or {}).get("rows") or []
+    has = lambda r, f: f in (r.get("flags") or [])  # noqa: E731
+    when = (sites or {}).get("resumo", {}).get("quando")
+    return {"n_sites": len(rows), "n_sites_acao": sum(1 for r in rows if r["estado"] in ACTION_STATES),
+            "n_cmdb_desat": sum(1 for r in rows if has(r, "cmdb_desatualizada")),
+            "n_pedidos_desat": sum(1 for r in rows if has(r, "pedido_desatualizado")),
+            "n_dominios_alerta": ((sites or {}).get("dominios") or {}).get("alertas", 0),
+            "verificado": as_utc(when).astimezone(now.tzinfo).strftime("%d/%m/%Y %H:%M") if when and now.tzinfo else
+                          (when.strftime("%d/%m/%Y %H:%M") if when else "ainda não feita")}
 
 
 def fill(template: str, ctx: dict) -> str:
@@ -343,11 +394,162 @@ def internet_html(sel: dict, ct_dias: int, texts: dict | None = None, ctx: dict 
             f"{_p(texts, 'internet.anexo', ctx)}")
 
 
+def _iso_day(v) -> str:
+    if not v:
+        return "—"
+    if isinstance(v, str):
+        try:
+            v = datetime.fromisoformat(v)
+        except ValueError:
+            return _e(v)
+    return v.strftime("%d/%m/%Y")
+
+
+def _simple_table(head: list[str], rows: list[list]) -> str:
+    if not rows:
+        return "<p><em>Não foram identificados sites nesta categoria.</em></p>"
+    h = "".join(f"<th {_TH}>{_e(x)}</th>" for x in head)
+    b = "".join("<tr>" + "".join(f"<td {_TD}>{_e(c)}</td>" for c in r) + "</tr>" for r in rows)
+    return ('<table style="border-collapse:collapse;font-family:Arial,sans-serif;font-size:14px;">'
+            f"<thead><tr>{h}</tr></thead><tbody>{b}</tbody></table>")
+
+
+def sites_html(sel: dict, texts: dict | None = None, ctx: dict | None = None) -> str:
+    from .sites import NOTES, STATES
+    texts = texts or DEFAULT_TEXTS
+    data = sel.get("sites") or {}
+    ctx = ctx or text_context(sel, 0, 0, 0, 0, utcnow(), "")
+    rows = data.get("rows") or []
+    has = lambda r, f: f in (r.get("flags") or [])  # noqa: E731
+    acao = [r for r in rows if r["estado"] in ACTION_STATES]
+
+    def nodes(r):
+        out = []
+        for n in r.get("nos") or []:
+            when = _iso_day(n.get("not_after")) if n.get("sha256") else ("sem IPv6" if n["status"] == "sem_ipv6" else n["status"])
+            out.append(f"{n['ip']} ({'/'.join(n['vistas'])}): {when}")
+        return "; ".join(out) or "—"
+    out = _p(texts, "sites.intro", ctx)
+    if acao:
+        out += ('<div style="border:2px solid #b91c1c;background:#fef2f2;padding:12px;margin:16px 0;">'
+                f"<p><strong>{_t(texts, 'sites.acao_titulo', ctx)}</strong></p>{_p(texts, 'sites.acao_texto', ctx)}"
+                + _simple_table(["Site", "Situação", "Servido até", "CMDB", "IPs (visto de)"],
+                                [[r["name"], "; ".join(STATES[f][0] for f in r.get("flags") or [] if f in ACTION_STATES)
+                                  + "".join(f" ({NOTES[x]})" for x in r.get("notas") or [] if x == "fora_indisponivel"),
+                                  _iso_day((r.get("servido") or {}).get("not_after")),
+                                  _iso_day((r.get("cmdb") or {}).get("valid_to")), nodes(r)] for r in acao]) + "</div>")
+    else:
+        out += ('<div style="border:1px solid #bfbfbf;background:#f7f7f7;padding:10px;margin:16px 0;">'
+                f"{_t(texts, 'sites.sem_acao', ctx)}</div>")
+    cmdb = [r for r in rows if has(r, "cmdb_desatualizada")]
+    if cmdb:
+        out += _p(texts, "sites.cmdb", ctx) + _simple_table(
+            ["Site", "Na CMDB", "No servidor", "Emissor", "Série"],
+            [[r["name"], _iso_day((r.get("cmdb") or {}).get("valid_to")), _iso_day((r.get("servido") or {}).get("not_after")),
+              (r.get("servido") or {}).get("emissor", ""), (r.get("servido") or {}).get("serial", "")] for r in cmdb])
+    ped = [r for r in rows if has(r, "pedido_desatualizado")]
+    if ped:
+        lines = []
+        for r in ped:
+            for t in r.get("pedidos_abertos") or []:
+                if t["id"] in (r.get("pedidos_desatualizados") or []):
+                    lines.append([r["name"], t["id"], t.get("fase") or "", _iso_day(t.get("expira")),
+                                  _iso_day((r.get("servido") or {}).get("not_after"))])
+        out += _p(texts, "sites.pedidos", ctx) + _simple_table(
+            ["Site", "Pedido", "Fase", "Data no pedido", "Já servido até"], lines)
+    sem = [r for r in rows if has(r, "sem_cmdb")]
+    if sem:
+        out += _p(texts, "sites.sem_cmdb", ctx) + _simple_table(
+            ["Site", "Servido até", "Emissor"],
+            [[r["name"], _iso_day((r.get("servido") or {}).get("not_after")), (r.get("servido") or {}).get("emissor", "")]
+             for r in sem])
+    dom = data.get("dominios") or {}
+    if dom.get("rows"):
+        out += _p(texts, "sites.dominios", ctx) + _simple_table(
+            ["Domínio", "Registo expira", "Dias", "Registrar", "Transferência bloqueada"],
+            [[d["domain"], _iso_day(d["expires"]) if d.get("expires") else (d.get("erro") or "—"),
+              d["dias"] if d.get("dias") is not None else "—", d.get("registrar") or "—", "Sim" if d.get("bloqueado") else "Não"]
+             for d in dom["rows"]])
+        sens = [c for c in dom.get("changes") or [] if c.get("sensivel")]
+        if sens:
+            out += _p(texts, "sites.dominios_alteracoes", ctx) + _simple_table(
+                ["Domínio", "O quê", "Antes", "Agora", "Detetado"],
+                [[c["domain"], c["campo"], c["old"] or "—", c["new"] or "—", _iso_day(c["quando"])] for c in sens])
+    return out + _p(texts, "sites.anexo", ctx)
+
+
+SITES_EXCEL = "Sites_Publicos.xlsx"
+
+
+def sites_excel(sel: dict) -> bytes:
+    from openpyxl import Workbook
+    from openpyxl.cell import WriteOnlyCell
+    from openpyxl.styles import Font, PatternFill
+    from .sites import NOTES, STATES
+    data = sel.get("sites") or {}
+    wb = Workbook(write_only=True)
+
+    def sheet(title, head, rows):
+        ws = wb.create_sheet(title)
+        hc = []
+        for c in head:
+            cell = WriteOnlyCell(ws, value=c)
+            cell.font, cell.fill = Font(bold=True), PatternFill("solid", fgColor="FFF2F2F2")
+            hc.append(cell)
+        ws.append(hc)
+        for r in rows:
+            cells = []
+            for v in r:
+                if isinstance(v, str) and len(v) >= 10 and v[4] == "-" and v[7] == "-" and "T" in v:
+                    try:
+                        v = datetime.fromisoformat(v).date()
+                    except ValueError:
+                        pass
+                cell = WriteOnlyCell(ws, value=v)
+                if isinstance(v, date):
+                    cell.number_format = "DD/MM/YYYY"
+                elif isinstance(v, str):
+                    cell.data_type = "s"
+                cells.append(cell)
+            ws.append(cells)
+
+    rows = []
+    for r in data.get("rows") or []:
+        sv, ped = r.get("servido") or {}, r.get("pedido") or {}
+        rows.append([r["name"], STATES.get(r["estado"], (r["estado"],))[0],
+                     "; ".join(STATES[f][0] for f in r.get("flags") or [] if f in STATES),
+                     sv.get("not_after"), r.get("dias"), sv.get("emissor", ""), sv.get("serial", ""),
+                     (r.get("cmdb") or {}).get("valid_to"), ped.get("id", ""), ped.get("fase", ""), ped.get("expira"),
+                     ", ".join(r.get("pedidos_desatualizados") or []), ", ".join((r.get("fora") or {}).get("ips") or []),
+                     ", ".join((r.get("dentro") or {}).get("ips") or []), r.get("cdn", ""), r.get("dono", ""),
+                     " ".join(NOTES.get(x, x) for x in r.get("notas") or [])])
+    sheet("Sites", ["Site", "Estado", "Todas as marcas", "Servido_Ate", "Dias", "Emissor", "Serie", "CMDB_Ate", "Pedido",
+                    "Fase", "Pedido_Data", "Pedidos_Desatualizados", "IPs_Publicos", "IPs_Internos", "CDN", "Equipa", "Notas"], rows)
+    nodes = []
+    for r in data.get("rows") or []:
+        for n in r.get("nos") or []:
+            nodes.append([r["name"], n["ip"], "/".join(n["vistas"]), n["status"], n.get("not_after"), n.get("serial", ""),
+                          n.get("emissor", ""), n.get("tls", ""), n.get("erro", "")])
+    sheet("Nos", ["Site", "IP", "Visto_De", "Resultado", "Servido_Ate", "Serie", "Emissor", "TLS", "Erro"], nodes)
+    dom = data.get("dominios") or {}
+    if dom.get("rows"):
+        sheet("Dominios", ["Dominio", "Registo_Expira", "Dias", "Registrar", "Nameservers", "Estados", "Transferencia_Bloqueada", "Erro"],
+              [[d["domain"], as_utc(d["expires"]).date() if d.get("expires") else None, d.get("dias"), d.get("registrar"),
+                ", ".join(d.get("nameservers") or []), ", ".join(d.get("status") or []), "Sim" if d.get("bloqueado") else "Não",
+                d.get("erro") or ""] for d in dom["rows"]])
+    buf = io.BytesIO()
+    wb.save(buf)
+    return buf.getvalue()
+
+
 def subject_for(part: str, sel: dict, desde: int, ate: int, alert_days: int, texts: dict | None = None,
                 ct_dias: int = 0, now: datetime | None = None) -> str:
     texts = texts or DEFAULT_TEXTS
     ctx = text_context(sel, desde, ate, alert_days, ct_dias, now or utcnow(), "")
-    if part == "internet":
+    if part == "sites":
+        key = "sites.assunto" if (ctx["n_sites_acao"] or ctx["n_cmdb_desat"] or ctx["n_pedidos_desat"]
+                                  or ctx["n_dominios_alerta"]) else "sites.assunto_sem"
+    elif part == "internet":
         key = "internet.assunto" if ctx["n_internet"] else "internet.assunto_sem"
     elif part in ("alertas", "ambos"):
         key = "alertas.assunto" if ctx["n_alerta"] else "alertas.assunto_sem_alerta"
@@ -357,8 +559,8 @@ def subject_for(part: str, sel: dict, desde: int, ate: int, alert_days: int, tex
     return re.sub(r"\s+", " ", fill(texts.get(key, ""), ctx)).strip()[:250] or "Certificados"
 
 
-SECTIONS = ("inicio", "alertas", "reconciliacao", "internet", "fim")
-PARTS = ("alertas", "reconciliacao", "internet")
+SECTIONS = ("inicio", "alertas", "reconciliacao", "internet", "sites", "fim")
+PARTS = ("alertas", "reconciliacao", "internet", "sites")
 
 
 def _parts(part: str | list[str]) -> list[str]:
@@ -378,6 +580,8 @@ def email_sections(part: str | list[str], sel: dict, desde: int, ate: int, alert
             out[p] = reconciliation_html(sel, texts, ctx)
         elif p == "internet":
             out[p] = internet_html(sel, ct_dias, texts, ctx)
+        elif p == "sites":
+            out[p] = sites_html(sel, texts, ctx)
     closing = "<br>".join(x for x in (_t(texts, "comum.fecho", ctx), _t(texts, "comum.assinatura", ctx)) if x.strip())
     out["fim"] = _p(texts, "comum.fim", ctx) + (f"<p>{closing}</p>" if closing else "")
     return out

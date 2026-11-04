@@ -22,6 +22,7 @@
 <nav class="pn-views" aria-label="Vista do painel">
   <a href="/" class="{{ 'on' if vista != 'trabalho' }}"{% if vista != 'trabalho' %} aria-current="page"{% endif %}>Resumo</a>
   <a href="/?vista=trabalho" class="{{ 'on' if vista == 'trabalho' }}"{% if vista == 'trabalho' %} aria-current="page"{% endif %}>Por semana e mês <span class="n">{{ n_trab }}</span></a>
+  <a href="/preparar-47-dias">Preparar os 47 dias</a>
 </nav>
 {% if vista != 'trabalho' %}
 {#- organizar os cartões: só com JavaScript e em ecrãs largos; a disposição fica guardada para cada pessoa -#}
@@ -136,6 +137,8 @@
 {% if expsp %}{% set _ = mal.append({'n': expsp|length, 'tom': 'bad', 't': 'Expirados sem pedido', 'd': expsp[:3]|map(attribute='nome')|join(', '), 'href': '#por-abrir'}) %}{% endif %}
 {% if k.atrasados %}{% set _ = mal.append({'n': k.atrasados, 'tom': 'bad', 't': 'Pedidos com o certificado já expirado', 'd': 'pedidos abertos com certificado já expirado', 'href': '/pedidos?vista=atrasados'}) %}{% endif %}
 {% if k.nao_instalados %}{% set _ = mal.append({'n': k.nao_instalados, 'tom': 'bad', 't': 'Renovados mas não instalados', 'd': 'o servidor ainda apresenta o certificado antigo', 'href': '/findings?tipo=RENOVACAO_NAO_INSTALADA'}) %}{% endif %}
+{% if sites_mal and sites_mal.n %}{% set _ = mal.append({'n': sites_mal.n, 'tom': 'bad', 't': 'Sites públicos com problemas', 'd': 'sem resposta, dentro ≠ fora, nós diferentes ou por instalar: ' ~ sites_mal.nomes|join(', '), 'href': '/sites-publicos?estado=problemas'}) %}{% endif %}
+{% if dom_mal and dom_mal.n %}{% set _ = mal.append({'n': dom_mal.n, 'tom': 'bad', 't': 'Domínios a expirar ou alterados', 'd': (dom_mal.nomes|join(', ')) or 'registrar, nameservers ou estados mudaram', 'href': '/sites-publicos#dominios'}) %}{% endif %}
 {% if s.ep_failing %}{% set _ = mal.append({'n': s.ep_failing, 'tom': '', 't': 'Servidores com falha nos testes', 'd': 'cada teste diz como se corrige', 'href': '/testes?estado=falha'}) %}{% endif %}
 {% set ncripto = nis.cripto.values()|sum %}
 {% if ncripto %}{% set _ = mal.append({'n': ncripto, 'tom': '', 't': 'Problemas de criptografia', 'd': 'chaves fracas, TLS antigo, cadeias inválidas ou autoassinados', 'href': '/findings'}) %}{% endif %}

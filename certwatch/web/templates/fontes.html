@@ -1,40 +1,41 @@
 {% extends "base.html" %}
-{% block title %}Fontes e chamadas{% endblock %}
+{% block title %}Fontes e ligações{% endblock %}
 {% block crumb %}Sistema{% endblock %}
-{% block page_title %}Fontes e chamadas{% endblock %}
-{% block lede %}Cada sistema com que o Atalaia Cert fala, como fala (API, ficheiro, TLS, email) e cada chamada que faz. Cada fonte tem o seu ficheiro em <span class="mono">certwatch/fontes/</span>.{% endblock %}
+{% block page_title %}Fontes e ligações{% endblock %}
+{% block lede %}Cada sistema com que o Atalaia Cert fala: se está ligado, um teste rápido à ligação e as chamadas que faz. A configuração de cada um abre a partir do seu cartão.{% endblock %}
 {% block content %}
 <div class="fo-sum">
-  <span class="fo-pill"><b>{{ fontes|length }}</b> fontes</span>
-  <span class="fo-pill"><b>{{ fontes|selectattr('ligada')|list|length }}</b> ligadas aqui</span>
+  <span class="fo-pill"><b>{{ fontes|selectattr('ligada')|list|length }}</b> de {{ fontes|length }} ligadas</span>
   <span class="fo-pill"><b>{{ totals.em_uso }}</b> chamadas em uso</span>
   <span class="fo-pill"><b>{{ totals.escrita }}</b> de escrita</span>
   <span class="fo-pill p-plan"><b>{{ totals.planeadas }}</b> planeadas</span>
 </div>
-<nav class="rc-chipbar" aria-label="Ir para a fonte">{% for f in fontes %}<a class="rc-fchip" href="#f-{{ f.id }}">{{ f.nome.split(' (')[0] }}</a>{% endfor %}</nav>
-{% for f in fontes %}
-<section class="card flush fo-card" id="f-{{ f.id }}" aria-labelledby="h-{{ f.id }}">
-  <div class="fo-head">
-    <div>
-      <h2 id="h-{{ f.id }}">{{ f.nome }} <span class="tag tag-off">{{ f.tipo }}</span> <span class="tag {{ 'tag-run' if 'planead' in f.estado and not f.estado.startswith('em uso') else 'tag-acc' }}">{{ f.estado }}</span></h2>
-      <p class="small">{{ f.para }}</p>
-    </div>
-    <div class="fo-state {{ 'is-on' if f.ligada else 'is-off' }}"><i aria-hidden="true"></i><span><b>{{ 'Ligada' if f.ligada else 'Não ligada' }}</b><span class="small muted">{{ f.detalhe }}</span></span></div>
+<div class="fo-grid">
+{% for f in fontes %}{% set res = resultados.get(f.id) %}
+<section class="card fo-card{{ ' is-tested' if res }}" id="f-{{ f.id }}" aria-labelledby="h-{{ f.id }}">
+  <div class="fo-top">
+    <h2 id="h-{{ f.id }}">{{ f.nome }}</h2>
+    <span class="fo-state {{ 'is-on' if f.ligada else 'is-off' }}" title="{{ f.detalhe }}"><i aria-hidden="true"></i>{{ 'Ligada' if f.ligada else 'Não ligada' }}</span>
   </div>
-  <div class="scroll"><table class="fo-table">
-    <thead><tr><th>Método</th><th>Endereço</th><th>Para quê</th><th>Acesso</th><th>Estado</th><th class="opt">Código</th></tr></thead>
-    <tbody>{% for c in f.chamadas %}
-      <tr class="{{ 'faded' if c.estado == 'planeado' }}">
-        <td><span class="fo-m m-{{ c.metodo|lower }}">{{ c.metodo }}</span></td>
-        <td class="mono small">{{ c.endereco }}</td>
-        <td class="small">{{ c.para }}</td>
-        <td><span class="tag {{ 'tag-err' if c.acesso == 'escrita' else 'tag-off' }}">{{ c.acesso }}</span></td>
-        <td class="small">{{ c.estado }}</td>
-        <td class="opt mono small">{{ c.onde }}</td>
-      </tr>{% endfor %}
-    </tbody>
-  </table></div>
-  <p class="small muted fo-cfg">Configuração: {% for x in f.config %}<span class="mono">{{ x }}</span>{{ ', ' if not loop.last }}{% endfor %} · <span class="mono">{{ f.modulo }}</span></p>
+  <p class="small">{{ f.para }}</p>
+  <p class="small muted fo-meta">{{ f.tipo }} · {{ f.detalhe }}</p>
+  {% if res %}
+  <ol class="fo-steps" aria-label="Resultado do teste">
+    {% for x in res %}<li class="{{ 'is-ok' if x.ok else 'is-bad' }}"><i aria-hidden="true">{{ '✓' if x.ok else '✕' }}</i><span><b>{{ x.passo }}</b> <span class="small">{{ x.detalhe }}</span>{% if x.fazer %}<span class="small muted">{{ x.fazer }}</span>{% endif %}</span></li>{% endfor %}
+  </ol>
+  {% endif %}
+  <div class="fo-acts">
+    {% if f.id in testaveis %}<form method="post" action="/fontes/{{ f.id }}/testar#f-{{ f.id }}"><input type="hidden" name="csrf" value="{{ csrf }}"><button class="small-btn{{ ' primary' if not res }}">{{ 'Testar outra vez' if res else 'Testar a ligação' }}</button></form>{% endif %}
+    {% for href, label in config.get(f.id, []) %}<a class="button small-btn" href="{{ href }}">{{ label }}</a>{% endfor %}
+  </div>
+  <details class="fo-calls"><summary>{{ f.chamadas|length }} chamada{{ 's' if f.chamadas|length != 1 }}{% set np = f.chamadas|selectattr('estado', 'equalto', 'planeado')|list|length %}{% if np %} · {{ np }} planeada{{ 's' if np != 1 }}{% endif %}{% if f.chamadas|selectattr('acesso', 'equalto', 'escrita')|list %} · com escrita{% endif %}</summary>
+    <ul>{% for c in f.chamadas %}
+      <li class="{{ 'faded' if c.estado == 'planeado' }}"><span class="fo-m m-{{ c.metodo|lower }}">{{ c.metodo }}</span> <span class="mono small">{{ c.endereco }}</span>
+        <div class="small">{{ c.para }} · <span class="tag {{ 'tag-err' if c.acesso == 'escrita' else 'tag-off' }}">{{ c.acesso }}</span> {{ c.estado }}</div>
+        <div class="small muted mono">{{ c.onde }}</div></li>{% endfor %}</ul>
+    <p class="small muted">Configuração: {% for x in f.config %}<span class="mono">{{ x }}</span>{{ ', ' if not loop.last }}{% endfor %} · <span class="mono">{{ f.modulo }}</span></p>
+  </details>
 </section>
 {% endfor %}
+</div>
 {% endblock %}

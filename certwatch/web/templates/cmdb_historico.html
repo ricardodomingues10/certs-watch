@@ -1,12 +1,16 @@
 {% extends "base.html" %}
-{% block title %}Histórico de alterações na CMDB{% endblock %}
+{% block title %}Histórico da CMDB{% endblock %}
 {% block crumb %}CMDB{% endblock %}
-{% block page_title %}Histórico de alterações na CMDB{% endblock %}
-{% block lede %}Tudo o que o Atalaia Cert escreveu na UCMDB: certificados e APIs criados ou atualizados a partir de uma reconciliação, do Azure ou editados à mão. Para cada um, quem, quando, o valor que tinha, o que foi enviado e se a UCMDB o confirmou.{% endblock %}
+{% block page_title %}Histórico da CMDB{% endblock %}
+{% block lede %}Feitas pelo Atalaia: tudo o que o Atalaia Cert escreveu na UCMDB: certificados e APIs criados ou atualizados a partir de uma reconciliação, do Azure ou editados à mão. Para cada um, quem, quando, o valor que tinha, o que foi enviado e se a UCMDB o confirmou.{% endblock %}
 {% block actions %}
 <a class="button" href="/cmdb/historico.csv{{ '?' ~ qs if qs }}">Exportar (CSV)</a>
 {% endblock %}
 {% block content %}
+<nav class="tabs" aria-label="Vistas">
+  <a href="/cmdb/historico" class="on" aria-current="page">Feitas pelo Atalaia</a>
+  <a href="/cmdb/historico/fora">Todas as alterações detetadas</a>
+</nav>
 <form class="filters" method="get" action="/cmdb/historico">
   <input type="search" name="q" value="{{ f.q }}" placeholder="certificado (nome) ou CI" aria-label="Certificado ou CI">
   {% if f.ci %}<input type="hidden" name="ci" value="{{ f.ci }}">{% endif %}

@@ -320,7 +320,7 @@ def test_pagina_ligacoes(env, tmp_path):
     with TestClient(app) as c:
         page = c.get("/ligacoes", auth=AUTH)
         assert page.status_code == 200 and "UCMDB" in page.text and "Sistema de tickets" in page.text
-        assert "Ligações" in c.get("/", auth=AUTH).text
+        assert "Fontes e ligações" in c.get("/", auth=AUTH).text and "/ligacoes#cmdb" in c.get("/fontes", auth=AUTH).text
         page = c.get("/ligacoes?cmdb=sql", auth=AUTH).text
         assert 'name="f_consulta"' in page
         token = c.cookies["cw_csrf"]

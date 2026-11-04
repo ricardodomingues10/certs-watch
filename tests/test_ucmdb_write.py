@@ -253,7 +253,7 @@ def test_date_format_fallback_and_history(setup):
         assert csvt.splitlines()[0].startswith("Quando;Quem;Origem") and "renovado.exemplo.pt" in csvt and "erro" in csvt
         # histórico de alterações na CMDB: filtros, por certificado e exportação filtrada
         page = c.get("/cmdb/historico", auth=AUTH).text
-        assert "Histórico de alterações na CMDB" in page and "<b>3</b> registos" in page and "1 com erro" in page
+        assert "Histórico da CMDB" in page and "<b>3</b> registos" in page and "1 com erro" in page
         assert "renovado.exemplo.pt" in page and "novo-avi.exemplo.pt" in page
         page = c.get("/cmdb/historico?resultado=erro", auth=AUTH).text
         assert "novo-avi.exemplo.pt" in page and "renovado.exemplo.pt" not in page

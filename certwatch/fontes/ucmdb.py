@@ -174,6 +174,8 @@ def fetch_certificates(settings: Settings, client: httpx.Client | None = None) -
             "valid_to": props.get("valid_to"),
             "issuer": (props.get("issuer") or "").strip(),
             "issuer_name": (props.get("issuer_name") or "").strip(),
+            # todos os atributos do layout (sem os que podem ter segredos), para o histórico de alterações
+            "props": {k: v for k, v in props.items() if not SENSITIVE_KEY.search(k) or DESCRIPTOR_KEY.search(k)},
         })
     return out
 

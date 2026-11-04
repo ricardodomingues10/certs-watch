@@ -6,6 +6,7 @@
 {% block actions %}
 <a class="button" href="/relatorio/{{ rep.id }}/excel">Excel da reconciliação</a>
 <a class="button" href="/relatorio/{{ rep.id }}/excel?parte=internet">Excel da internet</a>
+<a class="button" href="/relatorio/{{ rep.id }}/excel?parte=sites">Excel dos sites</a>
 <a class="button" href="/relatorio">Novo relatório</a>
 {% endblock %}
 {% block content %}
@@ -19,6 +20,7 @@
     <span><b>{{ sel.janela|rejectattr('scope', 'equalto', 'interno')|list|length }}</b> externos</span>
     <span><b>{{ sel.renovados|length }}</b> renovados no servidor e por refletir na CMDB</span>
     <span><b>{{ sel.internet|length }}</b> novos na internet por aprovar</span>
+    <span><b>{{ sites_ctx.n_sites_acao }}</b> sites públicos a precisar de ação</span>
     {% if excl %}<span><b>{{ excl|length }}</b> retirados por si</span>{% endif %}
   </div>
 </section>
@@ -26,9 +28,9 @@
 
 <h2 id="previsao">Os emails</h2>
 <p class="small muted">É isto que vai ser enviado. Para mudar, carregue em <b>Editar este email</b> e escreva ou apague diretamente no email.</p>
-{% set titulos = {'alertas': 'Alertas', 'reconciliacao': 'Reconciliação', 'internet': 'Certificados novos na internet (aprovação)'} %}
-{% set anexos = {'reconciliacao': ('/relatorio/' ~ rep.id ~ '/excel', 'Certificados_' ~ rep.ate ~ '_Dias.xlsx'), 'internet': ('/relatorio/' ~ rep.id ~ '/excel?parte=internet', INTERNET_EXCEL)} %}
-{% for k in ['alertas', 'reconciliacao', 'internet'] %}
+{% set titulos = {'alertas': 'Alertas', 'reconciliacao': 'Reconciliação', 'internet': 'Certificados novos na internet (aprovação)', 'sites': 'Sites públicos e domínios'} %}
+{% set anexos = {'reconciliacao': ('/relatorio/' ~ rep.id ~ '/excel', 'Certificados_' ~ rep.ate ~ '_Dias.xlsx'), 'internet': ('/relatorio/' ~ rep.id ~ '/excel?parte=internet', INTERNET_EXCEL), 'sites': ('/relatorio/' ~ rep.id ~ '/excel?parte=sites', SITES_EXCEL)} %}
+{% for k in ['alertas', 'reconciliacao', 'internet', 'sites'] %}
 <section class="card email-card" id="email-{{ k }}" data-email="{{ k }}" data-editor="/relatorio/{{ rep.id }}/editor/{{ k }}" data-preview="/relatorio/{{ rep.id }}/previsao/{{ k }}">
   <div class="email-head">
     <div>
@@ -61,7 +63,7 @@
       <button class="primary">Guardar o email</button>
     </div>
     <p class="small muted">Clique no email e escreva ou apague como num documento. Para tirar uma linha de uma tabela, toque nela (ou aponte com o rato) e carregue no ✕ vermelho (ou selecione várias linhas e carregue em Delete).
-      A saudação e o fecho são os mesmos nos três emails. O anexo Excel não muda: para tirar um certificado também do Excel, use "Retirar certificados" mais abaixo.</p>
+      A saudação e o fecho são os mesmos em todos os emails. O anexo Excel não muda: para tirar um certificado também do Excel, use "Retirar certificados" mais abaixo.</p>
   </form>
   <div class="email-frame">
     <iframe class="email-preview" src="/relatorio/{{ rep.id }}/previsao/{{ k }}" title="Email: {{ titulos[k] }}"></iframe>
@@ -82,6 +84,7 @@
       <label><input type="checkbox" name="parte" value="alertas" checked> Alertas</label>
       <label><input type="checkbox" name="parte" value="reconciliacao" checked> Reconciliação com o Excel em anexo</label>
       <label><input type="checkbox" name="parte" value="internet"> Certificados novos na internet, para aprovação (com Excel)</label>
+      <label><input type="checkbox" name="parte" value="sites"> Sites públicos e domínios (com Excel)</label>
     </fieldset>
     <fieldset class="plain"><legend class="small">Se escolher mais do que uma</legend>
       <label><input type="radio" name="modo" value="junto" checked> Num só email</label>
