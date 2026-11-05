@@ -1,0 +1,40 @@
+{% extends "base.html" %}
+{% block title %}Lembretes{% endblock %}
+{% block crumb %}Renovar · <a href="/a-expirar">Próximos {{ dias or settings.reminder_days }} dias</a>{% endblock %}
+{% block page_title %}Lembretes <small>{{ people|length }} pessoa{{ 's' if people|length != 1 }}</small>{% endblock %}
+{% block lede %}Um email por pessoa responsável, com os certificados e segredos dos pedidos dela. Confirme os endereços e o texto antes de enviar.{% endblock %}
+{% block content %}
+{% if aviso %}<div class="note warn">{{ aviso }}</div>{% endif %}
+{% if smtp %}<div class="note bad">O email não está configurado: {{ smtp|join('; ') }}.</div>{% endif %}
+<form method="post" action="/a-expirar/lembretes/enviar" class="stack">
+  <input type="hidden" name="csrf" value="{{ csrf }}"><input type="hidden" name="dias" value="{{ dias }}">
+  {% for k in keys %}<input type="hidden" name="k" value="{{ k }}">{% endfor %}
+  <section class="card">
+    <h2>Texto</h2>
+    <label class="small">Assunto (<span class="mono">{n}</span> = número de certificados e segredos)<input type="text" name="assunto" value="{{ subject }}" maxlength="250"></label>
+    <label class="small">Texto antes da tabela<textarea name="intro" rows="4" maxlength="3000">{{ intro }}</textarea></label>
+    <p class="small muted">Começa com «{{ 'Bom dia' if now.hour < 13 else 'Boa tarde' }} &lt;nome&gt;,» e acaba com a assinatura ({{ settings.report_signature or 'Atalaia Cert' }}).{% if settings.report_allowed_domains %} Só são aceites endereços de {{ settings.report_allowed_domains|join(', ') }}.{% endif %}</p>
+  </section>
+  {% for pp in people %}
+  <section class="card lb-person">
+    <input type="hidden" name="pessoa_{{ pp.i }}" value="{{ pp.nome }}">
+    <div class="lb-head">
+      <label class="lb-check"><input type="checkbox" name="enviar_{{ pp.i }}" value="1" checked> <b>{{ pp.nome }}</b> <span class="small muted">{{ pp.linhas|length }} certificado{{ 's' if pp.linhas|length != 1 }} ou segredo{{ 's' if pp.linhas|length != 1 }}</span></label>
+      <label class="small lb-mail">Email<input type="text" name="email_{{ pp.i }}" value="{{ pp.email }}" placeholder="nome@organizacao.pt" autocomplete="off">
+        <span class="muted">{% if pp.origem %}do {{ pp.origem }}{% if pp.varios %}; há homónimos: {{ pp.varios|join(', ') }}{% endif %}{% else %}não encontrado: escreva-o{% endif %}</span></label>
+    </div>
+    <details><summary class="small">Ver o email</summary><div class="lb-preview">{{ email_html(pp.nome, pp.linhas, intro, settings.report_signature, now)|safe }}</div></details>
+  </section>
+  {% else %}
+  <section class="card"><div class="empty"><b>Nenhum pedido selecionado tem pessoa responsável</b><a href="/a-expirar">Voltar</a></div></section>
+  {% endfor %}
+  {% if orphan %}
+  <section class="card"><h2>Sem pessoa no pedido ({{ orphan|length }})</h2><p class="small">Estes não recebem lembrete: atribua primeiro uma pessoa ao pedido.</p>
+    <ul class="small">{% for x in orphan %}<li>{{ x.nome }} · pedido <a href="/a-expirar/pedido/{{ x.pedido.id }}">{{ x.pedido.id }}</a> ({{ x.pedido.grupo or 'sem grupo' }})</li>{% endfor %}</ul></section>
+  {% endif %}
+  {% if people %}
+  <label><input type="checkbox" name="confirmo" value="1" required> Revi os endereços e o texto e quero enviar.</label>
+  <div><button class="primary" {{ 'disabled' if smtp }}>Enviar os lembretes</button> <a href="/a-expirar">Cancelar</a></div>
+  {% endif %}
+</form>
+{% endblock %}

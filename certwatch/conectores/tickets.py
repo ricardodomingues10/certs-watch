@@ -99,7 +99,7 @@ class _Http(Connector):
 class SmaxTickets(Connector):
     role, kind, label = "tickets", "smax", "SMAX"
     description = "Service Management Automation X: a configuração do .env (README, secção 7), como até agora."
-    capabilities = frozenset({"ler", "criar", "comentar", "fase"})
+    capabilities = frozenset({"ler", "criar", "comentar", "fase", "atribuir"})
     FIELDS = ()
 
     def configured(self) -> bool:

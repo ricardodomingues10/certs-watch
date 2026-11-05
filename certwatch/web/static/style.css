@@ -1324,3 +1324,13 @@ label.field input[type=text], label.field input[type=password], label.field inpu
 .fo-calls li { padding: 6px 0; border-top: 1px solid var(--line); overflow-wrap: anywhere; }
 .fo-calls li:first-child { border-top: 0; }
 .fo-calls li.faded { opacity: .6; }
+/* Próximos 90 dias e lembretes */
+.ax-table td { vertical-align: top; }
+.ax-table .ax-sel { width: 32px; }
+.ax-table .pn-pill { margin: 0 2px 2px 0; }
+.ax-foot { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; margin: 12px 0 0; }
+.lb-head { display: flex; flex-wrap: wrap; align-items: flex-start; justify-content: space-between; gap: 10px 20px; }
+.lb-check { padding-top: 22px; }
+.lb-mail { min-width: min(100%, 360px); display: flex; flex-direction: column; gap: 2px; }
+.lb-preview { margin-top: 8px; padding: 12px; background: #fff; color: #222; border-radius: 8px; overflow-x: auto; }
+.ax-table .pn-pill { white-space: normal; }

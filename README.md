@@ -624,6 +624,25 @@ Menu **Vigilância → Sites públicos**. Para cada nome externo do inventário 
 
 **Reconciliação na execução diária** (opcional): com `CERTWATCH_FINAL_DAILY=true`, a execução diária também gera uma reconciliação (só lê e compara; aplicar na UCMDB continua a ser à mão).
 
+## 7.8 Próximos 90 dias: quem tem os pedidos e lembretes
+
+Menu **Renovar → Próximos 90 dias**. Os certificados e os segredos de API que expiram nos próximos 90 dias (30, 60, 120 ou 180, à escolha; opcionalmente também os expirados há menos de 30 dias), **ordenados por data**. Para cada um:
+- o pedido aberto e a fase, e **com que grupo e pessoa está no SMAX**;
+- o dono no Atalaia (equipa e pessoa) e a **verificação**: «Confere com o dono», «Grupo ≠ equipa dona» (o «Grupo no SMAX» da equipa não é o do pedido), «Pessoa ≠ dono», «Pedido sem grupo», «Pedido sem pessoa», «Sem pedido aberto» ou «Sem dono para comparar»;
+- quando foi o último lembrete desse pedido.
+
+Separadores Todos, **A rever**, Sem pedido aberto e Confere; exportação CSV.
+
+**Mudar quem tem o pedido** (botão «Mudar»): procura-se o grupo e a pessoa no SMAX pelo início do nome, escolhe-se e confirma-se.
+- No SMAX: muda o grupo e a pessoa do pedido (`OwnedByGroup` e `OwnedByPerson`, ajustáveis em `CERTWATCH_SMAX_GROUP_FIELD` e `CERTWATCH_SMAX_PERSON_FIELD`), com um comentário opcional, e lê o pedido de novo para confirmar. Precisa de `CERTWATCH_SMAX_UPDATE_ENABLED=true`.
+- No Atalaia (por omissão também): o dono dos certificados desse pedido passa a ser a equipa com esse «Grupo no SMAX» (se existir em Donos) e a pessoa escolhida, com o email.
+- Há também «Corrigir só no Atalaia», sem mudar o SMAX. Tudo fica na auditoria (`pedido.atribuir`, `dono.atribuir`).
+
+**Lembretes**: selecionam-se as linhas (por omissão, as que têm pessoa no pedido) e «Preparar lembretes». Um email por pessoa responsável, com a tabela dos certificados e segredos dela (data, dias, pedido com link, fase).
+- O email de cada pessoa é lido do SMAX (pela pessoa com esse nome; se houver homónimos, a página diz) ou, se não houver, do dono no Atalaia; pode corrigir-se antes de enviar.
+- O assunto e o texto editam-se; vê-se cada email antes; nada é enviado sem confirmar, e só para os domínios de `CERTWATCH_REPORT_ALLOWED_DOMAINS`.
+- Cada envio fica registado (`lembrete.enviar`) e a data aparece na coluna «Lembrete».
+
 ## 8. Classificação
 
 - **Tipo**: API (está na lista de APIs) · Wildcard · Endereço IP · Hostname · Autoridade (CA) · Outro.

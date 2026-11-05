@@ -51,6 +51,9 @@ FONTE = {
         {"metodo": "POST", "endereco": "/rest/{tenant}/ems/bulk (CREATE)", "para": "criar pedidos de renovação", "acesso": "escrita", "estado": "em uso (com CERTWATCH_SMAX_CREATE_ENABLED)", "onde": "ticket_create.py"},
         {"metodo": "POST", "endereco": "/rest/{tenant}/ems/bulk (UPDATE)", "para": "fechar ou reabrir um pedido", "acesso": "escrita", "estado": "em uso (com CERTWATCH_SMAX_UPDATE_ENABLED)", "onde": "fontes/smax.py · change_phase"},
         {"metodo": "POST", "endereco": "/rest/{tenant}/collaboration/comments/{entidade}/{id}", "para": "deixar o comentário ao fechar ou reabrir", "acesso": "escrita", "estado": "em uso (com CERTWATCH_SMAX_UPDATE_ENABLED)", "onde": "fontes/smax.py · add_comment"},
+        {"metodo": "GET", "endereco": "/rest/{tenant}/ems/PersonGroup?filter=Name startswith (…)", "para": "procurar o grupo a quem passar um pedido", "acesso": "leitura", "estado": "em uso", "onde": "fontes/smax.py · find_groups"},
+        {"metodo": "GET", "endereco": "/rest/{tenant}/ems/Person?filter=Name startswith (…)&layout=Id,Name,Email", "para": "procurar a pessoa, e o email para os lembretes", "acesso": "leitura", "estado": "em uso", "onde": "fontes/smax.py · find_persons"},
+        {"metodo": "POST", "endereco": "/rest/{tenant}/ems/bulk (UPDATE OwnedByGroup, OwnedByPerson)", "para": "passar o pedido para outro grupo ou pessoa", "acesso": "escrita", "estado": "em uso (com CERTWATCH_SMAX_UPDATE_ENABLED)", "onde": "fontes/smax.py · assign"},
     ],
 }
 
@@ -512,6 +515,99 @@ def change_phase(settings: Settings, ticket_id: str, action: str, comment: str =
             out["motivo"] = (f"O SMAX aceitou o pedido, mas a fase ficou "
                              f"{(after or {}).get('phase') or 'desconhecida'} (esperada {want}).")
         return out
+    finally:
+        if own:
+            c.close()
+
+
+# ------------------------------------------------------------------ grupos e pessoas: procurar e atribuir
+def _q(text: str) -> str:
+    """Texto para um filtro do SMAX, entre plicas (as plicas dobram-se)."""
+    return "'" + str(text).replace("'", "''")[:120] + "'"
+
+
+def _find(c: httpx.Client, headers: dict, settings: Settings, entity: str, layout: str, query: str, size: int = 20) -> list[dict]:
+    query = (query or "").strip()
+    if not query:
+        return []
+    filters = [f"Name startswith ({_q(query)})", f"Name = {_q(query)}"]
+    for flt in filters:
+        try:
+            r = c.get(f"/rest/{settings.smax_tenant}/ems/{entity}", headers=headers,
+                      params={"layout": layout, "filter": flt, "size": str(size), "order": "Name asc"})
+        except httpx.HTTPError as exc:
+            raise SmaxError(f"Erro de comunicação com o SMAX: {exc}") from exc
+        if r.status_code == 400 and flt is not filters[-1]:
+            continue                       # esta instalação não aceita startswith: procura pelo nome exato
+        if r.status_code != 200:
+            raise SmaxError(f"Procura em {entity} no SMAX falhou: HTTP {r.status_code} — {_reason(r)}")
+        out = []
+        for e in (r.json() or {}).get("entities") or []:
+            p = e.get("properties") or {}
+            if p.get("Id"):
+                out.append({"id": str(p["Id"]), "nome": str(p.get("Name") or ""), "email": str(p.get("Email") or "")})
+        return out
+    return []
+
+
+def find_groups(settings: Settings, query: str, c: httpx.Client | None = None) -> list[dict]:
+    own = c is None
+    c = c or client(settings)
+    try:
+        return _find(c, _auth_headers(login(c, settings), settings), settings, "PersonGroup", "Id,Name", query)
+    finally:
+        if own:
+            c.close()
+
+
+def find_persons(settings: Settings, query: str, c: httpx.Client | None = None) -> list[dict]:
+    own = c is None
+    c = c or client(settings)
+    try:
+        return _find(c, _auth_headers(login(c, settings), settings), settings, "Person", "Id,Name,Email", query)
+    finally:
+        if own:
+            c.close()
+
+
+def person_emails(settings: Settings, names: list[str], c: httpx.Client | None = None) -> dict[str, list[str]]:
+    """Nome -> emails das pessoas com esse nome exato no SMAX (pode haver homónimos)."""
+    own = c is None
+    c = c or client(settings)
+    out: dict[str, list[str]] = {}
+    try:
+        headers = _auth_headers(login(c, settings), settings)
+        for n in sorted({x for x in names if x}):
+            hits = _find(c, headers, settings, "Person", "Id,Name,Email", n)
+            out[n] = sorted({h["email"] for h in hits if h["nome"].strip().lower() == n.strip().lower() and h["email"]})
+        return out
+    finally:
+        if own:
+            c.close()
+
+
+def assign(settings: Settings, ticket_id: str, group_id: str = "", person_id: str = "", comment: str = "",
+           c: httpx.Client | None = None) -> dict:
+    """Passa o pedido para outro grupo e/ou pessoa (OwnedByGroup / OwnedByPerson) e lê-o de novo para confirmar."""
+    fields = {}
+    if group_id:
+        fields[settings.smax_group_field] = str(group_id)
+    if person_id:
+        fields[settings.smax_person_field] = str(person_id)
+    if not fields:
+        raise SmaxError("Escolha o grupo ou a pessoa.")
+    own = c is None
+    c = c or client(settings)
+    try:
+        headers = _auth_headers(login(c, settings), settings)
+        before = fetch_ticket(c, headers, settings, ticket_id)
+        if before is None:
+            raise SmaxError(f"O pedido {ticket_id} não foi encontrado no SMAX (ou a conta não o pode ler).")
+        status, reason = update_ticket(c, headers, settings, ticket_id, fields)
+        com = add_comment(c, headers, settings, ticket_id, comment) if comment and status == "ok" else None
+        after = fetch_ticket(c, headers, settings, ticket_id)
+        return {"estado": status, "motivo": reason, "antes": before, "pedido": after, "comentario": com,
+                "ok": status == "ok" and after is not None}
     finally:
         if own:
             c.close()

@@ -95,6 +95,22 @@ class DomainChange(Base):
     new: Mapped[str] = mapped_column(Text, default="")
 
 
+class Reminder(Base):
+    """Lembrete enviado (à mão) à pessoa responsável pelos pedidos de certificados ou segredos a expirar."""
+
+    __tablename__ = "reminders"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    sent_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, index=True)
+    sent_by: Mapped[str] = mapped_column(String(254), default="")
+    person: Mapped[str] = mapped_column(String(256), default="")
+    to: Mapped[str] = mapped_column(String(1024), default="")
+    tickets: Mapped[list] = mapped_column(JSON, default=list)
+    items: Mapped[list] = mapped_column(JSON, default=list)
+    ok: Mapped[bool] = mapped_column(Boolean, default=False)
+    erro: Mapped[str] = mapped_column(Text, default="")
+
+
 class Endpoint(Base):
     """Alvo de scan host:porta e o CN que é esperado servir."""
 

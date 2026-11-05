@@ -266,6 +266,9 @@ class Settings:
     smax_files_max: int = 200                      # imagens/anexos novos descarregados por leitura do SMAX
     # Fechar / reabrir pedidos no SMAX (bulk UPDATE). Os campos dependem do modelo de change.
     smax_update_enabled: bool = False
+    smax_group_field: str = "OwnedByGroup"       # campo do grupo responsável no pedido (para atribuir)
+    smax_person_field: str = "OwnedByPerson"     # campo da pessoa responsável no pedido
+    reminder_days: int = 90                      # Próximos dias: horizonte por omissão
     smax_close_fields: dict = field(default_factory=lambda: {"PhaseId": "Close"})
     smax_reopen_fields: dict = field(default_factory=lambda: {"PhaseId": "Execute"})
     smax_comment_privacy: str = "INTERNAL"
@@ -436,6 +439,9 @@ class Settings:
             ucmdb_write=_env("CERTWATCH_UCMDB_WRITE", "false").lower() == "true",
             ucmdb_cert_type=_env("CERTWATCH_UCMDB_CERT_TYPE", "digital_certificate"),
             smax_files_max=int(_env("CERTWATCH_SMAX_FILES_MAX", "200")),
+            smax_group_field=_env("CERTWATCH_SMAX_GROUP_FIELD", "OwnedByGroup") or "OwnedByGroup",
+            smax_person_field=_env("CERTWATCH_SMAX_PERSON_FIELD", "OwnedByPerson") or "OwnedByPerson",
+            reminder_days=max(1, min(365, int(_env("CERTWATCH_REMINDER_DAYS", "90")))),
             smax_update_enabled=_env("CERTWATCH_SMAX_UPDATE_ENABLED",
                                      _env("CERTWATCH_SMAX_CREATE_ENABLED", "false")).lower() == "true",
             smax_close_fields=_json_fields(_env("CERTWATCH_SMAX_CLOSE_FIELDS", '{"PhaseId": "Close"}'), "CERTWATCH_SMAX_CLOSE_FIELDS"),

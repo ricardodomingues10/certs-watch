@@ -1,0 +1,60 @@
+{% extends "base.html" %}
+{% block title %}Pedido {{ t.id }}{% endblock %}
+{% block crumb %}Renovar · <a href="/a-expirar">Próximos 90 dias</a>{% endblock %}
+{% block page_title %}Quem tem o pedido {{ t.id }}{% endblock %}
+{% block lede %}{{ t.display_label }} · fase {{ t.phase or '—' }}. Mude o grupo e/ou a pessoa no SMAX e o dono no Atalaia fica igual.{% endblock %}
+{% block content %}
+{% if msg %}<div class="note ok">{{ msg }}</div>{% endif %}
+{% if erro %}<div class="note bad">{{ erro }}</div>{% endif %}
+{% if aviso %}<div class="note warn">{{ aviso }}</div>{% endif %}
+<div class="grid g2">
+<section class="card">
+  <h2>Agora</h2>
+  <dl class="kv">
+    <dt>Grupo no SMAX</dt><dd>{{ t.owner_group or '—' }}{% if t.owner_group and t.owner_group.strip().lower() in team_for %} <span class="small muted">= equipa {{ team_for[t.owner_group.strip().lower()].name }}</span>{% endif %}</dd>
+    <dt>Pessoa no SMAX</dt><dd>{{ t.owner_person or '—' }}</dd>
+    <dt>Lido do SMAX</dt><dd>{{ t.fetched_at|dtt }}</dd>
+  </dl>
+  {% for r in rows %}
+  <p class="small"><b>{{ r.nome }}</b> expira a {{ r.expira|dt }} ({{ r.dias|ndias }}) · dono no Atalaia: {{ (r.dono or {}).equipa or '—' }}{% if (r.dono or {}).pessoa %} · {{ r.dono.pessoa }}{% endif %}<br>
+    {% for c in r.checks %}<span class="pn-pill t-{{ CHECKS[c][1] }}">{{ CHECKS[c][0] }}</span> {% endfor %}</p>
+  {% endfor %}
+</section>
+<section class="card">
+  <h2>Procurar no SMAX</h2>
+  {% if not can_assign %}<p class="small"><span class="tag tag-run">só leitura</span> Mudar no SMAX precisa de <span class="mono">CERTWATCH_SMAX_UPDATE_ENABLED=true</span>. Pode na mesma corrigir só o dono no Atalaia, em baixo.</p>{% endif %}
+  <form method="get" class="stack">
+    <label class="small">Grupo (início do nome)<input type="text" name="g" value="{{ gq }}" placeholder="Sistemas"></label>
+    <label class="small">Pessoa (início do nome)<input type="text" name="p" value="{{ pq }}" placeholder="Ana"></label>
+    <div><button>Procurar</button></div>
+  </form>
+</section>
+</div>
+
+<form method="post" action="/a-expirar/pedido/{{ t.id }}" class="card stack" aria-labelledby="h-mudar">
+  <input type="hidden" name="csrf" value="{{ csrf }}">
+  <h2 id="h-mudar">Mudar para</h2>
+  <div class="grid g2">
+    <fieldset class="plain"><legend class="small">Grupo</legend>
+      <label class="small"><input type="radio" name="grupo" value="" checked> manter {{ t.owner_group or '(sem grupo)' }}</label>
+      {% for x in groups %}<label class="small"><input type="radio" name="grupo" value="{{ x.id }}|{{ x.nome }}"> {{ x.nome }}{% if x.nome.strip().lower() in team_for %} <span class="muted">(equipa {{ team_for[x.nome.strip().lower()].name }})</span>{% endif %}</label>{% else %}{% if gq %}<p class="small muted">Nenhum grupo começa por «{{ gq }}».</p>{% endif %}{% endfor %}
+    </fieldset>
+    <fieldset class="plain"><legend class="small">Pessoa</legend>
+      <label class="small"><input type="radio" name="pessoa" value="" checked> manter {{ t.owner_person or '(sem pessoa)' }}</label>
+      {% for x in persons %}<label class="small"><input type="radio" name="pessoa" value="{{ x.id }}|{{ x.nome }}|{{ x.email }}"> {{ x.nome }} <span class="muted">{{ x.email }}</span></label>{% else %}{% if pq %}<p class="small muted">Nenhuma pessoa começa por «{{ pq }}».</p>{% endif %}{% endfor %}
+    </fieldset>
+  </div>
+  <label class="small">Comentário no pedido (opcional)<textarea name="comentario" rows="2" maxlength="2000" placeholder="Reatribuído a partir do Atalaia Cert: …"></textarea></label>
+  <label class="small"><input type="checkbox" name="atalaia" value="1" checked> Atualizar também o dono no Atalaia (equipa do grupo escolhido e a pessoa)</label>
+  <details class="small"><summary>Corrigir só no Atalaia (sem mudar o SMAX)</summary>
+    <div class="grid g2 mt">
+      <label>Equipa<select name="equipa"><option value="">a do grupo, se existir</option>{% for e in equipas %}<option value="{{ e.id }}">{{ e.name }}</option>{% endfor %}</select></label>
+      <label>Pessoa<input type="text" name="pessoa_nome" maxlength="128"></label>
+      <label>Email da pessoa<input type="email" name="pessoa_email" maxlength="254"></label>
+      <label><input type="checkbox" name="so_atalaia" value="1"> só no Atalaia</label>
+    </div>
+  </details>
+  <label><input type="checkbox" name="confirmo" value="1" required> Confirmo a alteração.</label>
+  <div><button class="primary">Guardar</button> <a href="/a-expirar">Voltar</a></div>
+</form>
+{% endblock %}

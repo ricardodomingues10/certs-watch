@@ -4,7 +4,7 @@
 {% block page_title %}Sites públicos <small>{{ sm.total }}</small>{% endblock %}
 {% block lede %}Para cada nome externo: o certificado servido em cada IP, visto de dentro da rede e de fora (DNS público), lado a lado com a CMDB e com o pedido do SMAX. Só leitura.{% endblock %}
 {% block actions %}
-<form method="post" action="/jobs/sites"><input type="hidden" name="csrf" value="{{ csrf }}"><input type="hidden" name="next" value="/sites-publicos"><button class="primary" {{ 'disabled' if busy }}>{{ 'A verificar…' if busy else 'Verificar agora' }}</button></form>
+<form method="post" action="/jobs/sites"><input type="hidden" name="csrf" value="{{ csrf }}"><input type="hidden" name="next" value="/sites-publicos"><button class="primary" {{ 'disabled' if sites_busy }}>{{ 'A verificar…' if sites_busy else 'Verificar agora' }}</button></form>
 <a class="button" href="/sites-publicos/exportar?estado={{ f.estado }}&q={{ f.q|urlencode }}">Exportar (CSV)</a>
 {% endblock %}
 {% block content %}

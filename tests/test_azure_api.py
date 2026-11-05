@@ -1,7 +1,7 @@
 """Azure pelo Microsoft Graph: o mesmo resultado da exportação, sem guardar o client secret nem o hint dos segredos."""
 import json
 from dataclasses import replace
-from datetime import date, datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 from urllib.parse import parse_qs
 
 import httpx
@@ -39,7 +39,7 @@ APPS = [
     {"id": "o3", "appId": "app-sso", "displayName": "Portal SSO", "passwordCredentials": [], "keyCredentials": [kc("k7", "2027-09-20T10:00:00Z")]},
     {"id": "o4", "appId": "app-velha", "displayName": "App_TST", "passwordCredentials": [pw("k1", "2025-10-20T14:59:29Z")], "keyCredentials": []},
     {"id": "o5", "appId": "app-vazia", "displayName": "Sem segredos", "passwordCredentials": [], "keyCredentials": []},
-    {"id": "o6", "appId": CLIENT_ID, "displayName": "Atalaia Cert", "passwordCredentials": [pw("kA", "2026-11-20T10:00:00Z")], "keyCredentials": []},
+    {"id": "o6", "appId": CLIENT_ID, "displayName": "Atalaia Cert", "passwordCredentials": [pw("kA", (datetime.now(timezone.utc) + timedelta(days=16, hours=2)).strftime("%Y-%m-%dT%H:%M:%SZ"))], "keyCredentials": []},
 ]
 SPS = [{"appId": "app-crm", "displayName": "CRM"}, {"appId": "app-radar", "displayName": "Radar"},
        {"appId": "app-sso", "displayName": "Portal SSO"}]

@@ -1,0 +1,58 @@
+{% extends "base.html" %}
+{% block title %}Próximos {{ f.dias }} dias{% endblock %}
+{% block crumb %}Renovar{% endblock %}
+{% block page_title %}Próximos {{ f.dias }} dias <small>{{ counts.total }}</small>{% endblock %}
+{% block lede %}Certificados e segredos de API que expiram nos próximos {{ f.dias }} dias, por data. Para cada um, o pedido, com que grupo e pessoa está no SMAX e se isso bate certo com o dono no Atalaia. Daqui muda-se quem tem o pedido e enviam-se lembretes à pessoa responsável.{% endblock %}
+{% block actions %}
+<a class="button" href="/a-expirar/exportar?dias={{ f.dias }}&expirados={{ f.expirados }}&q={{ f.q|urlencode }}&verificacao={{ f.verificacao }}&tipo={{ f.tipo }}">Exportar (CSV)</a>
+{% endblock %}
+{% block content %}
+{% macro qs(extra) %}?dias={{ f.dias }}&expirados={{ f.expirados }}&tipo={{ f.tipo }}&q={{ f.q|urlencode }}{{ extra }}{% endmacro %}
+<nav class="tabs" aria-label="Verificação">
+  <a href="{{ qs('') }}" class="{{ 'on' if not f.verificacao }}">Todos <span class="n">{{ counts.total }}</span></a>
+  <a href="{{ qs('&verificacao=rever') }}" class="{{ 'on' if f.verificacao == 'rever' }}" title="Grupo ou pessoa diferente do dono, ou pedido sem grupo ou sem pessoa">A rever <span class="n {{ 'hot' if counts.rever }}">{{ counts.rever }}</span></a>
+  <a href="{{ qs('&verificacao=sem_pedido') }}" class="{{ 'on' if f.verificacao == 'sem_pedido' }}">Sem pedido aberto <span class="n">{{ counts.sem_pedido }}</span></a>
+  <a href="{{ qs('&verificacao=confere') }}" class="{{ 'on' if f.verificacao == 'confere' }}">Confere <span class="n">{{ counts.confere }}</span></a>
+</nav>
+
+<form class="filters" method="get">
+  {% if f.verificacao %}<input type="hidden" name="verificacao" value="{{ f.verificacao }}">{% endif %}
+  <input type="search" name="q" value="{{ f.q }}" placeholder="nome, pedido, grupo, pessoa ou equipa" aria-label="Filtrar">
+  <select name="dias" aria-label="Horizonte">{% for d in (30, 60, 90, 120, 180) %}<option value="{{ d }}" {{ 'selected' if f.dias == d }}>Próximos {{ d }} dias</option>{% endfor %}</select>
+  <select name="tipo" aria-label="Tipo"><option value="">Certificados e segredos</option><option value="certificado" {{ 'selected' if f.tipo == 'certificado' }}>Só certificados</option><option value="api" {{ 'selected' if f.tipo == 'api' }}>Só segredos de API</option></select>
+  <label class="small"><input type="checkbox" name="expirados" value="1" {{ 'checked' if f.expirados == '1' }}> incluir os expirados há menos de 30 dias</label>
+  <button>Filtrar</button>
+</form>
+
+<form method="post" action="/a-expirar/lembretes" id="lista">
+<input type="hidden" name="csrf" value="{{ csrf }}"><input type="hidden" name="dias" value="{{ f.dias }}">
+<section class="card flush">
+  {% if rows %}
+  <div class="scroll"><table class="ax-table">
+    <thead><tr><th class="ax-sel"><span class="sr">Selecionar</span></th><th>Expira</th><th>Certificado / segredo</th><th>Pedido</th><th>Com quem está no SMAX</th><th class="opt">Dono no Atalaia</th><th>Verificação</th><th class="opt">Lembrete</th><th><span class="sr">Ações</span></th></tr></thead>
+    <tbody>{% for r in rows %}{% set t = r.pedido %}
+    <tr>
+      <td class="ax-sel">{% if t and t.responsavel %}<input type="checkbox" name="k" value="{{ r.key }}" checked aria-label="Lembrete para {{ r.nome }}">{% endif %}</td>
+      <td class="nowrap">{{ r.expira|dt }}<div><span class="pn-pill {{ 't-x' if r.dias < 0 else 't-r' if r.dias <= 7 else 't-a' if r.dias <= 30 else 't-n' }}">{{ 'expirou' if r.dias < 0 else r.dias|ndias }}</span></div></td>
+      <td><a href="{{ r.detalhe }}" class="{{ 'mono' if r.tipo == 'certificado' }}">{{ r.nome }}</a>
+        <div class="small muted">{{ 'Certificado' if r.tipo == 'certificado' else 'Segredo de API' }}{% if r.ambito %} · {{ r.ambito }}{% endif %}{% if r.auto %} · renova sozinho{% endif %}</div></td>
+      <td class="nowrap">{% if t %}<a href="{{ t.url or ('/pedidos/smax/' ~ t.id) }}" target="_blank" rel="noopener">{{ t.id }}</a><div class="small muted">{{ t.fase }}</div>{% if r.abertos|length > 1 %}<div class="small"><span class="tag tag-run">{{ r.abertos|length }} abertos</span></div>{% endif %}{% else %}<span class="muted">—</span>{% endif %}</td>
+      <td class="small">{% if t %}{{ t.grupo or '(sem grupo)' }}<div><b>{{ t.responsavel or '(sem pessoa)' }}</b></div>{% else %}—{% endif %}</td>
+      <td class="small opt">{% if r.dono and r.dono.origem == 'atribuido' %}{{ r.dono.equipa or '—' }}{% if r.dono.pessoa %}<div class="muted">{{ r.dono.pessoa }}</div>{% endif %}{% elif r.tipo == 'certificado' %}<a class="muted" href="/certificados/detalhe?cn={{ r.cn|urlencode }}#dono">sem dono</a>{% else %}—{% endif %}</td>
+      <td class="small">{% for c in r.checks %}<span class="pn-pill t-{{ CHECKS[c][1] }}">{{ CHECKS[c][0] }}</span> {% endfor %}</td>
+      <td class="small opt">{{ r.lembrete|dtt if r.lembrete else '—' }}</td>
+      <td>{% if t %}<a class="button small-btn" href="/a-expirar/pedido/{{ t.id }}">Mudar</a>{% elif r.tipo == 'certificado' %}<a class="small" href="/certificados?q={{ r.cn|urlencode }}">abrir pedido</a>{% endif %}</td>
+    </tr>{% endfor %}</tbody>
+  </table></div>
+  {% else %}
+  <div class="empty"><b>Nada a expirar {{ 'com estes filtros' if f.q or f.verificacao or f.tipo else 'nos próximos ' ~ f.dias ~ ' dias' }}</b></div>
+  {% endif %}
+</section>
+{% if counts.com_pessoa %}
+<div class="ax-foot">
+  <button class="primary" {{ 'disabled' if not smtp_ok }}>Preparar lembretes para os selecionados</button>
+  <span class="small muted">{% if smtp_ok %}Um email por pessoa responsável, com os pedidos dela. Vê-se antes de enviar; nada é enviado sozinho.{% else %}O email não está configurado (CERTWATCH_SMTP_*).{% endif %}</span>
+</div>
+{% endif %}
+</form>
+{% endblock %}

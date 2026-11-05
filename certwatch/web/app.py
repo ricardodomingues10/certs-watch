@@ -211,7 +211,8 @@ NAV_GROUPS = [
                                   ("/endpoints", "Servidores", None), ("/donos", "Donos", None)]),
     ("vigilancia", "Vigilância", [("/testes", "Testes", None), ("/sites-publicos", "Sites públicos", "sites_problemas"),
                                   ("/descoberta", "Na internet", "ct_por_triar")]),
-    ("renovar", "Renovar", [("/pedidos", "Pedidos SMAX", None), ("/relatorio", "Relatório por email", None)]),
+    ("renovar", "Renovar", [("/a-expirar", "Próximos 90 dias", None), ("/pedidos", "Pedidos SMAX", None),
+                            ("/relatorio", "Relatório por email", None)]),
     ("cmdb", "CMDB", [("/cmdb-final", "Atualizar a CMDB", "reconc_dif"), ("/cmdb/historico", "Histórico da CMDB", None)]),
     ("sistema", "Sistema", [("/jobs", "Execuções e auditoria", None), ("/fontes", "Fontes e ligações", None),
                             ("/utilizadores", "Utilizadores", "pedidos_acesso"), ("/testes/como-funciona", "Como funciona", None)]),
@@ -1184,7 +1185,7 @@ def sites_page(request: Request, estado: str = "", q: str = "", user: str = Depe
         jobs_busy = s.scalar(select(JobRun.id).where(JobRun.job.in_(("sites", "pipeline")),
                                                      JobRun.status.in_(("pending", "running"))).limit(1)) is not None
     return render(request, "sites.html", user, rows=rows, sm=st.summary(allr), STATES=st.STATES, NOTES=st.NOTES,
-                  PROBLEMS=st.PROBLEMS, f={"estado": estado, "q": q}, dom=dom, settings=settings, busy=jobs_busy,
+                  PROBLEMS=st.PROBLEMS, f={"estado": estado, "q": q}, dom=dom, settings=settings, sites_busy=jobs_busy,
                   now=utcnow())
 
 
@@ -2039,6 +2040,230 @@ def pedido_fase(request: Request, tid: str, csrf: str = Form(""), acao: str = Fo
         return _back(tid, msg=f"Pedido {'fechado' if acao == 'fechar' else 'reaberto'} no SMAX: fase {res['fase_depois']}.{com_txt}", anchor="fase")
     return _back(tid, erro=f"O SMAX não {'fechou' if acao == 'fechar' else 'reabriu'} o pedido ({res['estado']}): "
                            f"{res['motivo']} Fase atual: {res['fase_depois'] or 'desconhecida'}.{com_txt}", anchor="fase")
+
+
+# ------------------------------------------------------------------ próximos 90 dias: quem tem os pedidos e lembretes
+SMAX_CLIENT = None      # testes: cliente httpx para o SMAX (procurar, atribuir, emails)
+
+
+def _exp_rows(dias: int, expirados: str, q: str = "", verif: str = "", tipo: str = ""):
+    from .. import reminders as rm
+    settings = get_settings()
+    dias = max(1, min(365, dias or settings.reminder_days))
+    with session_scope() as s:
+        rows = rm.rows(s, settings, dias, expirados == "1")
+    allr = rows
+    if tipo in ("certificado", "api"):
+        rows = [r for r in rows if r["tipo"] == tipo]
+    if verif == "rever":
+        rows = [r for r in rows if set(r["checks"]) & {"grupo_diferente", "pessoa_diferente", "sem_pessoa", "sem_grupo"}]
+    elif verif in rm.CHECKS:
+        rows = [r for r in rows if verif in r["checks"]]
+    if q:
+        ql = q.lower().strip()
+        rows = [r for r in rows if ql in r["nome"].lower() or ql in ((r["pedido"] or {}).get("id") or "")
+                or ql in ((r["pedido"] or {}).get("grupo") or "").lower() or ql in ((r["pedido"] or {}).get("responsavel") or "").lower()
+                or ql in ((r["dono"] or {}).get("equipa") or "").lower()]
+    return rows, allr, dias
+
+
+def _can_assign(settings) -> bool:
+    return smax_configured(settings) and settings.smax_update_enabled and ticket_connector(settings).can("atribuir")
+
+
+@app.get("/a-expirar")
+def expiring_page(request: Request, dias: int = 0, expirados: str = "", q: str = "", verificacao: str = "", tipo: str = "",
+                  user: str = Depends(current_user)):
+    """Certificados e segredos de API a expirar, por data, com quem tem cada pedido e se bate certo com o dono."""
+    from .. import reminders as rm
+    rows, allr, dias = _exp_rows(dias, expirados, q, verificacao, tipo)
+    counts = {"total": len(allr), "sem_pedido": sum(1 for r in allr if "sem_pedido" in r["checks"]),
+              "rever": sum(1 for r in allr if set(r["checks"]) & {"grupo_diferente", "pessoa_diferente", "sem_pessoa", "sem_grupo"}),
+              "confere": sum(1 for r in allr if "confere" in r["checks"]),
+              "com_pessoa": sum(1 for r in allr if (r["pedido"] or {}).get("responsavel"))}
+    settings = get_settings()
+    return render(request, "a_expirar.html", user, rows=rows, counts=counts, CHECKS=rm.CHECKS,
+                  f={"dias": dias, "expirados": expirados, "q": q, "verificacao": verificacao, "tipo": tipo},
+                  can_assign=_can_assign(settings), smtp_ok=not rp.smtp_problems(settings), now=utcnow())
+
+
+@app.get("/a-expirar/exportar")
+def expiring_csv(dias: int = 0, expirados: str = "", q: str = "", verificacao: str = "", tipo: str = "",
+                 user: str = Depends(current_user)):
+    from .. import reminders as rm
+    rows, _, _ = _exp_rows(dias, expirados, q, verificacao, tipo)
+    return csv_response("a-expirar.csv",
+                        ["Expira", "Dias", "Nome", "Tipo", "Âmbito/aplicação", "Equipa dona", "Pessoa dona", "Pedido",
+                         "Fase", "Grupo no SMAX", "Pessoa no SMAX", "Verificação", "Último lembrete"],
+                        [[fmt_dt(r["expira"]), r["dias"], r["nome"], "Certificado" if r["tipo"] == "certificado" else "Segredo de API",
+                          r["ambito"], (r["dono"] or {}).get("equipa", ""), (r["dono"] or {}).get("pessoa", ""),
+                          (r["pedido"] or {}).get("id", ""), (r["pedido"] or {}).get("fase", ""),
+                          (r["pedido"] or {}).get("grupo", ""), (r["pedido"] or {}).get("responsavel", ""),
+                          "; ".join(rm.CHECKS[c][0] for c in r["checks"]), fmt_dt(r["lembrete"], True) if r["lembrete"] else ""]
+                         for r in rows])
+
+
+def _reminder_groups(keys: list[str], dias: int):
+    from .. import reminders as rm
+    rows, _, _ = _exp_rows(dias, "1")
+    chosen = [r for r in rows if r["key"] in set(keys) and r["pedido"]]
+    return rm.group_by_person(chosen)
+
+
+@app.post("/a-expirar/lembretes")
+async def reminders_preview(request: Request, user: str = Depends(current_user)):
+    """Pré-visualização dos lembretes: um email por pessoa responsável, com os pedidos dela."""
+    from .. import reminders as rm
+    form = await request.form()
+    check_csrf(request, form.get("csrf"))
+    keys = [str(k) for k in form.getlist("k")][:2000]
+    dias = int(str(form.get("dias") or "0") or 0)
+    settings = get_settings()
+    groups, orphan = _reminder_groups(keys, dias)
+    emails, aviso = {}, ""
+    if groups and smax_configured(settings) and ticket_connector(settings).kind == "smax":
+        from ..fontes.smax import SmaxError, person_emails
+        try:
+            emails = person_emails(settings, list(groups), SMAX_CLIENT)
+        except SmaxError as exc:
+            aviso = f"Não foi possível ler os emails no SMAX ({exc}). Escreva-os à mão."
+    people = []
+    for i, (name, items) in enumerate(groups.items()):
+        found = emails.get(name) or []
+        dono = next(((x["dono"] or {}).get("email") for x in items
+                     if (x["dono"] or {}).get("pessoa", "").strip().lower() == name.lower() and (x["dono"] or {}).get("email")), "")
+        people.append({"i": i, "nome": name, "linhas": items, "email": (found[0] if found else dono),
+                       "origem": "SMAX" if found else ("dono no Atalaia" if dono else ""), "varios": found[1:]})
+    return render(request, "lembretes.html", user, people=people, orphan=orphan, keys=keys, dias=dias, aviso=aviso,
+                  subject=rm.DEFAULT_SUBJECT, intro=rm.DEFAULT_INTRO, smtp=rp.smtp_problems(settings), settings=settings,
+                  now=utcnow().astimezone(_tz()), email_html=rm.email_html)
+
+
+@app.post("/a-expirar/lembretes/enviar")
+async def reminders_send(request: Request, user: str = Depends(current_user)):
+    from .. import reminders as rm
+    from ..models import Reminder
+    form = await request.form()
+    check_csrf(request, form.get("csrf"))
+    if form.get("confirmo") != "1":
+        raise HTTPException(400, "Confirmação em falta.")
+    settings = get_settings()
+    if rp.smtp_problems(settings):
+        raise HTTPException(409, "O email não está configurado.")
+    keys = [str(k) for k in form.getlist("k")][:2000]
+    dias = int(str(form.get("dias") or "0") or 0)
+    subj_t = str(form.get("assunto") or rm.DEFAULT_SUBJECT)[:250]
+    intro = str(form.get("intro") or "")[:3000]
+    groups, _ = _reminder_groups(keys, dias)
+    now = utcnow().astimezone(_tz())
+    ok_n, falhas = 0, []
+    for i, (name, items) in enumerate(groups.items()):
+        if str(form.get(f"pessoa_{i}") or "") != name or not form.get(f"enviar_{i}"):
+            continue
+        raw = str(form.get(f"email_{i}") or "")
+        try:
+            to = rp.parse_recipients(raw, settings)
+            msg = rp.build_message(settings, to, rm.subject(subj_t, items),
+                                   rm.email_html(name, items, intro, settings.report_signature, now), [])
+            rp.send(settings, [msg], SMTP_FACTORY)
+            ok, erro = True, ""
+            ok_n += 1
+        except rp.ReportError as exc:
+            to, ok, erro = [raw[:200]] if raw else [], False, str(exc)
+            falhas.append(f"{name}: {erro}")
+        with session_scope() as s:
+            s.add(Reminder(sent_by=user, person=name, to=", ".join(to), ok=ok, erro=erro[:500],
+                           tickets=sorted({x["pedido"]["id"] for x in items}), items=rm.serial(items)))
+            audit(s, user, "lembrete.enviar", name, para=to, pedidos=sorted({x["pedido"]["id"] for x in items}), ok=ok, erro=erro[:300])
+    msg = f"{ok_n} lembrete(s) enviado(s)." + (f" Falharam: {'; '.join(falhas)}" if falhas else "")
+    r = RedirectResponse("/a-expirar#lista", status_code=303)
+    r.set_cookie(NOTICE_COOKIE, quote(msg[:600]), max_age=60, httponly=True, samesite="strict",
+                 secure=settings.cookie_secure, path="/")
+    return r
+
+
+def _assign_page(request: Request, user: str, tid: str, g: str = "", p: str = "", erro: str = "", msg: str = ""):
+    settings = get_settings()
+    from .. import reminders as rm
+    with session_scope() as s:
+        t = _ticket_or_404(s, tid)
+        s.expunge(t)
+        teams = ow.teams(s)
+    rows, _, _ = _exp_rows(365, "1")
+    mine = [r for r in rows if (r["pedido"] or {}).get("id") == tid or any(x["id"] == tid for x in r["abertos"])]
+    groups, persons, aviso = [], [], ""
+    if (g or p) and smax_configured(settings) and ticket_connector(settings).kind == "smax":
+        from ..fontes.smax import SmaxError, find_groups, find_persons
+        try:
+            groups = find_groups(settings, g, SMAX_CLIENT) if g else []
+            persons = find_persons(settings, p, SMAX_CLIENT) if p else []
+        except SmaxError as exc:
+            aviso = str(exc)
+    return render(request, "atribuir.html", user, t=t, rows=mine, gq=g, pq=p, groups=groups, persons=persons, aviso=aviso,
+                  erro=erro, msg=msg, can_assign=_can_assign(settings), equipas=teams, CHECKS=rm.CHECKS,
+                  team_for={x.smax_group.strip().lower(): x for x in teams if x.smax_group})
+
+
+@app.get("/a-expirar/pedido/{tid}")
+def assign_page(request: Request, tid: str, g: str = "", p: str = "", user: str = Depends(current_user)):
+    return _assign_page(request, user, tid, g.strip()[:120], p.strip()[:120])
+
+
+@app.post("/a-expirar/pedido/{tid}")
+async def assign_save(request: Request, tid: str, user: str = Depends(current_user)):
+    """Passa o pedido para outro grupo/pessoa no SMAX e atualiza o dono no Atalaia (os dois)."""
+    form = await request.form()
+    check_csrf(request, form.get("csrf"))
+    settings = get_settings()
+    f = {k: str(form.get(k) or "").strip() for k in ("grupo", "pessoa", "comentario", "confirmo", "atalaia", "so_atalaia",
+                                                    "equipa", "pessoa_nome", "pessoa_email", "grupo_nome")}
+    if f["confirmo"] != "1":
+        return _assign_page(request, user, tid, erro="Confirme a alteração.")
+    gid, gname = (f["grupo"].split("|", 1) + [""])[:2] if f["grupo"] else ("", "")
+    pid, pname, pmail = (f["pessoa"].split("|", 2) + ["", ""])[:3] if f["pessoa"] else ("", "", "")
+    pname, pmail = pname or f["pessoa_nome"], (pmail or f["pessoa_email"]).lower()
+    gname = gname or f["grupo_nome"]
+    notas = []
+    if not f["so_atalaia"]:
+        if not _can_assign(settings):
+            return _assign_page(request, user, tid, erro="Alterar pedidos no SMAX não está ativo (CERTWATCH_SMAX_UPDATE_ENABLED=true).")
+        if not gid and not pid:
+            return _assign_page(request, user, tid, erro="Escolha o grupo e/ou a pessoa nos resultados da procura.")
+        from ..fontes.smax import SmaxError, assign
+        try:
+            res = assign(settings, tid, gid, pid, f["comentario"][:2000], SMAX_CLIENT)
+        except SmaxError as exc:
+            with session_scope() as s:
+                audit(s, user, "pedido.atribuir", tid, ok=False, erro=str(exc)[:300])
+            return _assign_page(request, user, tid, erro=str(exc))
+        with session_scope() as s:
+            t = _ticket_or_404(s, tid)
+            antes = {"grupo": t.owner_group, "pessoa": t.owner_person}
+            if res.get("pedido"):
+                for k in ("owner_group", "owner_person", "last_update", "phase"):
+                    setattr(t, k, res["pedido"][k])
+            audit(s, user, "pedido.atribuir", tid, ok=res["ok"], estado=res["estado"], motivo=res["motivo"], antes=antes,
+                  depois={"grupo": t.owner_group, "pessoa": t.owner_person})
+        if not res["ok"]:
+            return _assign_page(request, user, tid, erro=f"O SMAX não aceitou ({res['estado']}): {res['motivo']}")
+        notas.append(f"Pedido {tid} passado no SMAX para {res['pedido']['owner_group'] or '—'} · {res['pedido']['owner_person'] or '—'}.")
+    if f["atalaia"] or f["so_atalaia"]:
+        rows, _, _ = _exp_rows(365, "1")
+        cns = sorted({r["cn"] for r in rows if r["cn"] and ((r["pedido"] or {}).get("id") == tid or any(x["id"] == tid for x in r["abertos"]))})
+        with session_scope() as s:
+            teams = ow.teams(s)
+            team = next((x for x in teams if f["equipa"].isdigit() and x.id == int(f["equipa"])), None) or \
+                next((x for x in teams if gname and x.smax_group and x.smax_group.strip().lower() == gname.lower()), None)
+            for cn in cns:
+                cur = s.scalar(select(CertOwner).where(CertOwner.cn_norm == cn))
+                ow.set_owner(s, cn, team.id if team else (cur.team_id if cur else None), pname or (cur.person if cur else ""),
+                             pmail or (cur.person_email if cur else ""), user)
+            if cns:
+                audit(s, user, "dono.atribuir", ", ".join(cns)[:600], equipa=team.name if team else None, pessoa=pname, pedido=tid)
+        if cns:
+            notas.append(f"Dono no Atalaia atualizado em {len(cns)} certificado(s)" + (f" (equipa {team.name})." if team else
+                         (f"; não há equipa com o grupo «{gname}» no SMAX: crie-a em Donos para ficar ligada." if gname else ".")))
+    return _assign_page(request, user, tid, msg=" ".join(notas) or "Nada mudou.")
 
 
 # ------------------------------------------------------------------ relatório por email

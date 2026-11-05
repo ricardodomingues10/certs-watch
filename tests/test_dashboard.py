@@ -125,7 +125,7 @@ def test_navigation_and_theme(env):
     groups = {g["key"]: [i["label"] for i in g["items"]] for g in nav_tree("/", {})}
     assert groups["hoje"] == ["Painel"] and groups["inventario"] == ["Certificados", "APIs e segredos", "Servidores", "Donos"]
     assert groups["vigilancia"] == ["Testes", "Sites públicos", "Na internet"] and not any("Alertas" in v for v in groups.values())
-    assert groups["renovar"] == ["Pedidos SMAX", "Relatório por email"]
+    assert groups["renovar"] == ["Próximos 90 dias", "Pedidos SMAX", "Relatório por email"]
     assert groups["cmdb"] == ["Atualizar a CMDB", "Histórico da CMDB"]
     assert groups["sistema"] == ["Execuções e auditoria", "Fontes e ligações", "Utilizadores", "Como funciona"]
     with TestClient(app) as c:
