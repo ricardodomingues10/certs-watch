@@ -7,6 +7,7 @@
 {% if msg %}<div class="note ok">{{ msg }}</div>{% endif %}
 {% if erro %}<div class="note bad">{{ erro }}</div>{% endif %}
 {% if aviso %}<div class="note warn">{{ aviso }}</div>{% endif %}
+{% if prop %}<div class="note"><b>Resposta de {{ prop.by_person }}</b> ({{ prop.created_at|dtt }}): passar para <b>{{ prop.group_name or '—' }}</b> / <b>{{ prop.person_name or '—' }}</b>{% if prop.person_email %} ({{ prop.person_email }}){% endif %}{% if prop.note %} — «{{ prop.note }}»{% endif %}. A procura já foi feita com estes nomes: escolha o grupo e a pessoa certos e guarde. A resposta fica aprovada.</div>{% endif %}
 <div class="grid g2">
 <section class="card">
   <h2>Agora</h2>
@@ -32,7 +33,7 @@
 </div>
 
 <form method="post" action="/a-expirar/pedido/{{ t.id }}" class="card stack" aria-labelledby="h-mudar">
-  <input type="hidden" name="csrf" value="{{ csrf }}">
+  <input type="hidden" name="csrf" value="{{ csrf }}">{% if prop %}<input type="hidden" name="proposta" value="{{ prop.id }}">{% endif %}
   <h2 id="h-mudar">Mudar para</h2>
   <div class="grid g2">
     <fieldset class="plain"><legend class="small">Grupo</legend>
@@ -49,8 +50,8 @@
   <details class="small"><summary>Corrigir só no Atalaia (sem mudar o SMAX)</summary>
     <div class="grid g2 mt">
       <label>Equipa<select name="equipa"><option value="">a do grupo, se existir</option>{% for e in equipas %}<option value="{{ e.id }}">{{ e.name }}</option>{% endfor %}</select></label>
-      <label>Pessoa<input type="text" name="pessoa_nome" maxlength="128"></label>
-      <label>Email da pessoa<input type="email" name="pessoa_email" maxlength="254"></label>
+      <label>Pessoa<input type="text" name="pessoa_nome" maxlength="128" value="{{ prop.person_name if prop else '' }}"></label>
+      <label>Email da pessoa<input type="email" name="pessoa_email" maxlength="254" value="{{ prop.person_email if prop else '' }}"></label>
       <label><input type="checkbox" name="so_atalaia" value="1"> só no Atalaia</label>
     </div>
   </details>

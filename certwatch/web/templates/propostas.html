@@ -1,0 +1,35 @@
+{% extends "base.html" %}
+{% block title %}Respostas aos lembretes{% endblock %}
+{% block crumb %}Renovar · <a href="/a-expirar">Próximos 90 dias</a>{% endblock %}
+{% block page_title %}Respostas aos lembretes{% endblock %}
+{% block lede %}O que as pessoas responderam pelo link do lembrete. Nada muda no SMAX sem aprovar aqui: «É meu» marca o pedido como confirmado; «Passar para…» abre a mudança no SMAX já com a procura feita.{% endblock %}
+{% block content %}
+{% if msg %}<div class="note ok">{{ msg }}</div>{% endif %}
+<nav class="tabs" aria-label="Estado">
+  {% for k, v in (('pendente', 'Por rever'), ('aplicada', 'Aprovadas'), ('rejeitada', 'Rejeitadas')) %}
+  <a href="/a-expirar/propostas?estado={{ k }}" class="{{ 'on' if estado == k }}">{{ v }} <span class="n {{ 'hot' if k == 'pendente' and counts.get(k) }}">{{ counts.get(k, 0) }}</span></a>{% endfor %}
+</nav>
+<section class="card flush">
+  {% if rows %}
+  <div class="scroll"><table>
+    <thead><tr><th>Quando</th><th>Quem respondeu</th><th>Pedido</th><th>Resposta</th><th>Estava com</th>{% if estado == 'pendente' %}<th></th>{% else %}<th>Decidido</th>{% endif %}</tr></thead>
+    <tbody>{% for p in rows %}<tr>
+      <td class="small nowrap">{{ p.created_at|dtt }}</td>
+      <td class="small">{{ p.by_person }}<div class="muted">{{ p.by_email }}</div></td>
+      <td><a href="/a-expirar/pedido/{{ p.ticket_id }}">{{ p.ticket_id }}</a><div class="small muted">{{ p.nome }}</div></td>
+      <td class="small">{% if p.kind == 'confirma' %}<span class="pn-pill t-ok">É meu</span>{% else %}<span class="pn-pill t-a">Passar para</span> <b>{{ p.group_name or '—' }}</b> / <b>{{ p.person_name or '—' }}</b>{% if p.person_email %} <span class="muted">{{ p.person_email }}</span>{% endif %}{% endif %}
+        {% if p.note %}<div class="muted">«{{ p.note }}»</div>{% endif %}</td>
+      <td class="small">{{ p.was_group or '—' }} / {{ p.was_person or '—' }}</td>
+      {% if estado == 'pendente' %}
+      <td class="nowrap"><div class="ru-acts">
+        <form method="post" action="/a-expirar/propostas/{{ p.id }}/aprovar"><input type="hidden" name="csrf" value="{{ csrf }}"><button class="small-btn primary">{{ 'Confirmar' if p.kind == 'confirma' else 'Aprovar e mudar…' }}</button></form>
+        <form method="post" action="/a-expirar/propostas/{{ p.id }}/rejeitar"><input type="hidden" name="csrf" value="{{ csrf }}"><button class="small-btn us-del">Rejeitar</button></form>
+      </div></td>
+      {% else %}<td class="small">{{ p.decided_by }} · {{ p.decided_at|dtt }}{% if p.result %}<div class="muted">{{ p.result }}</div>{% endif %}</td>{% endif %}
+    </tr>{% endfor %}</tbody>
+  </table></div>
+  {% else %}
+  <div class="empty"><b>{{ 'Nenhuma resposta por rever' if estado == 'pendente' else 'Nada aqui' }}</b>As respostas chegam pelo link «É meu / Passar para…» dos lembretes.</div>
+  {% endif %}
+</section>
+{% endblock %}

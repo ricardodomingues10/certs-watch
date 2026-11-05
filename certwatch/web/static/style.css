@@ -1334,3 +1334,11 @@ label.field input[type=text], label.field input[type=password], label.field inpu
 .lb-mail { min-width: min(100%, 360px); display: flex; flex-direction: column; gap: 2px; }
 .lb-preview { margin-top: 8px; padding: 12px; background: #fff; color: #222; border-radius: 8px; overflow-x: auto; }
 .ax-table .pn-pill { white-space: normal; }
+/* Resposta ao lembrete (página pública) */
+.rs-item { border: 1px solid var(--line); border-radius: 12px; padding: 12px 14px; margin: 0; display: flex; flex-direction: column; gap: 6px; }
+.rs-item.is-target { border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); }
+.rs-item legend { padding: 0 6px; }
+.rs-opt { display: flex; gap: 8px; align-items: center; }
+.rs-to { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 180px), 1fr)); gap: 8px; }
+.rs-form label.rs-opt { flex-direction: row; align-items: center; justify-content: flex-start; gap: 10px; font-size: 15px; color: var(--ink); text-align: left; }
+.rs-form label.rs-opt input[type=radio] { width: 18px; height: 18px; min-height: 0; margin: 0; padding: 0; flex: none; accent-color: var(--accent); }

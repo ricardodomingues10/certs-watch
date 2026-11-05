@@ -111,6 +111,51 @@ class Reminder(Base):
     erro: Mapped[str] = mapped_column(Text, default="")
 
 
+class ReminderLink(Base):
+    """Link pessoal de um lembrete: a pessoa responde por ele (confirma ou propõe outro responsável), sem login.
+    Só o hash do código fica guardado; vale para os pedidos daquele lembrete e expira."""
+
+    __tablename__ = "reminder_links"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    reminder_id: Mapped[int | None] = mapped_column(Integer, nullable=True, index=True)
+    token_hash: Mapped[str] = mapped_column(String(64), unique=True, index=True)
+    person: Mapped[str] = mapped_column(String(256), default="")
+    email: Mapped[str] = mapped_column(String(254), default="")
+    tickets: Mapped[list] = mapped_column(JSON, default=list)
+    items: Mapped[list] = mapped_column(JSON, default=list)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    answered_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    revoked: Mapped[bool] = mapped_column(Boolean, default=False)
+
+
+class ChangeProposal(Base):
+    """Resposta a um lembrete: «é meu» (confirma) ou «passar para…» (mudar). Só se aplica depois de um operador
+    aprovar; nunca sozinha."""
+
+    __tablename__ = "change_proposals"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, index=True)
+    link_id: Mapped[int | None] = mapped_column(Integer, nullable=True, index=True)
+    by_person: Mapped[str] = mapped_column(String(256), default="")
+    by_email: Mapped[str] = mapped_column(String(254), default="")
+    ticket_id: Mapped[str] = mapped_column(String(64), index=True)
+    nome: Mapped[str] = mapped_column(String(512), default="")
+    kind: Mapped[str] = mapped_column(String(16))                 # confirma | mudar
+    group_name: Mapped[str] = mapped_column(String(256), default="")
+    person_name: Mapped[str] = mapped_column(String(256), default="")
+    person_email: Mapped[str] = mapped_column(String(254), default="")
+    note: Mapped[str] = mapped_column(Text, default="")
+    was_group: Mapped[str] = mapped_column(String(256), default="")
+    was_person: Mapped[str] = mapped_column(String(256), default="")
+    status: Mapped[str] = mapped_column(String(16), default="pendente", index=True)   # pendente | aplicada | rejeitada
+    decided_by: Mapped[str] = mapped_column(String(254), default="")
+    decided_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    result: Mapped[str] = mapped_column(Text, default="")
+
+
 class Endpoint(Base):
     """Alvo de scan host:porta e o CN que é esperado servir."""
 

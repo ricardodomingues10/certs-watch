@@ -269,6 +269,7 @@ class Settings:
     smax_group_field: str = "OwnedByGroup"       # campo do grupo responsável no pedido (para atribuir)
     smax_person_field: str = "OwnedByPerson"     # campo da pessoa responsável no pedido
     reminder_days: int = 90                      # Próximos dias: horizonte por omissão
+    reminder_link_days: int = 14                 # validade do link de resposta de cada lembrete
     smax_close_fields: dict = field(default_factory=lambda: {"PhaseId": "Close"})
     smax_reopen_fields: dict = field(default_factory=lambda: {"PhaseId": "Execute"})
     smax_comment_privacy: str = "INTERNAL"
@@ -442,6 +443,7 @@ class Settings:
             smax_group_field=_env("CERTWATCH_SMAX_GROUP_FIELD", "OwnedByGroup") or "OwnedByGroup",
             smax_person_field=_env("CERTWATCH_SMAX_PERSON_FIELD", "OwnedByPerson") or "OwnedByPerson",
             reminder_days=max(1, min(365, int(_env("CERTWATCH_REMINDER_DAYS", "90")))),
+            reminder_link_days=max(1, min(60, int(_env("CERTWATCH_REMINDER_LINK_DAYS", "14")))),
             smax_update_enabled=_env("CERTWATCH_SMAX_UPDATE_ENABLED",
                                      _env("CERTWATCH_SMAX_CREATE_ENABLED", "false")).lower() == "true",
             smax_close_fields=_json_fields(_env("CERTWATCH_SMAX_CLOSE_FIELDS", '{"PhaseId": "Close"}'), "CERTWATCH_SMAX_CLOSE_FIELDS"),

@@ -14,7 +14,7 @@ from sqlalchemy.orm import Session
 
 from .config import Settings
 from .db import as_utc, utcnow
-from .models import Reminder, Team
+from .models import ChangeProposal, Reminder, ReminderLink, SmaxTicket, Team
 
 CHECKS = {
     "sem_pedido": ("Sem pedido aberto", "r"),
@@ -94,9 +94,13 @@ def rows(session: Session, settings: Settings, days: int = 90, expired: bool = F
                     "ambito": a.application or a.location, "auto": False, "dono": None, "pedido": main, "abertos": opened,
                     "detalhe": f"/apis?q={a.name}"})
     last = last_sent(session)
+    props = proposals_by_ticket(session)
     for x in out:
         x["checks"] = check(x, teams)
-        x["lembrete"] = last.get((x["pedido"] or {}).get("id")) if x["pedido"] else None
+        tid = (x["pedido"] or {}).get("id")
+        x["lembrete"] = last.get(tid) if tid else None
+        x["proposta"] = props["pendente"].get(tid) if tid else None
+        x["confirmado"] = props["confirmado"].get(tid) if tid else None
     out.sort(key=lambda x: (as_utc(x["expira"]), x["nome"].lower()))
     return out
 
@@ -128,7 +132,8 @@ _TD = 'style="border:1px solid #bfbfbf;padding:6px 10px;"'
 _TH = 'style="border:1px solid #bfbfbf;padding:6px 10px;background:#f2f2f2;text-align:left;"'
 
 
-def email_html(person: str, items: list[dict], intro: str, signature: str, now: datetime) -> str:
+def email_html(person: str, items: list[dict], intro: str, signature: str, now: datetime, link: str = "") -> str:
+    """O email do lembrete. `link`: o endereço da página de resposta (cada linha tem «É meu» e «Passar para…»)."""
     e = lambda v: html.escape("" if v is None else str(v))  # noqa: E731
     greet = "Bom dia" if now.hour < 13 else "Boa tarde"
     def day(v):
@@ -140,13 +145,20 @@ def email_html(person: str, items: list[dict], intro: str, signature: str, now: 
     body = "".join(
         f"<tr><td {_TD}>{day(x['expira'])}</td><td {_TD}><b>{e(x['dias'])}</b></td><td {_TD}>{e(x['nome'])}</td>"
         f"<td {_TD}>{'Certificado' if x['tipo'] == 'certificado' else 'Segredo de API'}</td>"
-        f"<td {_TD}>{ticket(x['pedido'])}</td><td {_TD}>{e(x['pedido'].get('fase'))}</td></tr>" for x in items)
+        f"<td {_TD}>{ticket(x['pedido'])}</td><td {_TD}>{e(x['pedido'].get('fase'))}</td>"
+        + (f"<td {_TD}><a href=\"{e(link)}?pedido={e(x['pedido']['id'])}&amp;acao=confirma#p-{e(x['pedido']['id'])}\">É meu</a> · "
+           f"<a href=\"{e(link)}?pedido={e(x['pedido']['id'])}&amp;acao=mudar#p-{e(x['pedido']['id'])}\">Passar para…</a></td>" if link else "")
+        + "</tr>" for x in items)
     table = ('<table style="border-collapse:collapse;font-family:Arial,sans-serif;font-size:14px;"><thead><tr>'
              f"<th {_TH}>Expira</th><th {_TH}>Dias</th><th {_TH}>Certificado / segredo</th><th {_TH}>Tipo</th>"
-             f"<th {_TH}>Pedido</th><th {_TH}>Fase</th></tr></thead><tbody>{body}</tbody></table>")
+             f"<th {_TH}>Pedido</th><th {_TH}>Fase</th>" + (f"<th {_TH}>Responder</th>" if link else "")
+             + f"</tr></thead><tbody>{body}</tbody></table>")
     paras = "".join(f"<p>{e(p)}</p>" for p in (intro or "").split("\n") if p.strip())
+    answer_p = (f'<p>Se algum destes pedidos não for seu, ou para confirmar que está a tratar dele, use os links «É meu» e '
+                f'«Passar para…» ou <a href="{e(link)}">responda aqui a todos de uma vez</a>. O link é pessoal e vale '
+                f'durante alguns dias; quem gere os certificados revê a resposta antes de mudar o pedido.</p>') if link else ""
     return (f'<div style="font-family:Arial,sans-serif;font-size:14px;color:#222;"><p>{greet} {e(person.split(" ")[0])},</p>'
-            f"{paras}{table}<p>Cumprimentos,<br>{e(signature or 'Atalaia Cert')}</p></div>")
+            f"{paras}{table}{answer_p}<p>Cumprimentos,<br>{e(signature or 'Atalaia Cert')}</p></div>")
 
 
 def subject(template: str, items: list[dict]) -> str:
@@ -157,3 +169,88 @@ def subject(template: str, items: list[dict]) -> str:
 def serial(items: list[dict]) -> list[dict]:
     return [{"nome": x["nome"], "tipo": x["tipo"], "expira": _iso(x["expira"]), "pedido": (x["pedido"] or {}).get("id")}
             for x in items]
+
+
+# ------------------------------------------------------------------ resposta pelo link do lembrete
+def token_hash(token: str) -> str:
+    import hashlib
+    return hashlib.sha256(token.encode()).hexdigest()
+
+
+def create_link(session: Session, settings: Settings, reminder_id: int | None, person: str, email: str,
+                items: list[dict]) -> str:
+    """Cria o link de resposta e devolve o código (só aparece no email; aqui fica o hash)."""
+    import secrets
+    from datetime import timedelta
+    token = secrets.token_urlsafe(24)
+    session.add(ReminderLink(reminder_id=reminder_id, token_hash=token_hash(token), person=person, email=email,
+                             tickets=sorted({x["pedido"]["id"] for x in items}), items=serial(items),
+                             expires_at=utcnow() + timedelta(days=settings.reminder_link_days)))
+    session.flush()
+    return token
+
+
+def link_for(session: Session, token: str) -> ReminderLink | None:
+    if not token or len(token) > 100:
+        return None
+    ln = session.scalar(select(ReminderLink).where(ReminderLink.token_hash == token_hash(token)))
+    if ln is None or ln.revoked or as_utc(ln.expires_at) < utcnow():
+        return None
+    return ln
+
+
+def link_page(session: Session, ln: ReminderLink) -> dict:
+    """O que a página do link mostra: cada pedido, com quem está agora e a resposta já dada."""
+    tickets = {t.id: t for t in session.scalars(select(SmaxTicket).where(SmaxTicket.id.in_(ln.tickets or [])))}
+    mine = {p.ticket_id: p for p in session.scalars(select(ChangeProposal).where(ChangeProposal.link_id == ln.id))}
+    rows = []
+    for it in ln.items or []:
+        t = tickets.get(it.get("pedido"))
+        rows.append({**it, "grupo": t.owner_group if t else "", "pessoa": t.owner_person if t else "",
+                     "fase": t.phase if t else "", "resposta": mine.get(it.get("pedido"))})
+    groups = sorted({x for x in session.scalars(select(SmaxTicket.owner_group).distinct()) if x} |
+                    {t.smax_group for t in session.scalars(select(Team)) if t.smax_group})[:500]
+    persons = sorted({x for x in session.scalars(select(SmaxTicket.owner_person).distinct()) if x})[:500]
+    return {"rows": rows, "groups": groups, "persons": persons}
+
+
+def answer(session: Session, ln: ReminderLink, form: dict) -> int:
+    """Guarda as respostas (substitui as pendentes deste link para o mesmo pedido). Devolve quantas."""
+    tickets = {t.id: t for t in session.scalars(select(SmaxTicket).where(SmaxTicket.id.in_(ln.tickets or [])))}
+    names = {it.get("pedido"): it.get("nome") for it in ln.items or []}
+    n = 0
+    for tid in ln.tickets or []:
+        acao = str(form.get(f"acao_{tid}") or "")
+        if acao not in ("confirma", "mudar"):
+            continue
+        grupo = str(form.get(f"grupo_{tid}") or "").strip()[:256]
+        pessoa = str(form.get(f"pessoa_{tid}") or "").strip()[:256]
+        mail = str(form.get(f"email_{tid}") or "").strip().lower()[:254]
+        nota = str(form.get(f"nota_{tid}") or "").strip()[:1000]
+        if acao == "mudar" and not (grupo or pessoa or nota):
+            continue
+        old = session.scalar(select(ChangeProposal).where(ChangeProposal.link_id == ln.id, ChangeProposal.ticket_id == tid,
+                                                         ChangeProposal.status == "pendente"))
+        if old is not None:
+            session.delete(old)
+        t = tickets.get(tid)
+        session.add(ChangeProposal(link_id=ln.id, by_person=ln.person, by_email=ln.email, ticket_id=tid,
+                                   nome=names.get(tid) or "", kind=acao, group_name=grupo if acao == "mudar" else "",
+                                   person_name=pessoa if acao == "mudar" else "", person_email=mail if acao == "mudar" else "",
+                                   note=nota, was_group=t.owner_group if t else "", was_person=t.owner_person if t else ""))
+        n += 1
+    if n:
+        ln.answered_at = utcnow()
+    session.flush()
+    return n
+
+
+def proposals_by_ticket(session: Session) -> dict:
+    out = {"pendente": {}, "confirmado": {}}
+    for p in session.scalars(select(ChangeProposal).order_by(ChangeProposal.id.desc()).limit(3000)):
+        if p.status == "pendente":
+            out["pendente"].setdefault(p.ticket_id, {"id": p.id, "kind": p.kind, "por": p.by_person, "grupo": p.group_name,
+                                                     "pessoa": p.person_name})
+        elif p.status == "aplicada" and p.kind == "confirma":
+            out["confirmado"].setdefault(p.ticket_id, {"por": p.by_person, "em": p.decided_at or p.created_at})
+    return out

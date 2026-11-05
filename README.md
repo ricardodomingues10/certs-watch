@@ -643,6 +643,15 @@ Separadores Todos, **A rever**, Sem pedido aberto e Confere; exportação CSV.
 - O assunto e o texto editam-se; vê-se cada email antes; nada é enviado sem confirmar, e só para os domínios de `CERTWATCH_REPORT_ALLOWED_DOMAINS`.
 - Cada envio fica registado (`lembrete.enviar`) e a data aparece na coluna «Lembrete».
 
+**Responder ao lembrete (link pessoal).** Cada lembrete leva um link pessoal, e cada linha da tabela tem «É meu» e «Passar para…».
+- O link abre uma página pequena do Atalaia, **sem login**, só com os pedidos desse lembrete. Para cada um a pessoa escolhe «É meu, estou a tratar dele» ou «Não é meu: passar para…» (grupo e pessoa, com sugestões dos nomes que o Atalaia conhece, e uma nota). Pode voltar ao link e mudar a resposta.
+- O link vale `CERTWATCH_REMINDER_LINK_DAYS` dias (14 por omissão). Só o hash do código fica guardado, o código é tapado no registo de acessos e as tentativas com códigos errados são limitadas. Se o email não sair, o link é anulado.
+- **Nada muda sozinho.** As respostas aparecem em **Próximos 90 dias → Respostas por rever** (e no menu):
+  - «É meu» → **Confirmar**: o pedido passa a mostrar «Confirmado por …».
+  - «Passar para…» → **Aprovar e mudar…**: abre a mudança do pedido já com a procura feita no SMAX pelos nomes que a pessoa escreveu; escolhe-se o grupo e a pessoa certos e guarda-se (SMAX e Atalaia). A resposta fica aprovada.
+  - **Rejeitar**, se não estiver certa.
+- É preciso que quem recebe o email consiga abrir o endereço do Atalaia (`CERTWATCH_PUBLIC_URL`, a partir da rede interna ou VPN).
+
 ## 8. Classificação
 
 - **Tipo**: API (está na lista de APIs) · Wildcard · Endereço IP · Hostname · Autoridade (CA) · Outro.

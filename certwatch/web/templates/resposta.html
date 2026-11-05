@@ -1,0 +1,36 @@
+{% extends "_publico.html" %}
+{% block title %}Os seus pedidos{% endblock %}
+{% block body %}
+{% if not info %}
+<h1>Este link já não vale</h1>
+<p>O link expirou ou foi substituído. Responda ao email ou fale com quem gere os certificados.</p>
+{% else %}
+<h1>Pedidos de renovação atribuídos a {{ info.person }}</h1>
+{% if done is not none %}
+<p class="note ok" role="status">{% if done %}Obrigado: {{ done }} resposta{{ 's' if done != 1 }} registada{{ 's' if done != 1 }}. Quem gere os certificados vai rever e mudar o pedido se for o caso.{% else %}Nada foi registado: escolha uma opção em pelo menos um pedido.{% endif %}</p>
+{% endif %}
+<p class="small muted">Para cada pedido, diga se é seu ou para quem deve passar. Nada muda no SMAX sem ser revisto. Este link vale até {{ info.expires|dt }} e pode voltar a ele para mudar a resposta.</p>
+<form method="post" action="/r/{{ token }}" class="stack rs-form">
+  <input type="hidden" name="csrf" value="{{ csrf }}">
+  <datalist id="rs-grupos">{% for g in data.groups %}<option value="{{ g }}">{% endfor %}</datalist>
+  <datalist id="rs-pessoas">{% for p in data.persons %}<option value="{{ p }}">{% endfor %}</datalist>
+  {% for r in data.rows %}{% set tid = r.pedido %}{% set ans = r.resposta %}
+  {% set sel = (ans.kind if ans and ans.status == 'pendente' else (acao if pedido == tid else '')) %}
+  <fieldset class="rs-item{{ ' is-target' if pedido == tid }}" id="p-{{ tid }}">
+    <legend><b>{{ r.nome }}</b></legend>
+    <p class="small">Expira a {{ r.expira|dt }} · pedido <b>{{ tid }}</b>{% if r.fase %} ({{ r.fase }}){% endif %} · agora com <b>{{ r.grupo or 'sem grupo' }}</b> / <b>{{ r.pessoa or 'sem pessoa' }}</b></p>
+    {% if ans and ans.status != 'pendente' %}<p class="small"><span class="tag tag-acc">{{ 'aplicada' if ans.status == 'aplicada' else 'não aceite' }}</span> já respondido.</p>{% endif %}
+    <label class="rs-opt"><input type="radio" name="acao_{{ tid }}" value="confirma" {{ 'checked' if sel == 'confirma' }}> É meu, estou a tratar dele</label>
+    <label class="rs-opt"><input type="radio" name="acao_{{ tid }}" value="mudar" {{ 'checked' if sel == 'mudar' }}> Não é meu: passar para…</label>
+    <div class="rs-to">
+      <label class="small">Grupo<input type="text" name="grupo_{{ tid }}" list="rs-grupos" maxlength="256" value="{{ ans.group_name if ans and ans.status == 'pendente' else '' }}" placeholder="ex.: Sistemas Linux"></label>
+      <label class="small">Pessoa<input type="text" name="pessoa_{{ tid }}" list="rs-pessoas" maxlength="256" value="{{ ans.person_name if ans and ans.status == 'pendente' else '' }}" placeholder="nome"></label>
+      <label class="small">Email da pessoa (opcional)<input type="email" name="email_{{ tid }}" maxlength="254" value="{{ ans.person_email if ans and ans.status == 'pendente' else '' }}"></label>
+    </div>
+    <label class="small">Nota (opcional)<input type="text" name="nota_{{ tid }}" maxlength="1000" value="{{ ans.note if ans and ans.status == 'pendente' else '' }}" placeholder="ex.: já foi renovado, falta fechar"></label>
+  </fieldset>
+  {% endfor %}
+  <button class="primary">Enviar as respostas</button>
+</form>
+{% endif %}
+{% endblock %}

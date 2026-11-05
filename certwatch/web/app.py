@@ -51,7 +51,8 @@ from ..normalize import norm_label, split_api_name, is_ip, is_valid_hostname, no
 from .security import (SESSION_COOKIE, PermissionDenied, check_csrf, check_login, clear_failures, current_user, forget_logins, note_failure,
                        require_admin, security_middleware, too_many)
 from .. import users as us
-from ..models import CertOwner, CmdbChange, DomainChange, DomainRecord, SiteCheck, Team, TicketRule, User, UserPref
+from ..models import (CertOwner, ChangeProposal, CmdbChange, DomainChange, DomainRecord, ReminderLink, SiteCheck, Team,
+                      TicketRule, User, UserPref)
 from .. import owners as ow
 
 BASE = Path(__file__).parent
@@ -90,7 +91,7 @@ templates = Jinja2Templates(directory=BASE / "templates")
 
 class _RedactInvite(logging.Filter):
     """O código do link de convite vai no endereço (/convite/<código>): nunca fica no registo de acessos."""
-    _re = re.compile(r"(/convite/|/calendario/)[^\s?\"]+")
+    _re = re.compile(r"(/convite/|/calendario/|/r/)[^\s?\"]+")
 
     def filter(self, record: logging.LogRecord) -> bool:
         if isinstance(record.args, tuple):
@@ -172,7 +173,8 @@ def nav_counts() -> dict:
     """Contadores da navegação lateral (cache de 30 s para não pesar em cada página)."""
     if _NAV_CACHE["data"] is not None and time.monotonic() - _NAV_CACHE["at"] < 30:
         return _NAV_CACHE["data"]
-    data = {"alertas": 0, "alertas_altos": 0, "ct_por_triar": 0, "reconc_dif": 0, "pedidos_acesso": 0, "sites_problemas": 0}
+    data = {"alertas": 0, "alertas_altos": 0, "ct_por_triar": 0, "reconc_dif": 0, "pedidos_acesso": 0, "sites_problemas": 0,
+            "propostas": 0}
     try:
         settings = get_settings()
         with session_scope() as s:
@@ -183,6 +185,8 @@ def nav_counts() -> dict:
             from ..sites import PROBLEMS as SITE_PROBLEMS
             data["sites_problemas"] = s.scalar(select(func.count()).select_from(SiteCheck)
                                                .where(SiteCheck.estado.in_(SITE_PROBLEMS))) or 0
+            data["propostas"] = s.scalar(select(func.count()).select_from(ChangeProposal)
+                                         .where(ChangeProposal.status == "pendente")) or 0
             if s.scalar(select(CtCert.id).limit(1)) is not None:
                 data["ct_por_triar"] = sum(1 for r in classify_ct(s, settings)
                                            if r["state"] != "na_cmdb" and r["ct"].triage == "por_triar" and not r["expired"])
@@ -211,7 +215,7 @@ NAV_GROUPS = [
                                   ("/endpoints", "Servidores", None), ("/donos", "Donos", None)]),
     ("vigilancia", "Vigilância", [("/testes", "Testes", None), ("/sites-publicos", "Sites públicos", "sites_problemas"),
                                   ("/descoberta", "Na internet", "ct_por_triar")]),
-    ("renovar", "Renovar", [("/a-expirar", "Próximos 90 dias", None), ("/pedidos", "Pedidos SMAX", None),
+    ("renovar", "Renovar", [("/a-expirar", "Próximos 90 dias", "propostas"), ("/pedidos", "Pedidos SMAX", None),
                             ("/relatorio", "Relatório por email", None)]),
     ("cmdb", "CMDB", [("/cmdb-final", "Atualizar a CMDB", "reconc_dif"), ("/cmdb/historico", "Histórico da CMDB", None)]),
     ("sistema", "Sistema", [("/jobs", "Execuções e auditoria", None), ("/fontes", "Fontes e ligações", None),
@@ -2082,6 +2086,8 @@ def expiring_page(request: Request, dias: int = 0, expirados: str = "", q: str =
               "confere": sum(1 for r in allr if "confere" in r["checks"]),
               "com_pessoa": sum(1 for r in allr if (r["pedido"] or {}).get("responsavel"))}
     settings = get_settings()
+    with session_scope() as s2:
+        counts["propostas"] = s2.scalar(select(func.count()).select_from(ChangeProposal).where(ChangeProposal.status == "pendente")) or 0
     return render(request, "a_expirar.html", user, rows=rows, counts=counts, CHECKS=rm.CHECKS,
                   f={"dias": dias, "expirados": expirados, "q": q, "verificacao": verificacao, "tipo": tipo},
                   can_assign=_can_assign(settings), smtp_ok=not rp.smtp_problems(settings), now=utcnow())
@@ -2161,10 +2167,20 @@ async def reminders_send(request: Request, user: str = Depends(current_user)):
         if str(form.get(f"pessoa_{i}") or "") != name or not form.get(f"enviar_{i}"):
             continue
         raw = str(form.get(f"email_{i}") or "")
+        with session_scope() as s:
+            rem = Reminder(sent_by=user, person=name, tickets=sorted({x["pedido"]["id"] for x in items}), items=rm.serial(items))
+            s.add(rem)
+            s.flush()
+            rem_id = rem.id
+        link_id = None
         try:
             to = rp.parse_recipients(raw, settings)
+            with session_scope() as s:
+                token = rm.create_link(s, settings, rem_id, name, to[0], items)
+                link_id = s.scalar(select(ReminderLink.id).where(ReminderLink.token_hash == rm.token_hash(token)))
+            link = f"{us.base_url(settings, str(request.base_url))}/r/{token}"
             msg = rp.build_message(settings, to, rm.subject(subj_t, items),
-                                   rm.email_html(name, items, intro, settings.report_signature, now), [])
+                                   rm.email_html(name, items, intro, settings.report_signature, now, link), [])
             rp.send(settings, [msg], SMTP_FACTORY)
             ok, erro = True, ""
             ok_n += 1
@@ -2172,9 +2188,11 @@ async def reminders_send(request: Request, user: str = Depends(current_user)):
             to, ok, erro = [raw[:200]] if raw else [], False, str(exc)
             falhas.append(f"{name}: {erro}")
         with session_scope() as s:
-            s.add(Reminder(sent_by=user, person=name, to=", ".join(to), ok=ok, erro=erro[:500],
-                           tickets=sorted({x["pedido"]["id"] for x in items}), items=rm.serial(items)))
-            audit(s, user, "lembrete.enviar", name, para=to, pedidos=sorted({x["pedido"]["id"] for x in items}), ok=ok, erro=erro[:300])
+            rem = s.get(Reminder, rem_id)
+            rem.to, rem.ok, rem.erro = ", ".join(to), ok, erro[:500]
+            if not ok and link_id:
+                s.get(ReminderLink, link_id).revoked = True          # o email não saiu: o link não vale
+            audit(s, user, "lembrete.enviar", name, para=to, pedidos=rem.tickets, ok=ok, erro=erro[:300])
     msg = f"{ok_n} lembrete(s) enviado(s)." + (f" Falharam: {'; '.join(falhas)}" if falhas else "")
     r = RedirectResponse("/a-expirar#lista", status_code=303)
     r.set_cookie(NOTICE_COOKIE, quote(msg[:600]), max_age=60, httponly=True, samesite="strict",
@@ -2182,8 +2200,17 @@ async def reminders_send(request: Request, user: str = Depends(current_user)):
     return r
 
 
-def _assign_page(request: Request, user: str, tid: str, g: str = "", p: str = "", erro: str = "", msg: str = ""):
+def _assign_page(request: Request, user: str, tid: str, g: str = "", p: str = "", erro: str = "", msg: str = "",
+                 proposta: str = ""):
     settings = get_settings()
+    prop = None
+    if proposta.isdigit():
+        with session_scope() as s:
+            prop = s.get(ChangeProposal, int(proposta))
+            if prop is not None:
+                s.expunge(prop)
+        if prop is not None and (prop.ticket_id != tid or prop.status != "pendente"):
+            prop = None
     from .. import reminders as rm
     with session_scope() as s:
         t = _ticket_or_404(s, tid)
@@ -2200,13 +2227,13 @@ def _assign_page(request: Request, user: str, tid: str, g: str = "", p: str = ""
         except SmaxError as exc:
             aviso = str(exc)
     return render(request, "atribuir.html", user, t=t, rows=mine, gq=g, pq=p, groups=groups, persons=persons, aviso=aviso,
-                  erro=erro, msg=msg, can_assign=_can_assign(settings), equipas=teams, CHECKS=rm.CHECKS,
+                  erro=erro, msg=msg, can_assign=_can_assign(settings), equipas=teams, CHECKS=rm.CHECKS, prop=prop,
                   team_for={x.smax_group.strip().lower(): x for x in teams if x.smax_group})
 
 
 @app.get("/a-expirar/pedido/{tid}")
-def assign_page(request: Request, tid: str, g: str = "", p: str = "", user: str = Depends(current_user)):
-    return _assign_page(request, user, tid, g.strip()[:120], p.strip()[:120])
+def assign_page(request: Request, tid: str, g: str = "", p: str = "", proposta: str = "", user: str = Depends(current_user)):
+    return _assign_page(request, user, tid, g.strip()[:120], p.strip()[:120], proposta=proposta)
 
 
 @app.post("/a-expirar/pedido/{tid}")
@@ -2216,7 +2243,7 @@ async def assign_save(request: Request, tid: str, user: str = Depends(current_us
     check_csrf(request, form.get("csrf"))
     settings = get_settings()
     f = {k: str(form.get(k) or "").strip() for k in ("grupo", "pessoa", "comentario", "confirmo", "atalaia", "so_atalaia",
-                                                    "equipa", "pessoa_nome", "pessoa_email", "grupo_nome")}
+                                                    "equipa", "pessoa_nome", "pessoa_email", "grupo_nome", "proposta")}
     if f["confirmo"] != "1":
         return _assign_page(request, user, tid, erro="Confirme a alteração.")
     gid, gname = (f["grupo"].split("|", 1) + [""])[:2] if f["grupo"] else ("", "")
@@ -2263,7 +2290,101 @@ async def assign_save(request: Request, tid: str, user: str = Depends(current_us
         if cns:
             notas.append(f"Dono no Atalaia atualizado em {len(cns)} certificado(s)" + (f" (equipa {team.name})." if team else
                          (f"; não há equipa com o grupo «{gname}» no SMAX: crie-a em Donos para ficar ligada." if gname else ".")))
+    if notas and f["proposta"].isdigit():
+        with session_scope() as s:
+            prop = s.get(ChangeProposal, int(f["proposta"]))
+            if prop is not None and prop.ticket_id == tid and prop.status == "pendente":
+                prop.status, prop.decided_by, prop.decided_at, prop.result = "aplicada", user, utcnow(), " ".join(notas)[:500]
+                audit(s, user, "proposta.aprovar", tid, proposta=prop.id, tipo=prop.kind, de=prop.by_person)
+                notas.append(f"Proposta de {prop.by_person} aprovada.")
+        invalidate_nav()
     return _assign_page(request, user, tid, msg=" ".join(notas) or "Nada mudou.")
+
+
+# ------------------------------------------------------------------ resposta ao lembrete (página pública, por link pessoal)
+def _answer_page(request: Request, token: str, done: int | None = None, status_code: int = 200):
+    from .. import reminders as rm
+    with session_scope() as s:
+        ln = rm.link_for(s, token)
+        data = rm.link_page(s, ln) if ln else None
+        info = {"person": ln.person, "expires": ln.expires_at} if ln else None
+    r = _public(request, "resposta.html", info=info, data=data, token=token, done=done,
+                pedido=request.query_params.get("pedido", ""), acao=request.query_params.get("acao", ""))
+    r.status_code = status_code if info else 404
+    r.headers["Referrer-Policy"] = "no-referrer"
+    r.headers["X-Robots-Tag"] = "noindex"
+    return r
+
+
+@app.get("/r/{token}")
+def answer_page(request: Request, token: str):
+    """O link do lembrete: a pessoa confirma que o pedido é seu ou propõe outro responsável. Sem login; o link
+    é pessoal, só para os pedidos daquele lembrete, e expira."""
+    key = "r:" + _client_ip(request)
+    if too_many(key):
+        raise HTTPException(429, "Demasiadas tentativas. Tente daqui a uns minutos.")
+    r = _answer_page(request, token)
+    if r.status_code == 404:
+        from .security import note_failure
+        note_failure(key)
+    return r
+
+
+@app.post("/r/{token}")
+async def answer_save(request: Request, token: str):
+    from .. import reminders as rm
+    form = await request.form()
+    check_csrf(request, form.get("csrf"))
+    key = "r:" + _client_ip(request)
+    if too_many(key):
+        raise HTTPException(429, "Demasiadas tentativas. Tente daqui a uns minutos.")
+    with session_scope() as s:
+        ln = rm.link_for(s, token)
+        if ln is None:
+            from .security import note_failure
+            note_failure(key)
+            return _answer_page(request, token)
+        n = rm.answer(s, ln, dict(form))
+        audit(s, f"lembrete:{ln.person}", "lembrete.responder", ", ".join(ln.tickets or [])[:300], respostas=n, email=ln.email)
+    invalidate_nav()
+    return _answer_page(request, token, done=n)
+
+
+@app.get("/a-expirar/propostas")
+def proposals_page(request: Request, estado: str = "pendente", user: str = Depends(current_user)):
+    """Respostas aos lembretes: aprovar (aplica no SMAX e no Atalaia) ou rejeitar."""
+    estado = estado if estado in ("pendente", "aplicada", "rejeitada") else "pendente"
+    with session_scope() as s:
+        rows = list(s.scalars(select(ChangeProposal).where(ChangeProposal.status == estado)
+                              .order_by(ChangeProposal.id.desc()).limit(500)))
+        for r in rows:
+            s.expunge(r)
+        counts = dict(s.execute(select(ChangeProposal.status, func.count()).group_by(ChangeProposal.status)).all())
+    return render(request, "propostas.html", user, rows=rows, estado=estado, counts=counts,
+                  can_assign=_can_assign(get_settings()), msg=request.query_params.get("msg", ""))
+
+
+@app.post("/a-expirar/propostas/{pid}/{acao}")
+def proposals_decide(request: Request, pid: int, acao: str, csrf: str = Form(""), motivo: str = Form(""),
+                     user: str = Depends(current_user)):
+    check_csrf(request, csrf)
+    if acao not in ("aprovar", "rejeitar"):
+        raise HTTPException(404)
+    with session_scope() as s:
+        p = s.get(ChangeProposal, pid)
+        if p is None or p.status != "pendente":
+            raise HTTPException(404, "Proposta não encontrada ou já decidida.")
+        if acao == "aprovar" and p.kind == "mudar":
+            q = urlencode({"g": p.group_name, "p": p.person_name, "proposta": p.id})
+            return RedirectResponse(f"/a-expirar/pedido/{p.ticket_id}?{q}", status_code=303)
+        p.status = "aplicada" if acao == "aprovar" else "rejeitada"
+        p.decided_by, p.decided_at, p.result = user, utcnow(), motivo.strip()[:500]
+        audit(s, user, "proposta." + acao, p.ticket_id, proposta=p.id, tipo=p.kind, de=p.by_person)
+        tid, kind = p.ticket_id, p.kind
+    invalidate_nav()
+    msg = (f"Confirmado: o pedido {tid} fica como «confirmado por quem o tem»." if acao == "aprovar" and kind == "confirma"
+           else f"Proposta para o pedido {tid} rejeitada.")
+    return RedirectResponse("/a-expirar/propostas?" + urlencode({"msg": msg}), status_code=303)
 
 
 # ------------------------------------------------------------------ relatório por email

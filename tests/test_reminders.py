@@ -155,3 +155,73 @@ def test_assign_requires_update_enabled(st, monkeypatch):
         r = c.post("/a-expirar/pedido/2001", data={"csrf": c.cookies["cw_csrf"], "so_atalaia": "1", "pessoa_nome": "Rui Costa",
                                                     "pessoa_email": "rui@exemplo.pt", "confirmo": "1"}, auth=AUTH)
         assert "Dono no Atalaia atualizado" in r.text
+
+
+def test_answer_link_proposals_and_approval(st, monkeypatch):
+    import re
+    from certwatch.models import ChangeProposal, ReminderLink
+    from certwatch.web import app as webapp
+    fake = FakeSmax()
+    monkeypatch.setattr(webapp, "get_settings", lambda: st)
+    monkeypatch.setattr(webapp, "SMAX_CLIENT", fake.client())
+    monkeypatch.setattr(webapp, "SMTP_FACTORY", FakeSMTP)
+    FakeSMTP.sent = []
+    with TestClient(webapp.app) as c:
+        c.get("/a-expirar", auth=AUTH)
+        token = c.cookies["cw_csrf"]
+        prev = c.post("/a-expirar/lembretes", data={"csrf": token, "k": ["c:comped.exemplo.pt", "c:parado.exemplo.pt"]}, auth=AUTH).text
+        (i, name), = re.findall(r'name="pessoa_(\d+)" value="([^"]+)"', prev)
+        c.post("/a-expirar/lembretes/enviar", data={"csrf": token, "k": ["c:comped.exemplo.pt", "c:parado.exemplo.pt"],
+                                                     "confirmo": "1", f"pessoa_{i}": name, f"enviar_{i}": "1",
+                                                     f"email_{i}": "ana@exemplo.pt"}, auth=AUTH)
+        msg = [m for m in FakeSMTP.sent if not isinstance(m, tuple)][-1]
+        body = msg.get_body(("html",)).get_content()
+        link = re.search(r'href="(http[^"?]+/r/([^"?]+))"', body)
+        assert link and "É meu" in body and "Passar para…" in body
+        code = link.group(2)
+        with session_scope() as s:
+            ln = s.scalar(select(ReminderLink))
+            assert ln.token_hash != code and code not in str(ln.__dict__) and ln.tickets == ["2001", "2002"]
+        # a pessoa abre o link (sem login) e responde
+        anon = TestClient(webapp.app)
+        page = anon.get(f"/r/{code}?pedido=2001&acao=mudar")
+        assert page.status_code == 200 and "Pedidos de renovação atribuídos a Ana" in page.text and "comped.exemplo.pt" in page.text
+        assert page.headers["referrer-policy"] == "no-referrer"
+        assert anon.get("/r/inventado").status_code == 404
+        r = anon.post(f"/r/{code}", data={"csrf": anon.cookies["cw_csrf"], "acao_2001": "mudar", "grupo_2001": "Redes e Comunicações",
+                                           "pessoa_2001": "Rui Costa", "email_2001": "rui@exemplo.pt", "nota_2001": "é da rede",
+                                           "acao_2002": "confirma"})
+        assert "2 respostas registadas" in r.text
+        # responder outra vez substitui a resposta pendente
+        anon.post(f"/r/{code}", data={"csrf": anon.cookies["cw_csrf"], "acao_2002": "confirma", "nota_2002": "em curso"})
+        with session_scope() as s:
+            props = {p.ticket_id: p for p in s.scalars(select(ChangeProposal))}
+        assert len(props) == 2 and props["2002"].note == "em curso" and props["2001"].was_person == "Ana"
+        # nada mudou no SMAX ainda
+        assert not [p for m, p, q, b in fake.calls if p == "/rest/1/ems/bulk"]
+        page = c.get("/a-expirar", auth=AUTH).text
+        assert "Respostas por rever" in page and "Pede para passar a Redes e Comunicações" in page
+        lst = c.get("/a-expirar/propostas", auth=AUTH).text
+        assert "é da rede" in lst and "Aprovar e mudar" in lst
+        # «é meu»: confirmar
+        c.post(f"/a-expirar/propostas/{props['2002'].id}/aprovar", data={"csrf": token}, auth=AUTH)
+        assert "Confirmado por Ana" in c.get("/a-expirar", auth=AUTH).text
+        # «passar para»: abre a mudança já com a procura feita; guardar aprova a proposta
+        r = c.post(f"/a-expirar/propostas/{props['2001'].id}/aprovar", data={"csrf": token}, auth=AUTH, follow_redirects=False)
+        assert r.status_code == 303 and "/a-expirar/pedido/2001?" in r.headers["location"] and "proposta=" in r.headers["location"]
+        pg = c.get(r.headers["location"], auth=AUTH).text
+        assert "Resposta de Ana" in pg and "Redes e Comunicações" in pg and 'name="proposta"' in pg
+        r = c.post("/a-expirar/pedido/2001", data={"csrf": token, "grupo": "g9|Redes e Comunicações", "pessoa": "p7|Rui Costa|rui@exemplo.pt",
+                                                    "atalaia": "1", "confirmo": "1", "proposta": str(props["2001"].id)}, auth=AUTH)
+        assert "Proposta de Ana aprovada" in r.text
+        with session_scope() as s:
+            assert {p.status for p in s.scalars(select(ChangeProposal))} == {"aplicada"}
+        # o link deixa de valer quando expira
+        with session_scope() as s:
+            s.scalar(select(ReminderLink)).expires_at = NOW - timedelta(days=1)
+        assert anon.get(f"/r/{code}").status_code == 404
+    from certwatch.web.app import _RedactInvite
+    import logging
+    rec = logging.LogRecord("uvicorn.access", logging.INFO, "", 0, '%s - "%s %s"', ("1.2.3.4", "GET", f"/r/{code}?pedido=1"), None)
+    _RedactInvite().filter(rec)
+    assert code not in rec.getMessage()

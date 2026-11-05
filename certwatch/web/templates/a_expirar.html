@@ -13,6 +13,8 @@
   <a href="{{ qs('&verificacao=rever') }}" class="{{ 'on' if f.verificacao == 'rever' }}" title="Grupo ou pessoa diferente do dono, ou pedido sem grupo ou sem pessoa">A rever <span class="n {{ 'hot' if counts.rever }}">{{ counts.rever }}</span></a>
   <a href="{{ qs('&verificacao=sem_pedido') }}" class="{{ 'on' if f.verificacao == 'sem_pedido' }}">Sem pedido aberto <span class="n">{{ counts.sem_pedido }}</span></a>
   <a href="{{ qs('&verificacao=confere') }}" class="{{ 'on' if f.verificacao == 'confere' }}">Confere <span class="n">{{ counts.confere }}</span></a>
+  <span class="tab-sep" aria-hidden="true"></span>
+  <a href="/a-expirar/propostas">Respostas por rever <span class="n {{ 'hot' if counts.propostas }}">{{ counts.propostas }}</span></a>
 </nav>
 
 <form class="filters" method="get">
@@ -39,7 +41,9 @@
       <td class="nowrap">{% if t %}<a href="{{ t.url or ('/pedidos/smax/' ~ t.id) }}" target="_blank" rel="noopener">{{ t.id }}</a><div class="small muted">{{ t.fase }}</div>{% if r.abertos|length > 1 %}<div class="small"><span class="tag tag-run">{{ r.abertos|length }} abertos</span></div>{% endif %}{% else %}<span class="muted">—</span>{% endif %}</td>
       <td class="small">{% if t %}{{ t.grupo or '(sem grupo)' }}<div><b>{{ t.responsavel or '(sem pessoa)' }}</b></div>{% else %}—{% endif %}</td>
       <td class="small opt">{% if r.dono and r.dono.origem == 'atribuido' %}{{ r.dono.equipa or '—' }}{% if r.dono.pessoa %}<div class="muted">{{ r.dono.pessoa }}</div>{% endif %}{% elif r.tipo == 'certificado' %}<a class="muted" href="/certificados/detalhe?cn={{ r.cn|urlencode }}#dono">sem dono</a>{% else %}—{% endif %}</td>
-      <td class="small">{% for c in r.checks %}<span class="pn-pill t-{{ CHECKS[c][1] }}">{{ CHECKS[c][0] }}</span> {% endfor %}</td>
+      <td class="small">{% for c in r.checks %}<span class="pn-pill t-{{ CHECKS[c][1] }}">{{ CHECKS[c][0] }}</span> {% endfor %}
+        {% if r.confirmado %}<div><span class="pn-pill t-ok">Confirmado por {{ r.confirmado.por }}</span> <span class="muted">{{ r.confirmado.em|dt }}</span></div>{% endif %}
+        {% if r.proposta %}<div><a href="/a-expirar/propostas" class="pn-pill t-a">{{ 'Diz que é seu' if r.proposta.kind == 'confirma' else 'Pede para passar a ' ~ (r.proposta.grupo or r.proposta.pessoa or '…') }}</a></div>{% endif %}</td>
       <td class="small opt">{{ r.lembrete|dtt if r.lembrete else '—' }}</td>
       <td>{% if t %}<a class="button small-btn" href="/a-expirar/pedido/{{ t.id }}">Mudar</a>{% elif r.tipo == 'certificado' %}<a class="small" href="/certificados?q={{ r.cn|urlencode }}">abrir pedido</a>{% endif %}</td>
     </tr>{% endfor %}</tbody>
