@@ -1,0 +1,45 @@
+{% extends "base.html" %}
+{% block title %}Automatizações{% endblock %}
+{% block crumb %}Sistema{% endblock %}
+{% block page_title %}Automatizações <small>{{ rows|selectattr('a.enabled')|list|length }} ligada{{ 's' if rows|selectattr('a.enabled')|list|length != 1 }} de {{ rows|length }}</small>{% endblock %}
+{% block lede %}O que corre sozinho e quando: leituras, relatórios por email, lembretes, reconciliações e atualizações. Cada uma liga-se, desliga-se, edita-se e corre-se já a partir daqui.{% endblock %}
+{% block actions %}<a class="button primary" href="/automacoes/nova">Nova automatização</a>{% endblock %}
+{% block content %}
+{% if msg %}<div class="note ok" role="status">{{ msg }}</div>{% endif %}
+<div class="au-tpl"><span class="small muted">Começar por um modelo:</span>
+  {% for t in TEMPLATES %}<a class="button small-btn" href="/automacoes/nova?modelo={{ loop.index0 }}">{{ t.name }}</a>{% endfor %}
+</div>
+
+{% for r in rows %}{% set a = r.a %}{% set last = a.last_summary or {} %}
+<section class="card au-card{{ ' is-on' if a.enabled else '' }}" aria-labelledby="au-{{ a.id }}">
+  <div class="au-head">
+    <div class="au-title">
+      <h2 id="au-{{ a.id }}">{{ a.name }}</h2>
+      <span class="tag {{ 'tag-ok' if a.enabled else 'tag-off' }}">{{ 'ligada' if a.enabled else 'desligada' }}</span>
+      {% if r.acao and r.acao.writes %}<span class="tag tag-err" title="Escreve sem revisão, com limite por execução">escreve no {{ r.acao.writes }}</span>{% endif %}
+    </div>
+    <div class="ru-acts">
+      <form method="post" action="/automacoes/{{ a.id }}/executar"><input type="hidden" name="csrf" value="{{ csrf }}"><button class="small-btn">Executar agora</button></form>
+      <form method="post" action="/automacoes/{{ a.id }}/{{ 'desativar' if a.enabled else 'ativar' }}"><input type="hidden" name="csrf" value="{{ csrf }}"><button class="small-btn{{ '' if a.enabled else ' primary' }}">{{ 'Desligar' if a.enabled else 'Ligar' }}</button></form>
+      <a class="button small-btn" href="/automacoes/{{ a.id }}">Editar</a>
+      <details class="au-more"><summary class="button small-btn" aria-label="Mais ações">…</summary>
+        <div class="au-menu">
+          <form method="post" action="/automacoes/{{ a.id }}/duplicar"><input type="hidden" name="csrf" value="{{ csrf }}"><button class="small-btn">Duplicar</button></form>
+          <form method="post" action="/automacoes/{{ a.id }}/apagar"><input type="hidden" name="csrf" value="{{ csrf }}"><button class="small-btn us-del" data-confirm="Apagar «{{ a.name }}»?">Apagar</button></form>
+        </div></details>
+    </div>
+  </div>
+  <dl class="au-grid">
+    <div><dt>O quê</dt><dd><b>{{ r.acao.name if r.acao else a.action }}</b>{% if r.detalhe %}<span class="small muted">{{ r.detalhe }}</span>{% endif %}</dd></div>
+    <div><dt>Quando</dt><dd><b>{{ r.quando }}</b>{% if a.enabled and a.next_run_at %}<span class="small muted">próxima: {{ a.next_run_at|dtt }}</span>{% elif not a.enabled %}<span class="small muted">desligada</span>{% endif %}</dd></div>
+    <div><dt>Última vez</dt><dd>{% if a.last_run_at %}<span class="au-st s-{{ a.last_status }}">{{ {'ok': 'correu bem', 'aviso': 'com avisos', 'erro': 'falhou', 'nada': 'nada a fazer'}.get(a.last_status, a.last_status) }}</span> <span class="small muted">{{ a.last_run_at|dtt }}</span>
+      <span class="small au-txt">{{ last.texto }}</span>{% else %}<span class="muted">ainda não correu</span>{% endif %}
+      {% if r.runs %}<span class="au-dots" aria-label="Últimas execuções">{% for j in r.runs|reverse %}<a href="/jobs#job-{{ j.id }}" class="au-dot d-{{ (j.summary or {}).get('automacao', {}).get('estado', j.status) }}" title="#{{ j.id }} · {{ j.requested_at|dtt }} · {{ j.status }}"></a>{% endfor %}</span>{% endif %}</dd></div>
+  </dl>
+  {% if r.problema %}<p class="small"><span class="tag tag-run">não pode correr</span> {{ r.problema }}</p>{% endif %}
+</section>
+{% else %}
+<section class="card"><div class="empty"><b>Ainda não há automatizações</b>Comece por um modelo ou crie uma nova.</div></section>
+{% endfor %}
+<p class="small muted">As automatizações correm no worker (o mesmo das Execuções): cada execução aparece em <a href="/jobs">Execuções e auditoria</a>. As que escrevem no SMAX ou na CMDB só os administradores as criam, têm um limite de alterações por execução e, se o limite for ultrapassado, não fazem nada e avisam.</p>
+{% endblock %}

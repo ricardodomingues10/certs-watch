@@ -1,0 +1,76 @@
+{% extends "base.html" %}
+{% block title %}{{ 'Editar' if a.id else 'Nova' }} automatização{% endblock %}
+{% block crumb %}Sistema · <a href="/automacoes">Automatizações</a>{% endblock %}
+{% block page_title %}{{ a.name if a.id else 'Nova automatização' }}{% endblock %}
+{% block content %}
+{% for e in erros %}<div class="note bad" role="alert">{{ e }}</div>{% endfor %}
+
+<form method="get" action="{{ '/automacoes/' ~ a.id if a.id else '/automacoes/nova' }}" class="card au-choose">
+  <label class="small">O que fazer
+    <select name="acao" data-autosubmit>
+      {% for g in GROUPS %}<optgroup label="{{ g }}">{% for k, x in ACTIONS.items() if x.group == g %}<option value="{{ k }}" {{ 'selected' if k == a.action }}>{{ x.name }}{{ ' (escreve no ' ~ x.writes ~ ')' if x.writes }}</option>{% endfor %}</optgroup>{% endfor %}
+    </select></label>
+  <noscript><button class="small-btn">Mudar</button></noscript>
+  <p class="small">{{ act.desc }}</p>
+</form>
+
+<form method="post" action="/automacoes" class="stack">
+  <input type="hidden" name="csrf" value="{{ csrf }}"><input type="hidden" name="acao" value="{{ a.action }}">
+  {% if a.id %}<input type="hidden" name="id" value="{{ a.id }}">{% endif %}
+
+  <section class="card stack" aria-labelledby="h-nome">
+    <h2 id="h-nome">Nome</h2>
+    <label class="small"><span class="sr">Nome</span><input type="text" name="nome" value="{{ a.name }}" maxlength="128" required></label>
+  </section>
+
+  {% if params %}
+  <section class="card" aria-labelledby="h-par">
+    <h2 id="h-par">Como</h2>
+    <div class="au-fields">
+    {% for x in params %}{% set p = x.p %}<div class="{{ 'au-full' if p.kind in ('multi', 'textarea', 'emails', 'bool', 'text') else '' }}">
+      {% if p.kind == 'multi' %}
+      <fieldset class="plain"><legend class="small">{{ p.label }}</legend><div class="au-checks">
+        {% for k, v in x.options.items() %}<label class="small"><input type="checkbox" name="{{ p.name }}" value="{{ k }}" {{ 'checked' if k in (x.value or []) }}> {{ v }}</label>{% endfor %}
+      </div></fieldset>
+      {% elif p.kind == 'bool' %}
+      <label class="small"><input type="checkbox" name="{{ p.name }}" value="1" {{ 'checked' if x.value }}> {{ p.label }}</label>
+      {% elif p.kind == 'select' %}
+      <label class="small">{{ p.label }}<select name="{{ p.name }}">{% for k, v in p.options.items() %}<option value="{{ k }}" {{ 'selected' if k == x.value }}>{{ v }}</option>{% endfor %}</select></label>
+      {% elif p.kind == 'textarea' %}
+      <label class="small">{{ p.label }}<textarea name="{{ p.name }}" rows="3" maxlength="3000">{{ x.value }}</textarea></label>
+      {% elif p.kind == 'int' %}
+      <label class="small au-int">{{ p.label }}<input type="number" name="{{ p.name }}" value="{{ x.value }}" min="{{ p.lo }}" max="{{ p.hi }}" required></label>
+      {% else %}
+      <label class="small">{{ p.label }}<input type="text" name="{{ p.name }}" value="{{ x.value }}" maxlength="{{ 1000 if p.kind == 'emails' else 250 }}" {{ 'autocomplete=off' if p.kind == 'emails' }}></label>
+      {% endif %}
+      {% if p.help %}<p class="small muted au-help">{{ p.help }}</p>{% endif %}
+    </div>{% endfor %}
+    </div>
+  </section>
+  {% endif %}
+
+  <section class="card stack" aria-labelledby="h-quando">
+    <h2 id="h-quando">Quando</h2>
+    <div class="au-sched">{% for k, v in SCHEDULES.items() %}<label class="small"><input type="radio" name="ag_tipo" value="{{ k }}" data-sched {{ 'checked' if a.schedule.tipo == k }}> {{ v }}</label>{% endfor %}</div>
+    <div class="au-when">
+      <label class="small au-int" data-when="diario uteis semanal mensal">Hora<input type="time" name="ag_hora" value="{{ a.schedule.hora or '08:00' }}"></label>
+      <fieldset class="plain" data-when="semanal"><legend class="small">Dias</legend><div class="au-checks">
+        {% for d in DAYS %}<label class="small"><input type="checkbox" name="ag_dias" value="{{ loop.index0 }}" {{ 'checked' if loop.index0 in (a.schedule.dias or []) }}> {{ d }}</label>{% endfor %}</div></fieldset>
+      <label class="small au-int" data-when="mensal">Dia do mês (1 a 28)<input type="number" name="ag_dia" min="1" max="28" value="{{ a.schedule.dia or 1 }}"></label>
+      <label class="small au-int" data-when="horas">De quantas em quantas horas<input type="number" name="ag_cada" min="1" max="24" value="{{ a.schedule.cada or 1 }}"></label>
+      <label class="small au-int" data-when="horas">Ao minuto<input type="number" name="ag_minuto" min="0" max="59" value="{{ a.schedule.minuto or 0 }}"></label>
+    </div>
+    {% if a.id %}<p class="small muted">Agora: {{ preview }}.</p>{% endif %}
+  </section>
+
+  <section class="card stack">
+    <label><input type="checkbox" name="ativa" value="1" {{ 'checked' if a.enabled }}> <b>Ligada</b> <span class="small muted">(desligada, guarda-se mas não corre sozinha)</span></label>
+    {% if act.writes %}
+    <div class="note warn small">Esta automatização <b>escreve no {{ act.writes }} sem revisão</b>, até ao limite indicado. {% if not is_admin %}Só um administrador a pode criar ou mudar.{% endif %}
+      {% if write_problem %}<br>Neste momento não pode correr: {{ write_problem }}{% endif %}</div>
+    <label><input type="checkbox" name="confirmo_escrita" value="1"> Confirmo que pode escrever no {{ act.writes }} sem revisão.</label>
+    {% endif %}
+    <div><button class="primary">{{ 'Guardar' if a.id else 'Criar a automatização' }}</button> <a href="/automacoes">Cancelar</a></div>
+  </section>
+</form>
+{% endblock %}

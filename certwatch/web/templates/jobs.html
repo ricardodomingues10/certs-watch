@@ -25,7 +25,7 @@
     <tbody>
     {% for r in runs %}
       <tr>
-        <td>{{ r.id }}</td><td>{{ JOB_LABELS.get(r.job, r.job) }}</td><td>{{ r.requested_by }}</td>
+        <td>{{ r.id }}</td><td id="job-{{ r.id }}">{% if r.job.startswith('auto:') %}Automatização {% if (r.summary or {}).automacao %}«{{ r.summary.automacao.nome }}»{% else %}#{{ r.job[5:] }}{% endif %}{% else %}{{ JOB_LABELS.get(r.job, r.job) }}{% endif %}</td><td>{{ r.requested_by }}</td>
         <td><span class="tag tag-{{ 'ok' if r.status == 'ok' else ('err' if r.status == 'error' else 'run') }}">{{ {'ok': 'concluído', 'error': 'com erro', 'running': 'a correr', 'pending': 'em fila'}.get(r.status, r.status) }}</span></td>
         <td>{{ r.requested_at|dtt }}</td><td>{{ r.finished_at|dtt if r.finished_at else '—' }}</td>
         <td class="small">

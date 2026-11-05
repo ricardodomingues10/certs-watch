@@ -31,6 +31,13 @@ def _recover_interrupted() -> None:
             jr.summary = {"erro": "interrompido (reinício do worker)"}
 
 
+def _env_schedule_on() -> bool:
+    """O horário fixo do .env só vale enquanto nenhuma automatização foi criada (depois é a página que manda)."""
+    from .models import Automation
+    with session_scope() as s:
+        return s.scalar(select(Automation.id).limit(1)) is None
+
+
 def _schedule_due(tz: ZoneInfo, daily_at: str) -> bool:
     hh, mm = (int(x) for x in daily_at.split(":"))
     now_local = datetime.now(tz)
@@ -61,9 +68,15 @@ def main() -> None:
 
     while not _stop:
         try:
-            if _schedule_due(tz, settings.pipeline_daily_at):
+            from .automations import due, pipeline_automated, seed
+            with session_scope() as s:
+                seed(s, settings)                      # 1.ª vez: o horário do .env passa a ser uma automatização
+                automated = pipeline_automated(s)
+            if not automated and _schedule_due(tz, settings.pipeline_daily_at) and _env_schedule_on():
                 jid = enqueue("pipeline", "agendador")
                 log.info("Pipeline agendado (job %s)", jid)
+            for aid in due(settings):
+                log.info("Automatização %s posta na fila", aid)
 
             with session_scope() as s:
                 pending = list(s.scalars(select(JobRun.id).where(JobRun.status == "pending").order_by(JobRun.id)))

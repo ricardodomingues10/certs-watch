@@ -51,7 +51,7 @@ from ..normalize import norm_label, split_api_name, is_ip, is_valid_hostname, no
 from .security import (SESSION_COOKIE, PermissionDenied, check_csrf, check_login, clear_failures, current_user, forget_logins, note_failure,
                        require_admin, security_middleware, too_many)
 from .. import users as us
-from ..models import (CertOwner, ChangeProposal, CmdbChange, DomainChange, DomainRecord, ReminderLink, SiteCheck, Team,
+from ..models import (Automation, CertOwner, ChangeProposal, CmdbChange, DomainChange, DomainRecord, ReminderLink, SiteCheck, Team,
                       TicketRule, User, UserPref)
 from .. import owners as ow
 
@@ -218,7 +218,8 @@ NAV_GROUPS = [
     ("renovar", "Renovar", [("/a-expirar", "Próximos 90 dias", "propostas"), ("/pedidos", "Pedidos SMAX", None),
                             ("/relatorio", "Relatório por email", None)]),
     ("cmdb", "CMDB", [("/cmdb-final", "Atualizar a CMDB", "reconc_dif"), ("/cmdb/historico", "Histórico da CMDB", None)]),
-    ("sistema", "Sistema", [("/jobs", "Execuções e auditoria", None), ("/fontes", "Fontes e ligações", None),
+    ("sistema", "Sistema", [("/automacoes", "Automatizações", None), ("/jobs", "Execuções e auditoria", None),
+                            ("/fontes", "Fontes e ligações", None),
                             ("/utilizadores", "Utilizadores", "pedidos_acesso"), ("/testes/como-funciona", "Como funciona", None)]),
 ]
 _NAV_ALIASES = {"/cert/": "/certificados", "/reconciliacao": "/cmdb-final", "/ucmdb/certificado": "/certificados",
@@ -2385,6 +2386,159 @@ def proposals_decide(request: Request, pid: int, acao: str, csrf: str = Form("")
     msg = (f"Confirmado: o pedido {tid} fica como «confirmado por quem o tem»." if acao == "aprovar" and kind == "confirma"
            else f"Proposta para o pedido {tid} rejeitada.")
     return RedirectResponse("/a-expirar/propostas?" + urlencode({"msg": msg}), status_code=303)
+
+
+# ------------------------------------------------------------------ automatizações
+def _auto_form(request: Request, user: str, a: dict, erros=None, status_code: int = 200):
+    from .. import automations as au
+    settings = get_settings()
+    act = au.ACTIONS[a["action"]]
+    params = [{"p": p, "value": (a["params"] or {}).get(p.name, p.default), "options": au.options_for(p, settings)}
+              for p in act.params]
+    r = render(request, "automacao.html", user, a=a, act=act, params=params, ACTIONS=au.ACTIONS, GROUPS=au.GROUPS,
+               SCHEDULES=au.SCHEDULES, DAYS=au.DAYS, erros=erros or [], is_admin=getattr(request.state, "role", "") == "admin",
+               write_problem=au.write_problem(a["action"], settings) if act.writes else "",
+               preview=au.describe_schedule(a["schedule"]))
+    r.status_code = status_code
+    return r
+
+
+def _auto_dict(x) -> dict:
+    return {"id": x.id, "name": x.name, "action": x.action, "params": dict(x.params or {}), "schedule": dict(x.schedule or {}),
+            "enabled": x.enabled}
+
+
+@app.get("/automacoes")
+def automations_page(request: Request, user: str = Depends(current_user)):
+    """Tudo o que corre sozinho: o quê, quando, a próxima e a última execução. Criar, editar, ligar e desligar."""
+    from .. import automations as au
+    settings = get_settings()
+    with session_scope() as s:
+        au.seed(s, settings, user)
+        autos = list(s.scalars(select(Automation).order_by(Automation.enabled.desc(), Automation.name)))
+        runs = {}
+        for jr in s.scalars(select(JobRun).where(JobRun.job.like("auto:%")).order_by(JobRun.id.desc()).limit(300)):
+            runs.setdefault(jr.job, []).append(jr)
+        rows = [{"a": x, "acao": au.ACTIONS.get(x.action), "quando": au.describe_schedule(x.schedule or {}),
+                 "detalhe": au.describe_params(x, settings), "runs": runs.get(f"auto:{x.id}", [])[:5],
+                 "problema": au.write_problem(x.action, settings) if au.ACTIONS.get(x.action) and au.ACTIONS[x.action].writes else ""}
+                for x in autos]
+        for x in autos:
+            s.expunge(x)
+        for lst in runs.values():
+            for jr in lst:
+                s.expunge(jr)
+    return render(request, "automacoes.html", user, rows=rows, TEMPLATES=au.TEMPLATES, ACTIONS=au.ACTIONS, GROUPS=au.GROUPS,
+                  msg=request.query_params.get("msg", ""), now=utcnow())
+
+
+@app.get("/automacoes/nova")
+def automation_new(request: Request, acao: str = "pipeline", modelo: str = "", user: str = Depends(current_user)):
+    from .. import automations as au
+    if modelo.isdigit() and int(modelo) < len(au.TEMPLATES):
+        t = au.TEMPLATES[int(modelo)]
+        acao = t["action"]
+        a = {"id": None, "name": t["name"], "action": acao, "params": {**au.default_params(acao), **t.get("params", {})},
+             "schedule": dict(t["schedule"]), "enabled": True}
+    else:
+        acao = acao if acao in au.ACTIONS else "pipeline"
+        a = {"id": None, "name": au.ACTIONS[acao].name, "action": acao, "params": au.default_params(acao),
+             "schedule": {"tipo": "diario", "hora": "08:00"}, "enabled": True}
+    return _auto_form(request, user, a)
+
+
+@app.get("/automacoes/{aid}")
+def automation_edit(request: Request, aid: int, acao: str = "", user: str = Depends(current_user)):
+    from .. import automations as au
+    with session_scope() as s:
+        x = s.get(Automation, aid)
+        if x is None:
+            raise HTTPException(404)
+        a = _auto_dict(x)
+    if acao in au.ACTIONS and acao != a["action"]:
+        a.update(action=acao, params=au.default_params(acao))
+    return _auto_form(request, user, a)
+
+
+@app.post("/automacoes")
+async def automation_save(request: Request, user: str = Depends(current_user)):
+    from .. import automations as au
+    form = await request.form()
+    check_csrf(request, form.get("csrf"))
+    settings = get_settings()
+    acao = str(form.get("acao") or "")
+    if acao not in au.ACTIONS:
+        raise HTTPException(400, "Ação desconhecida.")
+    act = au.ACTIONS[acao]
+    if act.writes and getattr(request.state, "role", "") != "admin":
+        raise PermissionDenied(user, getattr(request.state, "role", ""), "criar automatizações que escrevem no " + act.writes)
+    data = {}
+    for p in act.params:
+        data[p.name] = [str(v) for v in form.getlist(p.name)] if p.kind == "multi" else form.get(p.name)
+    params, erros = au.clean_params(acao, data, settings)
+    sch, e2 = au.clean_schedule({"tipo": form.get("ag_tipo"), "hora": form.get("ag_hora"),
+                                 "dias": [str(v) for v in form.getlist("ag_dias")], "dia": form.get("ag_dia"),
+                                 "cada": form.get("ag_cada"), "minuto": form.get("ag_minuto")})
+    erros += e2
+    name = str(form.get("nome") or "").strip()[:128] or act.name
+    enabled = bool(form.get("ativa"))
+    if act.writes and enabled and form.get("confirmo_escrita") != "1":
+        erros.append(f"Confirme que esta automatização pode escrever no {act.writes} sem revisão.")
+    aid = str(form.get("id") or "")
+    a = {"id": int(aid) if aid.isdigit() else None, "name": name, "action": acao, "params": params, "schedule": sch, "enabled": enabled}
+    if erros:
+        return _auto_form(request, user, a, erros, 400)
+    with session_scope() as s:
+        x = s.get(Automation, a["id"]) if a["id"] else None
+        if x is None:
+            x = Automation(created_by=user)
+            s.add(x)
+        if x.action and x.action != acao and au.ACTIONS.get(x.action) and au.ACTIONS[x.action].writes and \
+                getattr(request.state, "role", "") != "admin":
+            raise PermissionDenied(user, getattr(request.state, "role", ""), "mudar uma automatização que escreve")
+        x.name, x.action, x.params, x.schedule, x.enabled = name, acao, params, sch, enabled
+        x.updated_by, x.updated_at = user, utcnow()
+        x.next_run_at = au.next_run(sch, utcnow(), settings.timezone) if enabled else None
+        s.flush()
+        audit(s, user, "automacao.guardar", name, id=x.id, acao=acao, agenda=sch, ativa=enabled)
+        nxt = x.next_run_at
+    msg = f"«{name}» guardada." + (f" Próxima execução: {fmt_dt(nxt, True)}." if nxt else (" Desligada." if not enabled else " Só corre à mão."))
+    return RedirectResponse("/automacoes?" + urlencode({"msg": msg}), status_code=303)
+
+
+@app.post("/automacoes/{aid}/{acao}")
+def automation_action(request: Request, aid: int, acao: str, csrf: str = Form(""), user: str = Depends(current_user)):
+    from .. import automations as au
+    check_csrf(request, csrf)
+    if acao not in ("ativar", "desativar", "executar", "apagar", "duplicar"):
+        raise HTTPException(404)
+    settings = get_settings()
+    with session_scope() as s:
+        x = s.get(Automation, aid)
+        if x is None:
+            raise HTTPException(404)
+        act = au.ACTIONS.get(x.action)
+        if act and act.writes and acao in ("ativar", "executar", "duplicar") and getattr(request.state, "role", "") != "admin":
+            raise PermissionDenied(user, getattr(request.state, "role", ""), "ligar ou correr uma automatização que escreve")
+        name = x.name
+        if acao == "apagar":
+            s.delete(x)
+            msg = f"«{name}» apagada."
+        elif acao == "duplicar":
+            s.add(Automation(name=(name + " (cópia)")[:128], action=x.action, params=dict(x.params or {}),
+                             schedule=dict(x.schedule or {}), enabled=False, created_by=user, updated_by=user))
+            msg = f"Cópia de «{name}» criada, desligada."
+        elif acao == "executar":
+            jid = enqueue(f"auto:{x.id}", user)
+            msg = f"«{name}» posta na fila (execução #{jid}); o resultado aparece aqui e em Execuções."
+        else:
+            x.enabled = acao == "ativar"
+            x.next_run_at = au.next_run(x.schedule or {}, utcnow(), settings.timezone) if x.enabled else None
+            x.updated_by, x.updated_at = user, utcnow()
+            msg = f"«{name}» {'ligada' if x.enabled else 'desligada'}." + (f" Próxima: {fmt_dt(x.next_run_at, True)}." if x.next_run_at else "")
+        audit(s, user, "automacao." + acao, name, id=aid)
+    invalidate_nav()
+    return RedirectResponse("/automacoes?" + urlencode({"msg": msg}), status_code=303)
 
 
 # ------------------------------------------------------------------ relatório por email

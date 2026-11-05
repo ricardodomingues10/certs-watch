@@ -384,6 +384,9 @@ def _run(job: str, settings: Settings) -> dict:
     if job == "evaluate":
         with session_scope() as s:
             return {"evaluate": evaluate(s, settings)}
+    if job.startswith("auto:") and job[5:].isdigit():
+        from .automations import execute as run_automation
+        return run_automation(int(job[5:]), settings)
     if job == "sites":
         from .sites import run as run_sites
         with session_scope() as s:
@@ -466,7 +469,7 @@ def _run(job: str, settings: Settings) -> dict:
 
 
 def enqueue(job: str, requested_by: str) -> int:
-    if job not in JOBS:
+    if job not in JOBS and not (job.startswith("auto:") and job[5:].isdigit()):
         raise ValueError(f"Job desconhecido: {job}")
     with session_scope() as s:
         jr = JobRun(job=job, requested_by=requested_by, status="pending")

@@ -652,6 +652,27 @@ Separadores Todos, **A rever**, Sem pedido aberto e Confere; exportação CSV.
   - **Rejeitar**, se não estiver certa.
 - É preciso que quem recebe o email consiga abrir o endereço do Atalaia (`CERTWATCH_PUBLIC_URL`, a partir da rede interna ou VPN).
 
+## 7.9 Automatizações
+
+Menu **Sistema → Automatizações**. Cada automatização é **o quê** (uma ação com as suas opções) e **quando** (uma agenda). Liga-se, desliga-se, edita-se, duplica-se e corre-se já («Executar agora») a partir da página. Mostra a próxima execução, como correu a última (correu bem, com avisos, falhou, nada a fazer) e as últimas cinco; cada execução aparece também em Execuções e auditoria.
+
+| Ação | O que faz |
+|---|---|
+| Executar tudo | CMDB, APIs, SMAX, internet, servidores, regras, sites públicos e domínios |
+| Ler e verificar só algumas partes | os passos escolhidos (ex.: ler o SMAX de hora a hora) |
+| Enviar o relatório por email | as partes escolhidas (alertas, reconciliação, internet, sites públicos) para os destinatários; opção «só se houver alguma coisa a reportar»; fica no histórico do Relatório por email |
+| Enviar lembretes às pessoas dos pedidos | os lembretes de Próximos 90 dias, com o link de resposta; não repete o mesmo pedido antes de N dias; salta os já confirmados e quem não tem email |
+| Reconciliar a CMDB | gera a reconciliação (só compara) |
+| Reconciliar e aplicar na UCMDB | **escreve**: aplica as alterações incluídas por omissão, até ao limite |
+| Abrir pedidos pelas regras ativas | **escreve**: cria no SMAX os pedidos que as regras ativas abririam, até ao limite |
+| Fechar os pedidos de certificados já renovados | **escreve**: fecha no SMAX, com comentário, até ao limite |
+
+**Quando**: todos os dias, dias úteis, certos dias da semana, uma vez por mês, de N em N horas, ou só à mão. Sempre em hora de Lisboa (muda sozinha na hora de verão).
+
+**As que escrevem**: só os administradores as criam, mudam, ligam ou correm; ao gravar é preciso confirmar que podem escrever sem revisão; cada uma tem um limite por execução e, **se houver mais do que o limite, não faz nada e avisa** (para rever à mão). Precisam da escrita ligada no `.env` (`CERTWATCH_UCMDB_WRITE`, `CERTWATCH_SMAX_CREATE_ENABLED`, `CERTWATCH_SMAX_UPDATE_ENABLED`); sem isso, o cartão diz porque não pode correr.
+
+**Como corre**: o worker vê de 15 em 15 segundos as automatizações ligadas cuja hora chegou e põe-nas na fila. Na primeira vez, o horário fixo do `.env` (`CERTWATCH_PIPELINE_DAILY_AT`) passa a ser a automatização «Executar tudo de manhã», igual e editável; a partir daí manda a página. `CERTWATCH_FINAL_DAILY` continua a funcionar, mas a automatização «Reconciliação diária» faz o mesmo e edita-se na página.
+
 ## 8. Classificação
 
 - **Tipo**: API (está na lista de APIs) · Wildcard · Endereço IP · Hostname · Autoridade (CA) · Outro.

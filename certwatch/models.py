@@ -156,6 +156,28 @@ class ChangeProposal(Base):
     result: Mapped[str] = mapped_column(Text, default="")
 
 
+class Automation(Base):
+    """Uma automatização: o quê (ação e parâmetros), quando (agenda) e o resultado da última execução."""
+
+    __tablename__ = "automations"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    name: Mapped[str] = mapped_column(String(128))
+    action: Mapped[str] = mapped_column(String(32))
+    params: Mapped[dict] = mapped_column(JSON, default=dict)
+    schedule: Mapped[dict] = mapped_column(JSON, default=dict)     # {"tipo": diario|uteis|semanal|mensal|horas|manual, ...}
+    enabled: Mapped[bool] = mapped_column(Boolean, default=False, index=True)
+    next_run_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True, index=True)
+    last_run_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    last_status: Mapped[str] = mapped_column(String(16), default="")       # ok | aviso | erro | nada
+    last_summary: Mapped[dict] = mapped_column(JSON, default=dict)
+    last_job_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    created_by: Mapped[str] = mapped_column(String(254), default="")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    updated_by: Mapped[str] = mapped_column(String(254), default="")
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
 class Endpoint(Base):
     """Alvo de scan host:porta e o CN que é esperado servir."""
 

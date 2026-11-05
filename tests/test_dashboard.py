@@ -127,7 +127,7 @@ def test_navigation_and_theme(env):
     assert groups["vigilancia"] == ["Testes", "Sites públicos", "Na internet"] and not any("Alertas" in v for v in groups.values())
     assert groups["renovar"] == ["Próximos 90 dias", "Pedidos SMAX", "Relatório por email"]
     assert groups["cmdb"] == ["Atualizar a CMDB", "Histórico da CMDB"]
-    assert groups["sistema"] == ["Execuções e auditoria", "Fontes e ligações", "Utilizadores", "Como funciona"]
+    assert groups["sistema"] == ["Automatizações", "Execuções e auditoria", "Fontes e ligações", "Utilizadores", "Como funciona"]
     with TestClient(app) as c:
         page = c.get("/certificados", auth=AUTH).text
         assert 'data-palette="consola"' in page and 'aria-current="page"><span>Certificados</span>' in page

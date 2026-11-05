@@ -1342,3 +1342,36 @@ label.field input[type=text], label.field input[type=password], label.field inpu
 .rs-to { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 180px), 1fr)); gap: 8px; }
 .rs-form label.rs-opt { flex-direction: row; align-items: center; justify-content: flex-start; gap: 10px; font-size: 15px; color: var(--ink); text-align: left; }
 .rs-form label.rs-opt input[type=radio] { width: 18px; height: 18px; min-height: 0; margin: 0; padding: 0; flex: none; accent-color: var(--accent); }
+/* Automatizações */
+.au-tpl { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin-bottom: 14px; }
+.au-tpl .small-btn { margin: 0; }
+.au-card.is-on { border-left: 3px solid var(--ok); }
+.au-head { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 8px 16px; align-items: flex-start; }
+.au-title { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.au-title h2 { margin: 0; }
+.au-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 240px), 1fr)); gap: 12px 20px; margin: 12px 0 0; }
+.au-grid dt { font-size: 12px; color: var(--muted); margin-bottom: 2px; }
+.au-grid dd { margin: 0; display: flex; flex-direction: column; gap: 2px; min-width: 0; overflow-wrap: anywhere; }
+.au-st { align-self: flex-start; font-size: 12px; font-weight: 700; border-radius: 999px; padding: 1px 9px; background: var(--panel-2); color: var(--muted); }
+.au-st.s-ok { background: var(--ok-soft); color: var(--ok); } .au-st.s-aviso { background: var(--warn-soft); color: var(--warn); }
+.au-st.s-erro { background: var(--bad-soft); color: var(--bad); }
+.au-dots { display: inline-flex; gap: 4px; margin-top: 4px; }
+.au-dot { width: 10px; height: 10px; border-radius: 5px; background: var(--line-2); }
+.au-dot.d-ok { background: var(--ok); } .au-dot.d-aviso { background: var(--warn); } .au-dot.d-erro, .au-dot.d-error { background: var(--bad); }
+.au-dot.d-pending, .au-dot.d-running { background: var(--accent); }
+.au-more { position: relative; } .au-more summary { list-style: none; } .au-more summary::-webkit-details-marker { display: none; }
+.au-menu { position: absolute; right: 0; top: 110%; z-index: 5; display: flex; flex-direction: column; gap: 6px; padding: 8px; border-radius: 10px; background: var(--panel); border: 1px solid var(--line); box-shadow: 0 8px 24px rgba(0,0,0,.25); }
+.au-checks { display: flex; flex-wrap: wrap; gap: 6px 16px; }
+.au-sched { display: flex; flex-wrap: wrap; gap: 6px 18px; }
+.au-when { display: flex; flex-wrap: wrap; gap: 10px 20px; align-items: flex-end; }
+.au-int input { max-width: 10em; }
+.au-help { margin-top: -6px; }
+.au-choose select { max-width: 520px; }
+.au-fields { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(100%, 240px), 1fr)); gap: 14px 20px; margin-top: 8px; }
+.au-fields > div { min-width: 0; }
+.au-fields .au-full { grid-column: 1 / -1; }
+.au-fields label:not(.au-inline), .au-when > label { display: flex; flex-direction: column; gap: 4px; }
+.au-fields .au-checks label, .au-sched label, .au-fields label.small:has(> input[type=checkbox]) { display: inline-flex; flex-direction: row; align-items: center; gap: 6px; }
+.au-sched label input, .au-checks label input { margin: 0; }
+.au-int input { max-width: 12em; }
+.au-help { margin: 4px 0 0; }

@@ -465,3 +465,18 @@ document.addEventListener("DOMContentLoaded", () => {
     });
   });
 });
+
+// Automatizações: mudar o tipo de ação recarrega o formulário; a agenda mostra só os campos do tipo escolhido
+(function () {
+  document.querySelectorAll("select[data-autosubmit]").forEach((sel) => {
+    sel.addEventListener("change", () => { const f = sel.form; if (f) (f.requestSubmit ? f.requestSubmit() : f.submit()); });
+  });
+  const radios = document.querySelectorAll("input[name=ag_tipo][data-sched]");
+  if (!radios.length) return;
+  const sync = () => {
+    const cur = (document.querySelector("input[name=ag_tipo][data-sched]:checked") || {}).value || "";
+    document.querySelectorAll("[data-when]").forEach((el) => { el.hidden = !el.dataset.when.split(" ").includes(cur); });
+  };
+  radios.forEach((r) => r.addEventListener("change", sync));
+  sync();
+})();
