@@ -22,6 +22,7 @@ def env(tmp_path, monkeypatch, pki):
     monkeypatch.setenv("CERTWATCH_TRUST_DIR", str(trust_dir))
     monkeypatch.setenv("CERTWATCH_SYSTEM_CA_BUNDLE", str(tmp_path / "nao-existe.pem"))
     monkeypatch.setenv("CERTWATCH_ADMIN_PASSWORD", "teste-admin-123")
+    monkeypatch.setenv("CERTWATCH_ALLOWED_HOSTS", "testserver")
     monkeypatch.setenv("CERTWATCH_UCMDB_URL", "https://cmdb.exemplo.local:8443")
     monkeypatch.setenv("CERTWATCH_UCMDB_TQL", "Certificados_Exemplo")
     monkeypatch.setenv("CERTWATCH_UCMDB_USER", "u")

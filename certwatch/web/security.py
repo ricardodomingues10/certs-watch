@@ -205,7 +205,26 @@ SECURITY_HEADERS = {
 SVG_CSP = "default-src 'none'; style-src 'unsafe-inline'; img-src data:; sandbox"
 
 
+def host_of(header: str) -> str:
+    """O nome no cabeçalho Host, sem a porta (aceita [::1]:8088)."""
+    h = (header or "").strip().lower()
+    if h.startswith("["):
+        return h[1:].split("]", 1)[0]
+    return h.rsplit(":", 1)[0].rstrip(".") if ":" in h else h.rstrip(".")
+
+
+def host_allowed(header: str) -> bool:
+    return host_of(header) in get_settings().allowed_hosts
+
+
 async def security_middleware(request: Request, call_next):
+    if not host_allowed(request.headers.get("host", "")):
+        # Um Host que não é o da aplicação nunca chega às páginas: os links dos emails (recuperar a palavra-passe,
+        # convite, lembrete) são feitos com o endereço do pedido e não podem apontar para o servidor de outra pessoa.
+        from fastapi.responses import PlainTextResponse
+        return PlainTextResponse(
+            "Endereço não reconhecido. Para chegar ao Atalaia Cert por este nome, defina CERTWATCH_PUBLIC_URL "
+            "(ou CERTWATCH_ALLOWED_HOSTS) no .env do servidor.", status_code=400)
     token = request.cookies.get(CSRF_COOKIE) or secrets.token_urlsafe(32)
     request.state.csrf = token
     response = await call_next(request)

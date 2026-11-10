@@ -333,3 +333,31 @@ def test_denied_action_shows_notice_on_same_page(web):
     assert "não tem permissões para gerir os utilizadores" in web.get("/certificados", auth=("op@exemplo.pt", PW)).text
     with session_scope() as s:
         assert s.scalar(select(AuditLog).where(AuditLog.action == "acesso.recusado")) is not None
+
+
+def test_forged_host_never_reaches_the_pages_or_the_email_links(web, monkeypatch):
+    """Um cabeçalho Host que não é o da aplicação é recusado antes de qualquer página: o link de recuperar a
+    palavra-passe é feito com o endereço do pedido e não pode apontar para o servidor de outra pessoa."""
+    from certwatch.web import app as webapp
+    from certwatch.web import security
+    token, _ = invite(web, "ana@exemplo.pt")
+    accept(web, token)
+    st = replace(config.get_settings(), smtp_host="smtp.exemplo.pt", smtp_from="atalaia@exemplo.pt")
+    monkeypatch.setattr(webapp, "get_settings", lambda: st)
+    sent = []
+    monkeypatch.setattr(webapp.rp, "send", lambda settings, msgs: sent.extend(msgs))
+    web.get("/recuperar")
+    r = web.post("/recuperar", data={"csrf": csrf(web), "email": "ana@exemplo.pt"}, headers={"host": "atacante.exemplo.com"})
+    assert r.status_code == 400 and "CERTWATCH_PUBLIC_URL" in r.text and sent == []
+    assert web.get("/entrar", headers={"host": "atacante.exemplo.com"}).status_code == 400
+    assert web.get("/healthz", headers={"host": "atacante.exemplo.com:8088"}).status_code == 400
+    # o túnel SSH (localhost, com ou sem porta, IPv4 e IPv6) continua a funcionar
+    for h in ("localhost:8088", "127.0.0.1:8088", "[::1]:8088", "LOCALHOST"):
+        assert web.get("/healthz", headers={"host": h}).status_code == 200, h
+    assert security.host_of("[::1]:8088") == "::1" and security.host_of("atalaia.exemplo.pt.:443") == "atalaia.exemplo.pt"
+
+
+def test_allowed_hosts_come_from_public_url_and_the_list():
+    assert config._allowed_hosts("", "") == ("localhost", "127.0.0.1", "::1")
+    assert config._allowed_hosts(" Atalaia.Interno.PT , 10.0.0.5", "https://atalaia.exemplo.pt:8443/") == \
+        ("localhost", "127.0.0.1", "::1", "atalaia.exemplo.pt", "atalaia.interno.pt", "10.0.0.5")

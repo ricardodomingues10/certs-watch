@@ -254,6 +254,9 @@ class Settings:
     status_token: str | None = None
     cookie_secure: bool = False
     public_url: str = ""                           # endereço da aplicação nos links dos convites (ex.: https://atalaia.exemplo.pt)
+    # Nomes pelos quais a aplicação aceita ser chamada (cabeçalho Host). Os links dos emails usam o endereço do pedido
+    # quando public_url está vazio: sem esta lista, um Host forjado punha o endereço de outro servidor nesses links.
+    allowed_hosts: tuple[str, ...] = ("localhost", "127.0.0.1", "::1")
     invite_hours: int = 72                         # validade do link de convite ou de nova palavra-passe
     password_min: int = 12
     session_hours: int = 12                        # sessão aberta na página de entrada: fecha ao fim de N horas sem uso
@@ -432,6 +435,7 @@ class Settings:
             status_token=_secret("status_token", "CERTWATCH_STATUS_TOKEN"),
             cookie_secure=_env("CERTWATCH_COOKIE_SECURE", "false").lower() == "true",
             public_url=_env("CERTWATCH_PUBLIC_URL", "").rstrip("/"),
+            allowed_hosts=_allowed_hosts(_env("CERTWATCH_ALLOWED_HOSTS", ""), _env("CERTWATCH_PUBLIC_URL", "")),
             invite_hours=max(1, int(_env("CERTWATCH_INVITE_HOURS", "72"))),
             password_min=max(8, int(_env("CERTWATCH_PASSWORD_MIN", "12"))),
             session_hours=max(1, int(_env("CERTWATCH_SESSION_HOURS", "12"))),
@@ -470,6 +474,21 @@ class Settings:
             final_columns_file=_env("CERTWATCH_FINAL_COLUMNS_FILE", "cmdb-colunas").lower(),
             final_keep_runs=int(_env("CERTWATCH_FINAL_KEEP_RUNS", "20")),
         )
+
+
+def _allowed_hosts(extra: str, public_url: str) -> tuple[str, ...]:
+    """localhost (o túnel SSH), o nome de CERTWATCH_PUBLIC_URL e os de CERTWATCH_ALLOWED_HOSTS (separados por vírgulas)."""
+    from urllib.parse import urlsplit
+    hosts = ["localhost", "127.0.0.1", "::1"]
+    try:
+        pub = urlsplit(public_url if "//" in public_url else "//" + public_url).hostname if public_url else None
+    except ValueError:
+        pub = None
+    for h in [pub or ""] + extra.split(","):
+        h = h.strip().lower().strip("[]").rstrip(".")
+        if h and h not in hosts:
+            hosts.append(h)
+    return tuple(hosts)
 
 
 @lru_cache(maxsize=1)
