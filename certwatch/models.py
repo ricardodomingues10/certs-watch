@@ -7,7 +7,7 @@ from __future__ import annotations
 
 from datetime import datetime
 
-from sqlalchemy import JSON, Boolean, DateTime, Float, ForeignKey, Integer, LargeBinary, String, Text, UniqueConstraint
+from sqlalchemy import JSON, BigInteger, Boolean, DateTime, Float, ForeignKey, Integer, LargeBinary, String, Text, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column
 
 from .db import Base, utcnow
@@ -713,6 +713,11 @@ class User(Base):
     request_note: Mapped[str] = mapped_column(Text, default="")                  # pedido de acesso: equipa e motivo
     approved_by: Mapped[str] = mapped_column(String(254), default="")
     approved_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    # Verificação em dois passos (TOTP): chave cifrada, último intervalo aceite e sha256 dos códigos de recuperação
+    totp_secret: Mapped[str] = mapped_column(Text, default="")
+    totp_on: Mapped[bool] = mapped_column(Boolean, default=False)
+    totp_step: Mapped[int] = mapped_column(BigInteger, default=0)
+    totp_codes: Mapped[list | None] = mapped_column(JSON, nullable=True)
 
 
 class LoginSession(Base):
@@ -726,6 +731,7 @@ class LoginSession(Base):
     last_seen: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
     expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
     ip: Mapped[str] = mapped_column(String(64), default="")
+    stage: Mapped[str] = mapped_column(String(8), default="")       # "" = sessão aberta; "codigo" = falta o 2.º passo
 
 
 class LoginFailure(Base):

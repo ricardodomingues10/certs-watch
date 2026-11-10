@@ -221,20 +221,39 @@ def notice_message(settings: Settings, to: list[str], subject: str, paragraphs: 
 
 
 # ------------------------------------------------------------------ sessões da página de entrada
-def open_session(session: Session, settings: Settings, username: str, ip: str = "") -> str:
+def open_session(session: Session, settings: Settings, username: str, ip: str = "", stage: str = "") -> str:
+    """Abre uma sessão. Com stage="codigo" ainda não é uma sessão: só guarda, por 10 minutos, quem já acertou a
+    palavra-passe e tem de dar o código do segundo passo."""
     from .models import LoginSession
     token = secrets.token_urlsafe(32)
     now = utcnow()
+    life = timedelta(minutes=10) if stage else timedelta(days=7)
     session.add(LoginSession(token_hash=token_hash(token), username=username, created_at=now, last_seen=now,
-                             expires_at=now + timedelta(days=7), ip=ip[:64]))
+                             expires_at=now + life, ip=ip[:64], stage=stage))
     return token
 
 
-def close_sessions(session: Session, username: str | None = None, token: str | None = None) -> None:
+def pending_session(session: Session, token: str | None):
+    """A entrada à espera do código, se o cookie ainda vale."""
+    from .models import LoginSession
+    if not token or len(token) > 100:
+        return None
+    ls = session.scalar(select(LoginSession).where(LoginSession.token_hash == token_hash(token), LoginSession.stage == "codigo"))
+    if ls is None:
+        return None
+    if as_utc(ls.expires_at) < utcnow():
+        session.delete(ls)
+        return None
+    return ls
+
+
+def close_sessions(session: Session, username: str | None = None, token: str | None = None, keep: str | None = None) -> None:
     from .models import LoginSession
     q = session.query(LoginSession)
     if token:
         q = q.filter(LoginSession.token_hash == token_hash(token))
     elif username:
         q = q.filter(LoginSession.username == username)
+        if keep:
+            q = q.filter(LoginSession.token_hash != token_hash(keep))
     q.delete()

@@ -20,9 +20,12 @@ SESSION_COOKIE = "cw_sessao"
 # Verificações bem-sucedidas guardadas 60 s (o scrypt demora ~50 ms; o navegador manda as credenciais em cada pedido).
 # Alterar, desativar ou apagar um utilizador limpa a cache, por isso as mudanças valem logo.
 _OK_CACHE: dict[str, tuple[float, str, str]] = {}
-_SESSION_CACHE: dict[str, tuple[float, str, str]] = {}
+_SESSION_CACHE: dict[str, tuple[float, str, str, bool]] = {}
 FAIL_LIMIT, FAIL_WINDOW = 10, 900          # 10 tentativas falhadas em 15 min bloqueiam esse utilizador nesse endereço
-READONLY_POST = {"/tema", "/painel/disposicao", "/conta/palavra-passe", "/conta/calendario", "/sair"}
+READONLY_POST = {"/tema", "/painel/disposicao", "/conta/palavra-passe", "/conta/calendario", "/sair",
+                 "/conta/dois-passos/iniciar", "/conta/dois-passos/ativar", "/conta/dois-passos/desligar"}
+# com CERTWATCH_MFA_REQUIRED, quem ainda não ativou os dois passos só chega a estas páginas
+MFA_SETUP_PATHS = ("/conta", "/sair", "/tema", "/marca/", "/estado/")
 
 
 class PermissionDenied(Exception):
@@ -180,8 +183,9 @@ def check_login(username: str, password: str) -> tuple[str, str] | None:
     return _check(username, password)
 
 
-def _session_user(token: str) -> tuple[str, str] | None:
-    """(papel, utilizador) da sessão do cookie, se ainda vale (fecha ao fim de CERTWATCH_SESSION_HOURS sem uso)."""
+def _session_user(token: str) -> tuple[str, str, bool] | None:
+    """(papel, utilizador, tem dois passos) da sessão do cookie, se ainda vale (fecha ao fim de
+    CERTWATCH_SESSION_HOURS sem uso). Uma sessão à espera do código (stage) ainda não é uma sessão."""
     from ..db import as_utc, session_scope, utcnow
     from ..models import LoginSession, User
     from ..users import token_hash
@@ -189,11 +193,12 @@ def _session_user(token: str) -> tuple[str, str] | None:
     key = token_hash(token)
     hit = _SESSION_CACHE.get(key)
     if hit and time.monotonic() - hit[0] < 30:
-        return hit[1], hit[2]
+        return hit[1], hit[2], hit[3]
     s = get_settings()
+    mfa = True
     with session_scope() as db:
         ls = db.scalar(select(LoginSession).where(LoginSession.token_hash == key))
-        if ls is None:
+        if ls is None or ls.stage:
             return None
         now = utcnow()
         if as_utc(ls.expires_at) < now or now - as_utc(ls.last_seen) > timedelta(hours=s.session_hours):
@@ -208,7 +213,7 @@ def _session_user(token: str) -> tuple[str, str] | None:
             if u is None or u.status != "ativo":
                 db.delete(ls)
                 return None
-            role = u.role
+            role, mfa = u.role, bool(u.totp_on)
             if u.last_seen is None or now - as_utc(u.last_seen) > timedelta(minutes=5):
                 u.last_seen = now
         if now - as_utc(ls.last_seen) > timedelta(minutes=5):
@@ -216,8 +221,19 @@ def _session_user(token: str) -> tuple[str, str] | None:
         name = ls.username
     if len(_SESSION_CACHE) > 500:
         _SESSION_CACHE.clear()
-    _SESSION_CACHE[key] = (time.monotonic(), role, name)
-    return role, name
+    _SESSION_CACHE[key] = (time.monotonic(), role, name, mfa)
+    return role, name, mfa
+
+
+def has_second_factor(username: str) -> bool:
+    from ..db import session_scope
+    from ..users import by_email
+    try:
+        with session_scope() as db:
+            u = by_email(db, username)
+            return bool(u is not None and u.totp_on)
+    except Exception:
+        return True                          # na dúvida, não se entra só com a palavra-passe
 
 
 def _check(username: str, password: str) -> tuple[str, str] | None:
@@ -258,15 +274,27 @@ def current_user(request: Request, credentials: HTTPBasicCredentials | None = De
                 raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, "Palavra-passe de administração não configurada")
             login_failed(credentials.username, ip)
             raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Credenciais inválidas")
-        via = "basic"
+        settings = get_settings()
+        if found[1] != settings.admin_user and (settings.mfa_required or has_second_factor(found[1])):
+            # a basic authentication só leva a palavra-passe: não pode ser o atalho à volta do segundo passo
+            raise HTTPException(status.HTTP_401_UNAUTHORIZED,
+                                "Esta conta tem verificação em dois passos: entre pela página de entrada.")
+        via, mfa = "basic", True
     else:
         token = request.cookies.get(SESSION_COOKIE)
-        found = _session_user(token) if token and len(token) < 100 else None
+        hit = _session_user(token) if token and len(token) < 100 else None
         via = "sessao"
-        if found is None:
+        if hit is None:
             _deny(request)
+        found, mfa = hit[:2], hit[2]
     role, name = found
     request.state.user, request.state.role, request.state.via = name, role, via
+    if not mfa and get_settings().mfa_required and not request.url.path.startswith(MFA_SETUP_PATHS):
+        # obrigatório e ainda por ativar: a pessoa só chega à sua conta, onde o ativa
+        if request.method == "GET":
+            raise HTTPException(status.HTTP_303_SEE_OTHER, "Ative a verificação em dois passos",
+                                headers={"Location": "/conta?dois-passos=1#dois-passos"})
+        raise PermissionDenied(name, role, "usar a aplicação antes de ativar a verificação em dois passos")
     if role == "leitura" and request.method not in ("GET", "HEAD", "OPTIONS") and request.url.path not in READONLY_POST:
         raise PermissionDenied(name, role, action_of(request.url.path))
     return name

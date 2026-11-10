@@ -110,6 +110,11 @@ _ADDED_COLUMNS = [
     ("smax_tickets", "created", "TIMESTAMP WITH TIME ZONE"),
     ("cmdb_records", "attrs", "JSON"),
     ("cmdb_records", "attrs_hash", "VARCHAR(64) NOT NULL DEFAULT ''"),
+    ("users", "totp_secret", "TEXT NOT NULL DEFAULT ''"),
+    ("users", "totp_on", "BOOLEAN NOT NULL DEFAULT FALSE"),
+    ("users", "totp_step", "BIGINT NOT NULL DEFAULT 0"),
+    ("users", "totp_codes", "JSON"),
+    ("login_sessions", "stage", "VARCHAR(8) NOT NULL DEFAULT ''"),
 ]
 
 

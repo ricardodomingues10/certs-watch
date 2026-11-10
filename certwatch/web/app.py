@@ -51,6 +51,7 @@ from ..normalize import norm_label, split_api_name, is_ip, is_valid_hostname, no
 from .security import (SESSION_COOKIE, PermissionDenied, check_csrf, check_login, client_ip, current_user, forget_logins,
                        login_blocked, login_failed, login_ok, note_failure, require_admin, security_middleware, too_many)
 from .. import users as us
+from .. import mfa
 from ..models import (Automation, CertOwner, ChangeProposal, CmdbChange, DomainChange, DomainRecord, ReminderLink, SiteCheck, Team,
                       TicketRule, User, UserPref)
 from .. import owners as ow
@@ -542,7 +543,8 @@ def _user_row(u: User, now) -> dict:
     return {"id": u.id, "email": u.email, "name": u.name, "role": u.role, "status": u.status, "invited_by": u.invited_by,
             "invited_at": u.invited_at, "last_seen": u.last_seen, "password_set_at": u.password_set_at,
             "link_kind": u.token_kind if u.token_hash else "", "link_expires": exp,
-            "link_expired": bool(u.token_hash and exp and exp < now)}
+            "link_expired": bool(u.token_hash and exp and exp < now),
+            "totp_on": bool(u.totp_on), "totp_codes": len(u.totp_codes or [])}
 
 
 def _users_page(request: Request, user: str, notas: list | None = None, erros: list | None = None,
@@ -556,7 +558,7 @@ def _users_page(request: Request, user: str, notas: list | None = None, erros: l
                       key=lambda r: r["created_at"] or now)
         rows = sorted((r for r, _ in allu if r["status"] != "pendente"), key=lambda r: (order.get(r["status"], 9), r["email"]))
     r = render(request, "utilizadores.html", user, rows=rows, pend=pend, signup=st.signup, signup_domains=st.signup_domains, ROLE_HELP=us.ROLE_HELP, STATUS=us.STATUS,
-               smtp_problems=rp.smtp_problems(st), notas=notas or [], erros=erros or [], link=link,
+               smtp_problems=rp.smtp_problems(st), notas=notas or [], erros=erros or [], link=link, mfa_required=st.mfa_required,
                admin_user=st.admin_user, admin_on=bool(st.admin_password), me=user, invite_hours=st.invite_hours,
                public_url=st.public_url, password_min=st.password_min)
     r.status_code = status_code
@@ -619,7 +621,7 @@ def users_action(request: Request, uid: int, acao: str, csrf: str = Form(""), pa
                  user: str = Depends(require_admin)):
     check_csrf(request, csrf)
     st = get_settings()
-    if acao not in ("papel", "desativar", "ativar", "link", "apagar", "aprovar", "recusar"):
+    if acao not in ("papel", "desativar", "ativar", "link", "apagar", "aprovar", "recusar", "dois-passos"):
         raise HTTPException(404)
     try:
         with session_scope() as s:
@@ -638,6 +640,14 @@ def users_action(request: Request, uid: int, acao: str, csrf: str = Form(""), pa
                 s.delete(u)
                 audit(s, user, "utilizador.recusar", email)
                 nota = f"O pedido de acesso de {email} foi recusado."
+            elif acao == "dois-passos":
+                # perdeu o telemóvel e os códigos de recuperação: um administrador repõe, e a pessoa ativa de novo
+                if u.email == us.norm_email(user):
+                    raise us.UserError("Desligue a sua própria verificação em dois passos na página A minha conta.")
+                mfa.reset(u)
+                us.close_sessions(s, username=email)
+                audit(s, user, "utilizador.dois_passos", email, passo="repor")
+                nota = f"A verificação em dois passos de {email} foi reposta: as sessões fecharam e a pessoa pode ativá-la de novo."
             elif acao == "link":
                 if u.status == "desativado":
                     raise us.UserError(f"{email} está desativado: ative a conta antes de enviar um link.")
@@ -753,10 +763,68 @@ def login(request: Request, csrf: str = Form(""), email: str = Form(""), palavra
         return _login_page(request, erro="Email ou palavra-passe errados.", email=email, nxt=next, status_code=401)
     login_ok(email, ip)
     with session_scope() as s:
+        u = us.by_email(s, found[1]) if found[1] != st.admin_user else None
+        if u is not None and u.totp_on:
+            # palavra-passe certa, falta o código: ainda não há sessão, só um cookie de 10 minutos para o 2.º passo
+            token = us.open_session(s, st, found[1], ip, stage="codigo")
+            r = RedirectResponse("/entrar/codigo?next=" + quote(safe_next(next, "/"), safe=""), status_code=303)
+            r.set_cookie(PENDING_COOKIE, token, max_age=600, httponly=True, samesite="strict", secure=st.cookie_secure, path="/entrar")
+            return r
         token = us.open_session(s, st, found[1], ip)
         audit(s, found[1], "sessao.entrar", found[1])
     r = RedirectResponse(safe_next(next, "/"), status_code=303)
     r.set_cookie(SESSION_COOKIE, token, max_age=7 * 86400, httponly=True, samesite="strict", secure=st.cookie_secure, path="/")
+    return r
+
+
+PENDING_COOKIE = "cw_2passo"
+
+
+def _code_page(request: Request, nxt: str, erro: str = "", status_code: int = 200):
+    r = _public(request, "entrar_codigo.html", erro=erro, next=safe_next(nxt, "/"))
+    r.status_code = status_code
+    return r
+
+
+@app.get("/entrar/codigo")
+def login_code_page(request: Request, next: str = "/"):
+    with session_scope() as s:
+        waiting = us.pending_session(s, request.cookies.get(PENDING_COOKIE)) is not None
+    if not waiting:
+        return RedirectResponse("/entrar", status_code=303)
+    return _code_page(request, next)
+
+
+@app.post("/entrar/codigo")
+def login_code(request: Request, csrf: str = Form(""), codigo: str = Form(""), next: str = Form("/")):
+    """Segundo passo: o código de 6 dígitos da aplicação, ou um código de recuperação (cada um serve uma vez)."""
+    check_csrf(request, csrf)
+    st = get_settings()
+    ip = _client_ip(request)
+    cookie = request.cookies.get(PENDING_COOKIE)
+    with session_scope() as s:
+        ls = us.pending_session(s, cookie)
+        name = ls.username if ls else ""
+    if not name:
+        return _login_page(request, erro="O tempo para escrever o código acabou. Entre outra vez.", nxt=next, status_code=401)
+    who = "2passo:" + name
+    if login_blocked(who, ip):
+        return _code_page(request, next, "Demasiados códigos errados. Tente daqui a 15 minutos.", 429)
+    with session_scope() as s:
+        u = us.by_email(s, name)
+        how = mfa.check(st, u, codigo) if u is not None and u.status == "ativo" else ""
+        if how:
+            us.close_sessions(s, token=cookie)
+            token = us.open_session(s, st, name, ip)
+            left = len(u.totp_codes or [])
+            audit(s, name, "sessao.entrar", name, segundo_passo=how, **({"codigos_restantes": left} if how == "recuperacao" else {}))
+    if not how:
+        login_failed(who, ip)
+        return _code_page(request, next, "Código errado ou já usado. Espere pelo código seguinte e tente de novo.", 401)
+    login_ok(who, ip)
+    r = RedirectResponse(safe_next(next, "/") if how == "totp" else "/conta?recuperacao=1#dois-passos", status_code=303)
+    r.set_cookie(SESSION_COOKIE, token, max_age=7 * 86400, httponly=True, samesite="strict", secure=st.cookie_secure, path="/")
+    r.delete_cookie(PENDING_COOKIE, path="/entrar")
     return r
 
 
@@ -895,17 +963,78 @@ def account_page(request: Request, user: str = Depends(current_user)):
     return _account(request, user)
 
 
-def _account(request: Request, user: str, notas=None, erros=None, status_code: int = 200, cal_url: str = ""):
+def _account(request: Request, user: str, notas=None, erros=None, status_code: int = 200, cal_url: str = "",
+             setup: dict | None = None, codes: list | None = None, erros2: list | None = None):
     st = get_settings()
     with session_scope() as s:
         u = us.by_email(s, user)
         me = _user_row(u, utcnow()) if u else None
         cal = s.scalar(select(UserPref).where(UserPref.username == user, UserPref.key == "calendario"))
         cal_since = cal.value.get("criado", "")[:10] if cal else ""
+    if me and request.query_params.get("recuperacao") and not codes:
+        notas = (notas or []) + [f"Entrou com um código de recuperação: ficam {me['totp_codes']}. "
+                                 "Se perdeu o telemóvel, desligue a verificação em dois passos e ative-a de novo."]
     r = render(request, "conta.html", user, me=me, ROLE_HELP=us.ROLE_HELP, notas=notas or [], erros=erros or [],
-               password_min=st.password_min, cal_url=cal_url, cal_on=bool(cal), cal_since=cal_since)
+               password_min=st.password_min, cal_url=cal_url, cal_on=bool(cal), cal_since=cal_since,
+               setup=setup, codes=codes, erros2=erros2 or [], mfa_required=st.mfa_required)
     r.status_code = status_code
     return r
+
+
+@app.post("/conta/dois-passos/{acao}")
+def account_mfa(request: Request, acao: str, csrf: str = Form(""), atual: str = Form(""), codigo: str = Form(""),
+                user: str = Depends(current_user)):
+    """Verificação em dois passos da própria conta: iniciar (mostra a chave e o código QR), ativar (confirma o primeiro
+    código e mostra os códigos de recuperação) e desligar. Iniciar e desligar pedem a palavra-passe outra vez."""
+    check_csrf(request, csrf)
+    if acao not in ("iniciar", "ativar", "desligar"):
+        raise HTTPException(404)
+    st = get_settings()
+    setup = codes = None
+    nota = ""
+    with session_scope() as s:
+        u = us.by_email(s, user)
+        if u is None:
+            return _account(request, user, erros2=["a conta de recurso do servidor não tem verificação em dois passos; use uma conta pessoal"], status_code=400)
+        if acao in ("iniciar", "desligar") and not us.verify_password(atual, u.password_hash):
+            return _account(request, user, erros2=["a palavra-passe não está certa"], status_code=400)
+        if acao == "iniciar":
+            if u.totp_on:
+                return _account(request, user, erros2=["já está ativa; desligue-a primeiro para a configurar de novo"], status_code=400)
+            secret = mfa.start(st, u)
+            audit(s, user, "utilizador.dois_passos", user, passo="iniciar")
+        elif acao == "ativar":
+            secret = mfa.unseal(st, u.totp_secret)
+            if u.totp_on or not secret:
+                return _account(request, user, erros2=["comece por «Ativar a verificação em dois passos»"], status_code=400)
+            codes = mfa.activate(st, u, codigo)
+            if codes is None:
+                s.rollback()
+                setup = _mfa_setup(st, user, secret)
+                return _account(request, user, setup=setup, erros2=["o código não está certo; espere pelo código seguinte e tente de novo"], status_code=400)
+            us.close_sessions(s, username=user, keep=request.cookies.get(SESSION_COOKIE))   # as outras sessões fecham
+            audit(s, user, "utilizador.dois_passos", user, passo="ativar")
+            nota = "Verificação em dois passos ativa."
+        else:
+            if st.mfa_required:
+                return _account(request, user, erros2=["nesta instalação a verificação em dois passos é obrigatória"], status_code=400)
+            if not u.totp_on:
+                return _account(request, user, erros2=["não está ativa"], status_code=400)
+            if not mfa.check(st, u, codigo):
+                s.rollback()
+                return _account(request, user, erros2=["o código não está certo"], status_code=400)
+            mfa.reset(u)
+            audit(s, user, "utilizador.dois_passos", user, passo="desligar")
+            nota = "Verificação em dois passos desligada."
+        if acao == "iniciar":
+            setup = _mfa_setup(st, user, secret)
+    forget_logins()
+    return _account(request, user, notas=[nota] if nota else None, setup=setup, codes=codes)
+
+
+def _mfa_setup(st, user: str, secret: str) -> dict:
+    issuer = "Atalaia Cert" + (f" ({st.client_name})" if st.client_name else "")
+    return {"key": mfa.grouped(secret), "qr": mfa.qr_data_uri(mfa.uri(secret, user, issuer))}
 
 
 @app.post("/conta/palavra-passe")

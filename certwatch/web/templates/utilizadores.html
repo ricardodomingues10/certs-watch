@@ -97,7 +97,8 @@
           <select name="papel" aria-label="Papel de {{ r.email }}">{% for k, v in ROLES.items() %}<option value="{{ k }}" {{ 'selected' if k == r.role }}>{{ v }}</option>{% endfor %}</select>
           <button class="small-btn">Guardar</button>
         </form>{% endif %}</td>
-      <td><span class="tag {{ 'tag-ok' if r.status == 'ativo' else 'tag-run' if r.status == 'convidado' else 'tag-off' }}">{{ STATUS[r.status] }}</span></td>
+      <td><span class="tag {{ 'tag-ok' if r.status == 'ativo' else 'tag-run' if r.status == 'convidado' else 'tag-off' }}">{{ STATUS[r.status] }}</span>
+        {% if r.status == 'ativo' %}<div class="small {{ 'muted' if r.totp_on else 'err-line' if mfa_required else 'muted' }}">{{ 'dois passos' if r.totp_on else 'só palavra-passe' }}</div>{% endif %}</td>
       <td class="opt small">{{ r.last_seen|ago if r.last_seen else 'nunca' }}</td>
       <td class="opt small">{% if r.invited_at %}{{ r.invited_by }}, {{ r.invited_at|dt }}{% endif %}
         {% if r.link_kind %}<div class="{{ 'err-line' if r.link_expired else 'muted' }}">{{ 'link expirou' if r.link_expired else 'link válido até ' ~ (r.link_expires|dtt) }}</div>{% endif %}</td>
@@ -105,6 +106,7 @@
         {% if r.status != 'desativado' %}
         <form method="post" action="/utilizadores/{{ r.id }}/link"><input type="hidden" name="csrf" value="{{ csrf }}"><button class="small-btn">{{ 'Reenviar convite' if r.status == 'convidado' else 'Enviar link para nova palavra-passe' }}</button></form>
         <form method="post" action="/utilizadores/{{ r.id }}/desativar"><input type="hidden" name="csrf" value="{{ csrf }}"><button class="small-btn">Desativar</button></form>
+        {% if r.totp_on %}<form method="post" action="/utilizadores/{{ r.id }}/dois-passos"><input type="hidden" name="csrf" value="{{ csrf }}"><button class="small-btn" data-confirm="Repor a verificação em dois passos de {{ r.email }}? As sessões fecham e a pessoa volta a entrar só com a palavra-passe até a ativar de novo.">Repor os dois passos</button></form>{% endif %}
         {% else %}
         <form method="post" action="/utilizadores/{{ r.id }}/ativar"><input type="hidden" name="csrf" value="{{ csrf }}"><button class="small-btn">Ativar</button></form>
         {% endif %}

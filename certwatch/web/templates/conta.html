@@ -38,6 +38,49 @@
     {% endif %}
   </section>
 </div>
+<section class="card" id="dois-passos" aria-labelledby="h-2p">
+  <h2 id="h-2p">Verificação em dois passos</h2>
+  {% for e in erros2 %}<p class="note bad" role="alert">Nada mudou: {{ e }}.</p>{% endfor %}
+  {% if not me %}
+  <p class="small">A conta de recurso do servidor entra só com a palavra-passe de <span class="mono">secrets/admin_password</span>. Use uma conta pessoal no dia a dia e guarde esta para emergências.</p>
+  {% elif codes %}
+  <p class="note" role="status"><b>Guarde estes códigos de recuperação agora:</b> não voltam a ser mostrados. Cada um serve uma vez, para entrar quando não tiver o telemóvel.</p>
+  <ul class="mfa-codes mono">{% for c in codes %}<li>{{ c }}</li>{% endfor %}</ul>
+  <p class="small muted">As suas outras sessões foram fechadas. A partir de agora, entrar pede a palavra-passe e o código da aplicação.</p>
+  {% elif setup %}
+  <ol class="mfa-steps">
+    <li>Abra a aplicação de autenticação no telemóvel (Microsoft Authenticator, Google Authenticator, Aegis…) e adicione uma conta.</li>
+    <li>{% if setup.qr %}Leia este código:<br><img src="{{ setup.qr }}" alt="Código QR para a aplicação de autenticação" class="mfa-qr" width="185" height="185"><br>{% endif %}
+      {{ 'Ou escreva' if setup.qr else 'Escreva' }} a chave à mão (tipo «baseada no tempo»): <span class="mono mfa-key">{{ setup.key }}</span></li>
+    <li>Escreva aqui o código de 6 dígitos que a aplicação mostra:
+      <form method="post" action="/conta/dois-passos/ativar" class="inline mfa-form">
+        <input type="hidden" name="csrf" value="{{ csrf }}">
+        <label><span class="sr">Código</span><input type="text" name="codigo" required autofocus autocomplete="one-time-code" inputmode="numeric" maxlength="7" class="mono" size="8"></label>
+        <button class="primary">Confirmar e ativar</button>
+      </form></li>
+  </ol>
+  <p class="small muted">Enquanto não confirmar, nada muda. Se sair desta página, comece de novo: a chave é outra.</p>
+  {% elif me.totp_on %}
+  <p><span class="tag tag-ok">Ativa</span> Entrar pede a palavra-passe e o código da aplicação. Códigos de recuperação por usar: <b>{{ me.totp_codes }}</b>.</p>
+  {% if mfa_required %}<p class="small muted">Nesta instalação é obrigatória. Se mudou de telemóvel, peça a um administrador para a repor.</p>
+  {% else %}
+  <details><summary class="small">Desligar ou configurar de novo</summary>
+    <form method="post" action="/conta/dois-passos/desligar" class="stack us-pw">
+      <input type="hidden" name="csrf" value="{{ csrf }}">
+      <label>Palavra-passe<input type="password" name="atual" required autocomplete="current-password"></label>
+      <label>Código da aplicação (ou um de recuperação)<input type="text" name="codigo" required autocomplete="one-time-code" maxlength="16" class="mono"></label>
+      <button class="small-btn us-del">Desligar a verificação em dois passos</button>
+    </form>
+  </details>{% endif %}
+  {% else %}
+  <p class="small">{% if mfa_required %}<b>Nesta instalação é obrigatória:</b> ative-a para usar a aplicação. {% endif %}Além da palavra-passe, entrar passa a pedir um código de 6 dígitos de uma aplicação no seu telemóvel. Quem souber a sua palavra-passe deixa de conseguir entrar só com ela.</p>
+  <form method="post" action="/conta/dois-passos/iniciar" class="stack us-pw">
+    <input type="hidden" name="csrf" value="{{ csrf }}">
+    <label>Confirme a sua palavra-passe<input type="password" name="atual" required autocomplete="current-password"></label>
+    <button class="primary">Ativar a verificação em dois passos</button>
+  </form>
+  {% endif %}
+</section>
 <section class="card" id="calendario" aria-labelledby="h-cal">
   <h2 id="h-cal">Calendário de expirações</h2>
   <p class="small">Cada certificado e segredo de API num dia do calendário, com o dono e o pedido, e lembretes 30 e 7 dias antes. <a href="/calendario.ics">Descarregar agora (.ics)</a> para importar uma vez, ou crie um link pessoal para <b>subscrever</b> no Outlook («Adicionar calendário» → «Da Internet»), que se atualiza sozinho.</p>

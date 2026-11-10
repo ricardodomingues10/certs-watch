@@ -1,0 +1,14 @@
+{% extends "_publico.html" %}
+{% block title %}Código de verificação{% endblock %}
+{% block body %}
+<h1>Código de verificação</h1>
+<p class="small">A palavra-passe está certa. Falta o código de 6 dígitos da sua aplicação de autenticação.</p>
+{% if erro %}<p class="note bad" role="alert">{{ erro }}</p>{% endif %}
+<form method="post" action="/entrar/codigo" class="stack">
+  <input type="hidden" name="csrf" value="{{ csrf }}"><input type="hidden" name="next" value="{{ next }}">
+  <label>Código<input type="text" name="codigo" required autofocus autocomplete="one-time-code" inputmode="numeric" maxlength="16" spellcheck="false" class="mono"></label>
+  <button class="primary">Entrar</button>
+</form>
+<p class="pub-links small"><a href="/entrar">Voltar à página de entrada</a></p>
+{% endblock %}
+{% block after %}<p class="small muted pub-foot">Sem o telemóvel? Escreva um dos códigos de recuperação que guardou (cada um serve uma vez). Sem nenhum dos dois, peça a um administrador para repor a verificação em dois passos.</p>{% endblock %}
