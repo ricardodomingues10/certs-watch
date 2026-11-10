@@ -20,7 +20,7 @@ def web(env):
     from certwatch.web import app as webapp
     from certwatch.web import security
     security.forget_logins()
-    security._FAILS.clear()
+    security._MEMORY.clear()
     webapp.invalidate_nav()
     with TestClient(webapp.app) as c:
         yield c
@@ -361,3 +361,60 @@ def test_allowed_hosts_come_from_public_url_and_the_list():
     assert config._allowed_hosts("", "") == ("localhost", "127.0.0.1", "::1")
     assert config._allowed_hosts(" Atalaia.Interno.PT , 10.0.0.5", "https://atalaia.exemplo.pt:8443/") == \
         ("localhost", "127.0.0.1", "::1", "atalaia.exemplo.pt", "atalaia.interno.pt", "10.0.0.5")
+
+
+def _req(peer, xff=None):
+    from starlette.requests import Request
+    headers = [(b"x-forwarded-for", xff.encode())] if xff else []
+    return Request({"type": "http", "method": "GET", "path": "/", "headers": headers, "client": (peer, 1234)})
+
+
+def test_client_address_only_trusts_forwarded_for_from_known_proxies(env, monkeypatch):
+    from certwatch.web import security
+    # sem proxies de confiança (túnel SSH): o cabeçalho é ignorado, por muito que mude
+    assert security.client_ip(_req("127.0.0.1", "203.0.113.9")) == "127.0.0.1"
+    st = replace(config.get_settings(), trusted_proxies=("127.0.0.1/32", "10.0.0.0/24"))
+    monkeypatch.setattr(security, "get_settings", lambda: st)
+    assert security.client_ip(_req("127.0.0.1", "203.0.113.9")) == "203.0.113.9"
+    # vale o mais à direita que não é um proxy: o que o cliente escreveu à esquerda não conta
+    assert security.client_ip(_req("127.0.0.1", "1.1.1.1, 198.51.100.7, 10.0.0.5")) == "198.51.100.7"
+    assert security.client_ip(_req("198.51.100.7", "1.1.1.1")) == "198.51.100.7"        # quem liga não é um proxy
+    assert security.client_ip(_req("127.0.0.1", "isto-nao-e-um-ip")) == "127.0.0.1"
+    assert security.client_ip(_req("127.0.0.1")) == "127.0.0.1"
+    assert config._networks("127.0.0.1, 10.0.0.0/24") == ("127.0.0.1/32", "10.0.0.0/24")
+    with pytest.raises(RuntimeError):
+        config._networks("proxy.exemplo.pt")
+
+
+def test_login_limits_survive_restart_and_changing_address(web, monkeypatch):
+    """As falhas ficam na base (um reinício não as apaga) e a conta tem um teto próprio, para quem muda de endereço
+    a cada tentativa; quem entra a partir de outro endereço não fica bloqueado pelas 10 falhas de um só."""
+    from certwatch.models import LoginFailure
+    from certwatch.web import security
+    token, _ = invite(web, "ana@exemplo.pt")
+    accept(web, token)
+    web.get("/entrar")
+    for _ in range(10):
+        assert login(web, "ana@exemplo.pt", "errada").status_code == 401
+    assert login(web, "ana@exemplo.pt", PW).status_code == 429
+    security._MEMORY.clear()                                                # "reinício": a memória perde-se, a base não
+    assert login(web, "ana@exemplo.pt", PW).status_code == 429
+    with session_scope() as s:
+        rows = list(s.scalars(select(LoginFailure)))
+        assert len(rows) == 20 and all(len(r.key_hash) == 64 for r in rows)  # 10 do par + 10 da conta, só o sha256
+    assert security.login_blocked("ana@exemplo.pt", "198.51.100.7") is False  # outro endereço: a Ana ainda entra
+    for i in range(40):                                                      # o atacante muda de endereço de cada vez
+        security.login_failed("Ana@Exemplo.pt", f"203.0.113.{i}")
+    assert security.login_blocked("ana@exemplo.pt", "198.51.100.7") is True   # teto da conta: 50 em 15 minutos
+    assert security.login_blocked("rui@exemplo.pt", "198.51.100.7") is False
+    # fora da janela deixam de contar e são apagadas na limpeza seguinte
+    from datetime import timedelta
+    from certwatch.db import utcnow
+    with session_scope() as s:
+        for r in s.scalars(select(LoginFailure)):
+            r.at = utcnow() - timedelta(seconds=security.FAIL_WINDOW + 5)
+    assert security.login_blocked("ana@exemplo.pt", "testclient") is False
+    monkeypatch.setattr(security, "_last_prune", float("-inf"))
+    security.note_failure("qualquer")
+    with session_scope() as s:
+        assert len(list(s.scalars(select(LoginFailure)))) == 1

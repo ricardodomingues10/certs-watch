@@ -21,7 +21,7 @@ def web(env):
     from certwatch.web import app as webapp
     from certwatch.web import security
     security.forget_logins()
-    security._FAILS.clear()
+    security._MEMORY.clear()
     webapp.invalidate_nav()
     with TestClient(webapp.app) as c:
         yield c

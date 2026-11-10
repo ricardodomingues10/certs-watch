@@ -21,7 +21,6 @@ SESSION_COOKIE = "cw_sessao"
 # Alterar, desativar ou apagar um utilizador limpa a cache, por isso as mudanças valem logo.
 _OK_CACHE: dict[str, tuple[float, str, str]] = {}
 _SESSION_CACHE: dict[str, tuple[float, str, str]] = {}
-_FAILS: dict[str, list[float]] = {}
 FAIL_LIMIT, FAIL_WINDOW = 10, 900          # 10 tentativas falhadas em 15 min bloqueiam esse utilizador nesse endereço
 READONLY_POST = {"/tema", "/painel/disposicao", "/conta/palavra-passe", "/conta/calendario", "/sair"}
 
@@ -60,18 +59,121 @@ def _deny(request: Request, msg: str = "Credenciais inválidas"):
     raise HTTPException(status.HTTP_401_UNAUTHORIZED, msg)
 
 
-def too_many(key: str) -> bool:
+def client_ip(request: Request) -> str:
+    """De onde vem o pedido. O X-Forwarded-For só conta quando quem liga é um proxy de confiança
+    (CERTWATCH_TRUSTED_PROXIES); nesse caso vale o endereço mais à direita que não é um desses proxies. Sem proxies
+    de confiança o cabeçalho é ignorado: quem liga diretamente podia escrever lá um endereço diferente em cada
+    tentativa e nunca chegar ao limite."""
+    import ipaddress
+    peer = request.client.host if request.client else ""
+    nets = get_settings().trusted_proxies
+    if not nets or not peer:
+        return peer
+
+    def trusted(ip: str) -> bool:
+        try:
+            a = ipaddress.ip_address(ip)
+        except ValueError:
+            return False
+        return any(a in ipaddress.ip_network(n) for n in nets)
+
+    if not trusted(peer):
+        return peer
+    for hop in reversed([h.strip() for h in request.headers.get("x-forwarded-for", "").split(",") if h.strip()]):
+        try:
+            ipaddress.ip_address(hop)
+        except ValueError:
+            return peer                      # cabeçalho estragado: não se confia em nada do que lá está
+        if not trusted(hop):
+            return hop
+    return peer
+
+
+# Tentativas falhadas: ficam na base de dados (valem depois de um reinício e para todos os processos) e são apagadas
+# quando saem da janela. Se a base não responder, conta-se em memória, com um teto, para o limite nunca desaparecer.
+ACCOUNT_LIMIT = 50                         # tentativas falhadas na mesma conta, venham de onde vierem
+_MEMORY: dict[str, list[float]] = {}
+_MEMORY_MAX = 5000
+_last_prune = float("-inf")            # time.monotonic() pode começar perto de zero
+
+
+def _kh(key: str) -> str:
+    return hashlib.sha256(key.encode("utf-8", "replace")).hexdigest()
+
+
+def _memory_count(kh: str) -> int:
     now = time.monotonic()
-    return len([t for t in _FAILS.get(key, []) if now - t < FAIL_WINDOW]) >= FAIL_LIMIT
+    return len([t for t in _MEMORY.get(kh, []) if now - t < FAIL_WINDOW])
+
+
+def too_many(key: str, limit: int = FAIL_LIMIT) -> bool:
+    from sqlalchemy import func, select
+    from ..db import session_scope, utcnow
+    from ..models import LoginFailure
+    kh = _kh(key)
+    try:
+        with session_scope() as db:
+            n = db.scalar(select(func.count(LoginFailure.id)).where(
+                LoginFailure.key_hash == kh, LoginFailure.at >= utcnow() - timedelta(seconds=FAIL_WINDOW))) or 0
+    except Exception:
+        n = 0
+    return max(n, _memory_count(kh)) >= limit
 
 
 def note_failure(key: str) -> None:
-    now = time.monotonic()
-    _FAILS[key] = [t for t in _FAILS.get(key, []) if now - t < FAIL_WINDOW] + [now]
+    global _last_prune
+    from sqlalchemy import delete
+    from ..db import session_scope, utcnow
+    from ..models import LoginFailure
+    kh = _kh(key)
+    try:
+        with session_scope() as db:
+            db.add(LoginFailure(key_hash=kh))
+            if time.monotonic() - _last_prune > 300:            # limpeza: no máximo de 5 em 5 minutos
+                _last_prune = time.monotonic()
+                db.execute(delete(LoginFailure).where(LoginFailure.at < utcnow() - timedelta(seconds=FAIL_WINDOW)))
+    except Exception:
+        now = time.monotonic()
+        if len(_MEMORY) >= _MEMORY_MAX:
+            _MEMORY.clear()
+        _MEMORY[kh] = [t for t in _MEMORY.get(kh, []) if now - t < FAIL_WINDOW] + [now]
 
 
 def clear_failures(key: str) -> None:
-    _FAILS.pop(key, None)
+    from sqlalchemy import delete
+    from ..db import session_scope
+    from ..models import LoginFailure
+    kh = _kh(key)
+    _MEMORY.pop(kh, None)
+    try:
+        with session_scope() as db:
+            db.execute(delete(LoginFailure).where(LoginFailure.key_hash == kh))
+    except Exception:
+        pass
+
+
+def _login_keys(username: str, ip: str) -> tuple[str, str]:
+    name = username.strip().lower()
+    return f"{name}|{ip}", f"conta|{name}"
+
+
+def login_blocked(username: str, ip: str) -> bool:
+    """Dois limites em 15 minutos: 10 tentativas falhadas desta conta a partir deste endereço, e 50 nesta conta a
+    partir de qualquer endereço (para quem muda de endereço a cada tentativa)."""
+    pair, account = _login_keys(username, ip)
+    return too_many(pair) or too_many(account, ACCOUNT_LIMIT)
+
+
+def login_failed(username: str, ip: str) -> None:
+    pair, account = _login_keys(username, ip)
+    note_failure(pair)
+    note_failure(account)
+
+
+def login_ok(username: str, ip: str) -> None:
+    """Entrou: esquece as falhas deste endereço. As da conta ficam até saírem da janela, para uma entrada legítima
+    não dar mais tentativas a quem está a adivinhar a partir de outro lado."""
+    clear_failures(_login_keys(username, ip)[0])
 
 
 def check_login(username: str, password: str) -> tuple[str, str] | None:
@@ -147,16 +249,15 @@ def _check(username: str, password: str) -> tuple[str, str] | None:
 def current_user(request: Request, credentials: HTTPBasicCredentials | None = Depends(_basic)) -> str:
     found, via = None, ""
     if credentials is not None:
-        who = f"{credentials.username.lower()}|{request.client.host if request.client else ''}"
-        if too_many(who):
+        ip = client_ip(request)
+        if login_blocked(credentials.username, ip):
             raise HTTPException(status.HTTP_429_TOO_MANY_REQUESTS, "Demasiadas tentativas falhadas. Tente daqui a 15 minutos.")
         found = _check(credentials.username, credentials.password)
         if found is None:
             if not get_settings().admin_password and not _any_user():
                 raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, "Palavra-passe de administração não configurada")
-            note_failure(who)
+            login_failed(credentials.username, ip)
             raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Credenciais inválidas")
-        clear_failures(who)
         via = "basic"
     else:
         token = request.cookies.get(SESSION_COOKIE)

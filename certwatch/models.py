@@ -728,6 +728,16 @@ class LoginSession(Base):
     ip: Mapped[str] = mapped_column(String(64), default="")
 
 
+class LoginFailure(Base):
+    """Uma tentativa falhada (entrar, recuperar, links públicos). Fica na base para o limite valer depois de um
+    reinício e para todos os processos; a chave é só o sha256 (nem o email nem o endereço ficam escritos)."""
+    __tablename__ = "login_failures"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    key_hash: Mapped[str] = mapped_column(String(64), index=True)
+    at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, index=True)
+
+
 class UserPref(Base):
     """Preferências de cada pessoa (por exemplo, a disposição dos cartões do Painel)."""
     __tablename__ = "user_prefs"

@@ -257,6 +257,9 @@ class Settings:
     # Nomes pelos quais a aplicação aceita ser chamada (cabeçalho Host). Os links dos emails usam o endereço do pedido
     # quando public_url está vazio: sem esta lista, um Host forjado punha o endereço de outro servidor nesses links.
     allowed_hosts: tuple[str, ...] = ("localhost", "127.0.0.1", "::1")
+    # Proxies de confiança (IPs ou redes): só deles se aceita o X-Forwarded-For para saber de onde vem cada pedido.
+    # Vazio (o túnel SSH): o cabeçalho é ignorado, porque quem liga diretamente podia escrever lá o que quisesse.
+    trusted_proxies: tuple[str, ...] = ()
     invite_hours: int = 72                         # validade do link de convite ou de nova palavra-passe
     password_min: int = 12
     session_hours: int = 12                        # sessão aberta na página de entrada: fecha ao fim de N horas sem uso
@@ -435,6 +438,7 @@ class Settings:
             status_token=_secret("status_token", "CERTWATCH_STATUS_TOKEN"),
             cookie_secure=_env("CERTWATCH_COOKIE_SECURE", "false").lower() == "true",
             public_url=_env("CERTWATCH_PUBLIC_URL", "").rstrip("/"),
+            trusted_proxies=_networks(_env("CERTWATCH_TRUSTED_PROXIES", "")),
             allowed_hosts=_allowed_hosts(_env("CERTWATCH_ALLOWED_HOSTS", ""), _env("CERTWATCH_PUBLIC_URL", "")),
             invite_hours=max(1, int(_env("CERTWATCH_INVITE_HOURS", "72"))),
             password_min=max(8, int(_env("CERTWATCH_PASSWORD_MIN", "12"))),
@@ -474,6 +478,21 @@ class Settings:
             final_columns_file=_env("CERTWATCH_FINAL_COLUMNS_FILE", "cmdb-colunas").lower(),
             final_keep_runs=int(_env("CERTWATCH_FINAL_KEEP_RUNS", "20")),
         )
+
+
+def _networks(value: str) -> tuple[str, ...]:
+    """IPs ou redes (CIDR) separados por vírgulas; um valor que não é um endereço pára o arranque com a explicação."""
+    import ipaddress
+    out = []
+    for part in value.split(","):
+        part = part.strip()
+        if not part:
+            continue
+        try:
+            out.append(str(ipaddress.ip_network(part, strict=False)))
+        except ValueError:
+            raise RuntimeError(f"CERTWATCH_TRUSTED_PROXIES: «{part}» não é um endereço IP nem uma rede (ex.: 127.0.0.1 ou 10.0.0.0/24)")
+    return tuple(out)
 
 
 def _allowed_hosts(extra: str, public_url: str) -> tuple[str, ...]:

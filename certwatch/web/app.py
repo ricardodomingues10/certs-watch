@@ -48,8 +48,8 @@ from ..conectores import ticket_url
 from ..tickets import TICKET_HELP, TICKET_ORDER, TICKET_STATES, TICKET_VIEWS, comment_files, filter_tickets, ticket_list, tickets_by_label, link as ticket_link, tickets_by_endpoint
 from ..trust import local_trust_files
 from ..normalize import norm_label, split_api_name, is_ip, is_valid_hostname, norm_host, norm_issuer
-from .security import (SESSION_COOKIE, PermissionDenied, check_csrf, check_login, clear_failures, current_user, forget_logins, note_failure,
-                       require_admin, security_middleware, too_many)
+from .security import (SESSION_COOKIE, PermissionDenied, check_csrf, check_login, client_ip, current_user, forget_logins,
+                       login_blocked, login_failed, login_ok, note_failure, require_admin, security_middleware, too_many)
 from .. import users as us
 from ..models import (Automation, CertOwner, ChangeProposal, CmdbChange, DomainChange, DomainRecord, ReminderLink, SiteCheck, Team,
                       TicketRule, User, UserPref)
@@ -717,7 +717,7 @@ def _public(request: Request, name: str, **ctx):
 
 
 def _client_ip(request: Request) -> str:
-    return request.client.host if request.client else ""
+    return client_ip(request)
 
 
 def _login_page(request: Request, erro: str = "", nota: str = "", email: str = "", nxt: str = "/", status_code: int = 200):
@@ -737,13 +737,13 @@ def login_page(request: Request, next: str = "/"):
 def login(request: Request, csrf: str = Form(""), email: str = Form(""), palavra: str = Form(""), next: str = Form("/")):
     check_csrf(request, csrf)
     st = get_settings()
-    who = f"{email.strip().lower()}|{_client_ip(request)}"
-    if too_many(who):
+    ip = _client_ip(request)
+    if login_blocked(email, ip):
         return _login_page(request, erro="Demasiadas tentativas falhadas. Tente daqui a 15 minutos.", email=email, nxt=next, status_code=429)
     username = email.strip() if email.strip() == st.admin_user else us.norm_email(email)
     found = check_login(username, palavra)
     if found is None:
-        note_failure(who)
+        login_failed(email, ip)
         with session_scope() as s:
             u = us.by_email(s, username)
             pending = u is not None and u.status == "pendente" and u.password_hash and us.verify_password(palavra, u.password_hash)
@@ -751,9 +751,9 @@ def login(request: Request, csrf: str = Form(""), email: str = Form(""), palavra
             return _login_page(request, nota="O seu pedido de acesso ainda está à espera de aprovação. Quando um administrador o aprovar, recebe um email.",
                                email=email, nxt=next, status_code=403)
         return _login_page(request, erro="Email ou palavra-passe errados.", email=email, nxt=next, status_code=401)
-    clear_failures(who)
+    login_ok(email, ip)
     with session_scope() as s:
-        token = us.open_session(s, st, found[1], _client_ip(request))
+        token = us.open_session(s, st, found[1], ip)
         audit(s, found[1], "sessao.entrar", found[1])
     r = RedirectResponse(safe_next(next, "/"), status_code=303)
     r.set_cookie(SESSION_COOKIE, token, max_age=7 * 86400, httponly=True, samesite="strict", secure=st.cookie_secure, path="/")

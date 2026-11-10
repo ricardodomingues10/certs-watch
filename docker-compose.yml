@@ -52,7 +52,7 @@ services:
   web:
     <<: *app
     command: ["python", "-m", "uvicorn", "certwatch.web.app:app",
-              "--host", "127.0.0.1", "--port", "8088", "--proxy-headers", "--no-server-header"]
+              "--host", "127.0.0.1", "--port", "8088", "--no-proxy-headers", "--no-server-header"]
     depends_on:
       db:
         condition: service_healthy
