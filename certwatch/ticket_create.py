@@ -67,14 +67,14 @@ def _conn(settings: Settings):
 def config_problems(settings: Settings) -> list[str]:
     """O que falta configurar para poder criar pedidos (vazio = pronto)."""
     conn = _conn(settings)
-    if conn.kind != "smax":   # Jira, ServiceNow, GLPI: a ligação é configurada em Sistema → Ligações
+    if conn.kind != "smax":   # Jira, ServiceNow, GLPI: a ligação é configurada em Sistema → Fontes e ligações
         out = []
         if not conn.can("criar"):
             out.append(f"O sistema ligado ({conn.label}) não permite criar pedidos a partir do Atalaia.")
         elif not conn.configured():
-            out.append(f"A ligação ao {conn.label} não está completa (Sistema → Ligações).")
+            out.append(f"A ligação ao {conn.label} não está completa (Sistema → Fontes e ligações).")
         elif conn.p("criar_pedidos", "nao") != "sim":
-            out.append(f"A criação de pedidos no {conn.label} está desligada (Sistema → Ligações → Permitir criar pedidos).")
+            out.append(f"A criação de pedidos no {conn.label} está desligada (Sistema → Fontes e ligações → Permitir criar pedidos).")
         return out
     out = []
     if not settings.smax_create_enabled:

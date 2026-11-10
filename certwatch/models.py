@@ -789,7 +789,7 @@ class TicketRule(Base):
 
 
 class ConnectorConfig(Base):
-    """Ligação escolhida na interface (Sistema → Ligações) para a CMDB ou para os tickets.
+    """Ligação escolhida na interface (Sistema → Fontes e ligações) para a CMDB ou para os tickets.
 
     Sem linha aqui vale a configuração do .env (UCMDB e SMAX, como sempre). As credenciais ficam cifradas
     (conectores.cifra) e nunca voltam a ser mostradas.

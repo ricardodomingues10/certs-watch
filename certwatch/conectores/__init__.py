@@ -6,7 +6,7 @@ ativo os certificados da CMDB (o mesmo formato que a UCMDB sempre devolveu) ou o
 (o mesmo formato que o SMAX sempre devolveu).
 
 Que conector está ativo:
-  1. o escolhido em Sistema → Ligações (tabela connector_configs), se houver;
+  1. o escolhido em Sistema → Fontes e ligações (tabela connector_configs), se houver;
   2. senão o do .env, como sempre: UCMDB para a CMDB e SMAX para os tickets (se configurado).
 Uma instalação que não toca em Ligações funciona exatamente como antes.
 

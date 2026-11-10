@@ -130,7 +130,7 @@ Quando alguém tenta uma ação que o seu papel não permite, fica na mesma pág
 
 Na lista, o administrador muda o papel (coluna **Papel**: escolher o novo papel e **Guardar o papel**; vale logo, mesmo para quem já tem a sessão aberta), desativa (a pessoa deixa de entrar logo) ou ativa, envia um link para uma palavra-passe nova (ou reenvia o convite) e apaga. Um administrador não se altera a si próprio, e não se tira o último administrador ativo quando não há conta de recurso. **A minha conta** (o nome no topo) mostra o papel e muda a palavra-passe (pelo menos `CERTWATCH_PASSWORD_MIN` caracteres, 12). Desativar ou apagar uma pessoa fecha logo as sessões dela. A conta `admin` com a palavra-passe em `secrets/admin_password` continua a funcionar como **conta de recurso** (para o primeiro acesso ou se não houver mais nenhum administrador). Os links usam o endereço por onde o administrador está a usar a aplicação; para fixar outro (por exemplo, o nome público atrás do proxy), defina `CERTWATCH_PUBLIC_URL`.
 
-A interface ocupa a largura toda do ecrã e adapta-se a qualquer tamanho. A navegação fica na coluna à esquerda, agrupada por tarefa: **Painel**, **Inventário** (certificados, APIs e segredos, servidores), **Vigilância** (testes, na internet), **Renovar** (pedidos SMAX, relatório por email), **CMDB** (atualizar a CMDB, editar um certificado, histórico) e **Sistema** (execuções e auditoria, ligação à UCMDB, AVI pela API, como funciona). No telemóvel fica no menu do canto. Os alertas estão no sino da barra de cima, ao pé do utilizador, com o número de alertas abertos por cima (vermelho se houver altos ou críticos). A caixa no topo procura em tudo. Cada tabela ajusta-se ao espaço que tem: escondem-se primeiro as colunas secundárias e, se ainda não couber, cada linha passa a cartão.
+A interface ocupa a largura toda do ecrã e adapta-se a qualquer tamanho. A navegação fica na coluna à esquerda, agrupada por tarefa: **Painel** (com os separadores Resumo, Por semana e mês e 47 dias), **Inventário** (certificados, APIs e segredos, servidores, donos), **Vigilância** (testes, sites públicos, na internet), **Renovar** (próximos 90 dias, pedidos SMAX com as regras, relatório por email), **CMDB** (atualizar a CMDB, histórico da CMDB) e **Sistema** (automatizações, execuções e auditoria, fontes e ligações, utilizadores, como funciona). Algumas entradas mostram um número (sites com problemas, certificados da internet por triar, respostas por rever, diferenças da reconciliação, pedidos de acesso). No telemóvel fica no menu do canto. Os alertas estão no sino da barra de cima, ao pé do utilizador, com o número de alertas abertos por cima (vermelho se houver altos ou críticos). A caixa no topo procura em tudo. Cada tabela ajusta-se ao espaço que tem: escondem-se primeiro as colunas secundárias e, se ainda não couber, cada linha passa a cartão.
 
 **Logótipo**: no alto de uma atalaia (em desenho), uma idosa de lenço preto atado ao queixo, óculos, xaile e cruz de ouro vigia de frente para nós, com a mão direita em pala sobre os olhos e um foco na mão esquerda. Olha para a direita, para o nome da aplicação: o foco sobe devagar de baixo para cima, por cima de "Cert" e depois de "Atalaia", e cada letra acende e dá um pequeno salto quando a luz lhe passa por cima; depois o foco apaga-se, desce e recomeça (ciclo de 7 s). Respira e pisca os olhos. O desenho está em `certwatch/web/templates/_atalaia.html` (SVG dentro da página) e a animação em `style.css`, por isso funciona com a CSP da aplicação. `CERTWATCH_LOGO_ANIMATION=sempre` (por omissão), `auto` (para quando o Windows ou o navegador pedem menos movimento) ou `parado` (sem foco nem letras a acender). A luz fica só no logótipo e no nome: não há iluminação na página. A barra de cima mostra o que está a correr no servidor ("A trabalhar: …", atualizado a cada 5 s por `/estado/ocupado`); trabalho parado há mais de 2 horas não conta. O ícone do separador (`static/atalaia-icone.svg`) gera-se com `python tools/logo/gerar_svg.py`. A coluna encolhe em ecrãs mais baixos (portáteis de 1366×768 incluídos) para o menu caber todo sem deslizar.
 
@@ -160,11 +160,12 @@ A interface ocupa a largura toda do ecrã e adapta-se a qualquer tamanho. A nave
 | APIs e segredos | Lista de APIs da CMDB: aplicação, localização, expiração, "Expirado?" (e se está desatualizado), registo; vistas e CSV |
 | Na internet | Certificados públicos dos domínios da organização, comparados com a CMDB; decidir adicionar, investigar ou ignorar; exportar CSV |
 | Atualizar a CMDB | Cinco passos guiados: fontes, comparação com a CMDB, rever as diferenças, aplicar na UCMDB, confirmar |
-| Editar um certificado | Corrigir um certificado na UCMDB, com revisão antes de gravar |
+| Editar um certificado | Corrigir um certificado na UCMDB, com revisão antes de gravar (abre a partir da página do certificado) |
 | Alertas | Lista filtrável; **aceitar risco** (justificação obrigatória e prazo até 1 ano) ou reabrir |
 | Servidores | Alvos de verificação; adicionar servidores à mão (ex.: os que usam um wildcard) |
 | Execuções e auditoria | Executar jobs, histórico de execuções, alterações feitas na UCMDB e auditoria |
-| Ligação à UCMDB | O que a conta da UCMDB pode fazer (ler, atualizar, criar), com testes seguros |
+| Automatizações | O que corre sozinho e quando: ler, verificar, relatórios, lembretes, reconciliar e, para administradores, escrever com limite |
+| Fontes e ligações | Um cartão por fonte com estado, chamadas e **Testar a ligação**; permissões da UCMDB, AVI e Azure pela API, outra CMDB ou outro sistema de pedidos |
 
 API só de leitura (mesma autenticação): `GET /api/inventario`, `GET /api/testes`, `GET /api/findings?status=aberto|aceite|resolvido`.
 
@@ -325,7 +326,7 @@ Com os mesmos dados (e todos os emissores e séries presentes), os ficheiros ger
 
 ### 5.8 Ligação à UCMDB (permissões)
 
-Em **Sistema → Ligação à UCMDB** verifica-se o que a conta configurada (segredo `ucmdb_user`) consegue fazer pela REST API:
+Em **Sistema → Fontes e ligações → UCMDB → Permissões** verifica-se o que a conta configurada (segredo `ucmdb_user`) consegue fazer pela REST API:
 - **Leitura** (não muda nada): `POST /rest-api/authenticate`, execução de cada TQL configurado (`POST /rest-api/topology`) e leitura de um CI completo (`GET /rest-api/dataModel/ci/{id}`).
 - **Escrita** (só com confirmação, num certificado escolhido): `PUT /rest-api/dataModel/ci/{id}` com a Description (ou o Display Label) igual ao valor que já tem. A UCMDB verifica a permissão de atualização, mas nenhum valor muda. Criar (`POST /rest-api/dataModel`) e apagar (`DELETE /rest-api/dataModel/ci/{id}`) não são testados, porque o único teste seria criar ou apagar um CI de verdade.
 
@@ -341,7 +342,7 @@ Com `CERTWATCH_UCMDB_WRITE=true` no `.env`, a aplicação cria e atualiza os cer
 
 Cada linha da reconciliação mostra o resultado (criado / atualizado / aviso / erro / não aplicado) e o ID do CI. Uma alteração já aplicada não é enviada de novo.
 
-**Editar um certificado** (CMDB → **Editar um certificado**, ou **Editar na UCMDB** na página do certificado): procura-se pelo CommonName, Global Id ou ID do CI; os valores são lidos na hora da UCMDB. Muda-se o que for preciso (data, emissor, série, estado, Description…), **Rever alterações** mostra o antes e o depois e **Gravar na UCMDB** envia só esses campos. Por omissão a Description regista a alteração ("Changed with n8n - Data de expiracao alterado de … para …").
+**Editar um certificado** (**Editar na UCMDB** na página do certificado, ou a partir de Atualizar a CMDB): procura-se pelo CommonName, Global Id ou ID do CI; os valores são lidos na hora da UCMDB. Muda-se o que for preciso (data, emissor, série, estado, Description…), **Rever alterações** mostra o antes e o depois e **Gravar na UCMDB** envia só esses campos. Por omissão a Description regista a alteração ("Changed with n8n - Data de expiracao alterado de … para …").
 
 **Proteções:**
 - Só se escrevem estes campos: Display Label, Name, CommonName, ValidTo, Localização, Certificate Status, SerialNumber, Issuer, IssuerName, Subject Alternative Names, Certificate Type e Description. Nunca o Global Id nem datas de criação.

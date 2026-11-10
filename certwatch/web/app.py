@@ -489,7 +489,7 @@ def setup_checklist(s, settings, stats) -> list[dict]:
                                else "Ainda não lidos com sucesso. Ver Execuções e auditoria.")})
     else:
         items.append({"ok": None, "title": "Sistema de tickets",
-                      "hint": "Opcional: ligar o SMAX, Jira, ServiceNow ou GLPI em Sistema → Ligações "
+                      "hint": "Opcional: ligar o SMAX, Jira, ServiceNow ou GLPI em Sistema → Fontes e ligações "
                               "(ou CERTWATCH_SMAX_URL, CERTWATCH_SMAX_TENANT e os segredos smax_user/smax_password)."})
     if settings.ct_domains:
         jr, part = _last_ok(s, "ingest_ct")
