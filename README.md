@@ -46,7 +46,9 @@ printf '%s' 'PASSWORD_DA_CONTA'        > secrets/ucmdb_password
 touch secrets/smax_user secrets/smax_password                   # preencher só se usar o SMAX (secção 7)
 touch secrets/smtp_password secrets/avi_user secrets/avi_password secrets/azure_client_secret   # opcionais (7.4, 5.10, 5.11)
 openssl rand -base64 18 | tr -d '\n' > secrets/admin_password   # login da interface (utilizador: admin)
-S='secrets/db_password secrets/ucmdb_user secrets/ucmdb_password secrets/admin_password secrets/smax_user secrets/smax_password'
+openssl rand -base64 32 | tr -d '\n' > secrets/data_key         # chave de cifra do que fica na base de dados
+touch secrets/data_key_old                                      # só tem conteúdo durante uma troca de chave
+S='secrets/db_password secrets/ucmdb_user secrets/ucmdb_password secrets/admin_password secrets/smax_user secrets/smax_password secrets/data_key secrets/data_key_old'
 sudo chown 10001:10001 $S && sudo chmod 400 $S     # o contentor corre como UID 10001
 ```
 
@@ -135,6 +137,21 @@ Na lista, o administrador muda o papel (coluna **Papel**: escolher o novo papel 
 **Limite de tentativas.** Em 15 minutos: 10 tentativas falhadas na mesma conta a partir do mesmo endereço, e 50 na mesma conta a partir de qualquer endereço (para quem muda de endereço a cada tentativa). As falhas ficam na base de dados (tabela `login_failures`, só o sha256 da chave), por isso um reinício não as apaga, e são limpas quando saem da janela. O endereço de quem pede é o da ligação; o cabeçalho `X-Forwarded-For` só é aceite quando a ligação vem de um proxy de `CERTWATCH_TRUSTED_PROXIES` (com um proxy na mesma máquina: `127.0.0.1`). Sem isso é ignorado, porque quem liga diretamente podia escrever lá um endereço novo em cada tentativa; por essa razão o uvicorn arranca com `--no-proxy-headers`.
 
 **Verificação em dois passos.** Em **A minha conta**, cada pessoa pode juntar à palavra-passe um código de 6 dígitos de uma aplicação de autenticação (TOTP, RFC 6238: Microsoft Authenticator, Google Authenticator, Aegis…). Ativar pede a palavra-passe outra vez, mostra um código QR e a chave para escrever à mão, e só fica ativo depois de confirmar um código; nesse momento aparecem **dez códigos de recuperação**, uma única vez, e as outras sessões fecham. A partir daí, entrar tem dois ecrãs (palavra-passe, depois código), cada código serve uma vez, e dez códigos errados bloqueiam 15 minutos. A chave fica cifrada na base de dados e dos códigos de recuperação fica só o sha256. Uma conta com dois passos **não entra por basic authentication** (que só leva a palavra-passe). Quem perder o telemóvel e os códigos pede a um administrador **Repor os dois passos** em Sistema → Utilizadores; recuperar a palavra-passe por email não desliga o segundo passo. Com `CERTWATCH_MFA_REQUIRED=true` passa a ser obrigatória: quem ainda não a ativou só chega à sua conta. A conta de recurso (`secrets/admin_password`) não tem segundo passo: é para emergências e scripts, com uma palavra-passe longa e guardada em cofre.
+
+**Chave de cifra (`secrets/data_key`).** As credenciais dos conectores (outra CMDB, outro sistema de pedidos) e as chaves da verificação em dois passos ficam cifradas na base de dados. A chave vem de um segredo próprio, `secrets/data_key`, com pelo menos 32 caracteres (uma chave mais curta pára o arranque com a explicação), passado por scrypt. Sem ele, a aplicação continua a usar a chave de origem, derivada do endereço da base de dados, e a página **Fontes e ligações** avisa.
+
+- **Instalação que já existe (vinda de antes da 0.37.0):** criar os dois ficheiros e reiniciar. No arranque, o que estava cifrado com a chave de origem é cifrado de novo com a própria, sozinho.
+
+  ```bash
+  cd /opt/certwatch
+  openssl rand -base64 32 | tr -d '\n' | sudo tee secrets/data_key > /dev/null
+  sudo touch secrets/data_key_old
+  sudo chown 10001:10001 secrets/data_key secrets/data_key_old && sudo chmod 400 secrets/data_key secrets/data_key_old
+  docker compose up -d
+  ```
+
+- **Trocar a chave:** copiar a atual para `secrets/data_key_old`, escrever a nova em `secrets/data_key` e reiniciar; tudo é cifrado de novo com a nova. Depois de confirmar em Fontes e ligações que nada ficou por migrar, esvaziar `secrets/data_key_old` e reiniciar.
+- **Guardar uma cópia da chave fora do servidor** (cofre de palavras-passe). Sem ela, uma cópia de segurança da base de dados restaura tudo menos estas credenciais: os conectores pedem-nas de novo e quem tinha dois passos precisa de **Repor os dois passos**. Nada é apagado: a página diz quantos valores já não abrem.
 
 A interface ocupa a largura toda do ecrã e adapta-se a qualquer tamanho. A navegação fica na coluna à esquerda, agrupada por tarefa: **Painel** (com os separadores Resumo, Por semana e mês e 47 dias), **Inventário** (certificados, APIs e segredos, servidores, donos), **Vigilância** (testes, sites públicos, na internet), **Renovar** (próximos 90 dias, pedidos SMAX com as regras, relatório por email), **CMDB** (atualizar a CMDB, histórico da CMDB) e **Sistema** (automatizações, execuções e auditoria, fontes e ligações, utilizadores, como funciona). Algumas entradas mostram um número (sites com problemas, certificados da internet por triar, respostas por rever, diferenças da reconciliação, pedidos de acesso). No telemóvel fica no menu do canto. Os alertas estão no sino da barra de cima, ao pé do utilizador, com o número de alertas abertos por cima (vermelho se houver altos ou críticos). A caixa no topo procura em tudo. Cada tabela ajusta-se ao espaço que tem: escondem-se primeiro as colunas secundárias e, se ainda não couber, cada linha passa a cartão.
 

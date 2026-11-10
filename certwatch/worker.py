@@ -62,6 +62,10 @@ def main() -> None:
 
     settings = get_settings()
     init_db()
+    from . import cifra
+    for problem in cifra.problems(settings):
+        raise RuntimeError(problem)
+    cifra.rekey_all(settings)
     _recover_interrupted()
     tz = ZoneInfo(settings.timezone)
     log.info("Worker iniciado; pipeline diário às %s (%s)", settings.pipeline_daily_at, settings.timezone)

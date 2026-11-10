@@ -10,6 +10,13 @@
   <span class="fo-pill"><b>{{ totals.escrita }}</b> de escrita</span>
   <span class="fo-pill p-plan"><b>{{ totals.planeadas }}</b> planeadas</span>
 </div>
+{% if cifra.valores or not cifra.propria %}
+<p class="note{{ '' if cifra.propria and not cifra.ilegiveis else ' warn' }}" role="status">
+  <b>Chave de cifra:</b>
+  {% if cifra.propria %}própria (<span class="mono">secrets/data_key</span>){% if cifra.antiga %}, com a chave anterior ainda presente (<span class="mono">secrets/data_key_old</span>: pode apagá-la depois de confirmar que tudo abre){% endif %}.
+  {% else %}a de origem, derivada da ligação à base de dados. Crie <span class="mono">secrets/data_key</span> (<span class="mono">openssl rand -base64 32</span>) e reinicie: as credenciais guardadas são cifradas de novo sozinhas e deixam de depender da palavra-passe da base de dados.{% endif %}
+  {{ cifra.valores }} {{ 'valor guardado' if cifra.valores == 1 else 'valores guardados' }}{% if cifra.por_migrar %}, {{ cifra.por_migrar }} por cifrar de novo (acontece no próximo arranque){% endif %}{% if cifra.ilegiveis %}, <b>{{ cifra.ilegiveis }} que já não {{ 'abre' if cifra.ilegiveis == 1 else 'abrem' }} com esta chave</b> (volte a escrever as credenciais do conector; quem tinha dois passos pede a um administrador para os repor){% endif %}.
+</p>{% endif %}
 <div class="fo-grid">
 {% for f in fontes %}{% set res = resultados.get(f.id) %}
 <section class="card fo-card{{ ' is-tested' if res }}" id="f-{{ f.id }}" aria-labelledby="h-{{ f.id }}">

@@ -81,6 +81,10 @@ async def lifespan(_app: FastAPI):
     if not get_settings().admin_password:
         raise RuntimeError("Defina o segredo admin_password antes de arrancar a interface web")
     init_db()
+    from .. import cifra
+    for p in cifra.problems(get_settings()):
+        raise RuntimeError(p)
+    cifra.rekey_all(get_settings())
     yield
 
 
@@ -374,8 +378,9 @@ def _sources_page(request: Request, user: str, resultados: dict | None = None):
     totals = {"em_uso": sum(1 for f in fontes for c in f["chamadas"] if c["estado"].startswith("em uso")),
               "planeadas": sum(1 for f in fontes for c in f["chamadas"] if c["estado"] == "planeado"),
               "escrita": sum(1 for f in fontes for c in f["chamadas"] if c["acesso"] == "escrita")}
+    from .. import cifra
     return render(request, "fontes.html", user, fontes=fontes, totals=totals, resultados=resultados or {},
-                  testaveis=set(ft.TESTS), config=ft.CONFIG)
+                  testaveis=set(ft.TESTS), config=ft.CONFIG, cifra=cifra.status(get_settings()))
 
 
 @app.get("/fontes")

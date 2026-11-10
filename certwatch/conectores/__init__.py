@@ -180,30 +180,14 @@ def host_in_text(text: str) -> str:
 
 
 # ---------------------------------------------------------------- cifra das credenciais
-def _fernet(settings: Settings):
-    from cryptography.fernet import Fernet
-
-    # A chave deriva de um segredo que já existe e raramente muda (a ligação à base de dados): não há mais um
-    # ficheiro para gerir. Se mudar, as credenciais guardadas deixam de abrir e a página Ligações pede-as outra vez.
-    seed = ("atalaia-conectores:" + settings.database_url).encode()
-    return Fernet(base64.urlsafe_b64encode(hashlib.sha256(seed).digest()))
-
-
 def encrypt(settings: Settings, data: dict) -> str:
-    if not data:
-        return ""
-    return _fernet(settings).encrypt(json.dumps(data).encode()).decode()
+    from ..cifra import encrypt as _enc
+    return _enc(settings, data)
 
 
 def decrypt(settings: Settings, token: str) -> dict:
-    if not token:
-        return {}
-    from cryptography.fernet import InvalidToken
-
-    try:
-        return json.loads(_fernet(settings).decrypt(token.encode()))
-    except (InvalidToken, ValueError):
-        return {}
+    from ..cifra import decrypt as _dec
+    return _dec(settings, token)
 
 
 # ---------------------------------------------------------------- registo e conector ativo

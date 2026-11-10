@@ -260,6 +260,10 @@ class Settings:
     # Proxies de confiança (IPs ou redes): só deles se aceita o X-Forwarded-For para saber de onde vem cada pedido.
     # Vazio (o túnel SSH): o cabeçalho é ignorado, porque quem liga diretamente podia escrever lá o que quisesse.
     trusted_proxies: tuple[str, ...] = ()
+    # Chave própria para cifrar o que fica na base de dados (credenciais dos conectores, chaves dos dois passos).
+    # data_key_old só existe durante a troca de chave.
+    data_key: str | None = None
+    data_key_old: str | None = None
     mfa_required: bool = False                     # true: toda a gente tem de ativar a verificação em dois passos
     invite_hours: int = 72                         # validade do link de convite ou de nova palavra-passe
     password_min: int = 12
@@ -439,6 +443,8 @@ class Settings:
             status_token=_secret("status_token", "CERTWATCH_STATUS_TOKEN"),
             cookie_secure=_env("CERTWATCH_COOKIE_SECURE", "false").lower() == "true",
             public_url=_env("CERTWATCH_PUBLIC_URL", "").rstrip("/"),
+            data_key=_secret("data_key", "CERTWATCH_DATA_KEY"),
+            data_key_old=_secret("data_key_old", "CERTWATCH_DATA_KEY_OLD"),
             mfa_required=_env("CERTWATCH_MFA_REQUIRED", "false").lower() == "true",
             trusted_proxies=_networks(_env("CERTWATCH_TRUSTED_PROXIES", "")),
             allowed_hosts=_allowed_hosts(_env("CERTWATCH_ALLOWED_HOSTS", ""), _env("CERTWATCH_PUBLIC_URL", "")),
