@@ -22,7 +22,7 @@ def _name(cn: str) -> x509.Name:
 
 
 def make_cert(cn, issuer_cert=None, issuer_key=None, *, ca=False, sans=None, ip_sans=None, days_valid=200,
-              not_before=None, key=None, hash_alg=None, key_size=2048):
+              not_before=None, key=None, hash_alg=None, key_size=2048, ocsp_url=None, crl_url=None, eku=None):
     key = key or rsa.generate_private_key(public_exponent=65537, key_size=key_size)
     nb = not_before or (NOW - timedelta(days=1))
     builder = (
@@ -42,7 +42,15 @@ def make_cert(cn, issuer_cert=None, issuer_key=None, *, ca=False, sans=None, ip_
                           encipher_only=False, decipher_only=False), critical=True)
     else:
         builder = builder.add_extension(
-            x509.ExtendedKeyUsage([x509.oid.ExtendedKeyUsageOID.SERVER_AUTH]), critical=False)
+            x509.ExtendedKeyUsage([eku or x509.oid.ExtendedKeyUsageOID.SERVER_AUTH]), critical=False)
+    if ocsp_url:
+        builder = builder.add_extension(x509.AuthorityInformationAccess([x509.AccessDescription(
+            x509.oid.AuthorityInformationAccessOID.OCSP, x509.UniformResourceIdentifier(ocsp_url))]), critical=False)
+    if crl_url:
+        urls = [crl_url] if isinstance(crl_url, str) else list(crl_url)
+        builder = builder.add_extension(x509.CRLDistributionPoints([x509.DistributionPoint(
+            full_name=[x509.UniformResourceIdentifier(u) for u in urls], relative_name=None, reasons=None, crl_issuer=None)]),
+            critical=False)
     if sans or ip_sans:
         import ipaddress
         names = [x509.DNSName(s) for s in (sans or [])] + [x509.IPAddress(ipaddress.ip_address(i)) for i in (ip_sans or [])]
@@ -62,6 +70,44 @@ def pem(cert) -> bytes:
 def key_pem(key) -> bytes:
     return key.private_bytes(serialization.Encoding.PEM, serialization.PrivateFormat.PKCS8,
                              serialization.NoEncryption())
+
+
+def ocsp_response(cert, issuer, signer_key, *, status="good", signer_cert=None, this_update=None, next_update=None,
+                  revoked_at=None, reason=None, about=None):
+    """Resposta OCSP em DER. status: good | revoked | unknown. signer_cert: respondedor delegado (vai dentro da
+    resposta); sem ele, assina o próprio emissor. about: responder sobre OUTRO certificado (para testar a recusa)."""
+    from cryptography.x509 import ocsp
+    st = {"good": ocsp.OCSPCertStatus.GOOD, "revoked": ocsp.OCSPCertStatus.REVOKED, "unknown": ocsp.OCSPCertStatus.UNKNOWN}[status]
+    now = datetime.now(timezone.utc)
+    b = ocsp.OCSPResponseBuilder().add_response(
+        cert=about or cert, issuer=issuer, algorithm=hashes.SHA1(), cert_status=st,
+        this_update=this_update or now - timedelta(hours=1), next_update=next_update or now + timedelta(days=3),
+        revocation_time=(revoked_at or now - timedelta(days=2)) if status == "revoked" else None,
+        revocation_reason=reason if status == "revoked" else None,
+    ).responder_id(ocsp.OCSPResponderEncoding.HASH, signer_cert or issuer)
+    if signer_cert is not None:
+        b = b.certificates([signer_cert])
+    return b.sign(signer_key, hashes.SHA256()).public_bytes(serialization.Encoding.DER)
+
+
+def ocsp_error(status="unauthorized"):
+    from cryptography.x509 import ocsp
+    st = {"unauthorized": ocsp.OCSPResponseStatus.UNAUTHORIZED, "try_later": ocsp.OCSPResponseStatus.TRY_LATER}[status]
+    return ocsp.OCSPResponseBuilder.build_unsuccessful(st).public_bytes(serialization.Encoding.DER)
+
+
+def make_crl(issuer_cert, issuer_key, revoked=(), *, this_update=None, next_update=None, as_pem=False):
+    """CRL assinada pelo emissor. revoked: certificados (ou números de série) revogados."""
+    now = datetime.now(timezone.utc)
+    b = (x509.CertificateRevocationListBuilder().issuer_name(issuer_cert.subject)
+         .last_update(this_update or now - timedelta(hours=2)).next_update(next_update or now + timedelta(days=5)))
+    for r in revoked:
+        serial = r if isinstance(r, int) else r.serial_number
+        b = b.add_revoked_certificate(x509.RevokedCertificateBuilder().serial_number(serial)
+                                      .revocation_date(now - timedelta(days=3))
+                                      .add_extension(x509.CRLReason(x509.ReasonFlags.key_compromise), critical=False).build())
+    crl = b.sign(issuer_key, hashes.SHA256())
+    return crl.public_bytes(serialization.Encoding.PEM if as_pem else serialization.Encoding.DER)
 
 
 class PKI:

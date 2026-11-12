@@ -3,32 +3,95 @@
 {% block title %}Testes{% endblock %}
 {% block crumb %}Vigilância{% endblock %}
 {% block page_title %}Testes{% endblock %}
-{% block lede %}Todos os servidores passam pelos mesmos {{ CHECKS|length }} testes, organizados em camadas da rede até ao inventário. Uma falha numa camada impede os testes das seguintes, que ficam como "não testado". Clique num teste para ver os servidores com problemas e como se corrige.{% endblock %}
+{% block lede %}Cada servidor passa pelas mesmas {{ CHECKS|length }} verificações automáticas, da rede até ao registo na CMDB. Esta página diz o que está bem, o que precisa de atenção e o que fazer. Ninguém precisa de saber como os testes funcionam para a usar.{% endblock %}
 {% block actions %}<a class="button" href="/testes/como-funciona">Como funciona cada teste</a>{% endblock %}
 {% block content %}
-<section class="card">
-  <h2>Resumo por teste <small>{{ matrix|length }} servidores</small></h2>
-  {% for lid, ltitle, lq in LAYERS %}
-    <div class="layer-title">{{ ltitle }} · <span class="muted">{{ lq }}</span></div>
-    {% for c in CHECKS if c.layer == lid %}{% set t = totals[c.id] %}
-    {% set tested = t.get('falha',0) + t.get('aviso',0) + t.get('ok',0) %}
-    <div class="check-row">
-      <a href="/testes?teste={{ c.id }}" title="{{ c.question }}">{{ c.title }}</a>
-      {{ stackbar([('falha', t.get('falha',0), 'Falhou'), ('aviso', t.get('aviso',0), 'Atenção'), ('ok', t.get('ok',0), 'Passou'),
-                   ('na', t.get('na',0) + t.get('nt',0), 'Não testado / não se aplica')], tested + t.get('na',0) + t.get('nt',0)) }}
-      <span class="counts">{% if t.get('falha',0) %}<b>{{ t.get('falha',0) }} falharam</b>{% endif %}{% if t.get('aviso',0) %}{{ ' · ' if t.get('falha',0) }}<em>{{ t.get('aviso',0) }} atenção</em>{% endif %}{% if not t.get('falha',0) and not t.get('aviso',0) %}{{ t.get('ok',0) }} passaram{% endif %}</span>
-    </div>
-    {% endfor %}
-  {% endfor %}
-  <div class="legend">
-    <span><i class="lg lg-falha"></i>Falhou</span><span><i class="lg lg-aviso"></i>Atenção</span>
-    <span><i class="lg lg-ok"></i>Passou</span><span><i class="lg lg-na"></i>Não testado / não se aplica</span>
+
+{% macro result_word(st) -%}
+<span class="tx-res tx-{{ st }}"><span aria-hidden="true">{{ {'ok': '✓', 'falha': '✕', 'aviso': '!'}.get(st, '·') }}</span> {{ STATUS_LABELS[st] }}</span>
+{%- endmacro %}
+
+{% if teste %}
+{# ---------- um teste escolhido: o que é, porque importa, quem falha e como se corrige ---------- #}
+{% set c = CHECK_BY_ID[teste] %}{% set t = totals[c.id] %}
+<p class="small"><a href="/testes">← Voltar a todos os testes</a></p>
+<section class="card tx-one" aria-labelledby="h-teste">
+  <h2 id="h-teste">{{ c.title }}</h2>
+  <p class="tx-q">{{ c.question }}</p>
+  <dl class="tx-facts">
+    <div><dt>Porque importa</dt><dd>{{ c.why }}</dd></div>
+    <div><dt>Como é verificado</dt><dd>{{ c.how }}</dd></div>
+    <div><dt>Resultado agora</dt><dd>{% if t.get('falha',0) %}{{ result_word('falha') }} em {{ t.get('falha',0) }} · {% endif %}{% if t.get('aviso',0) %}{{ result_word('aviso') }} em {{ t.get('aviso',0) }} · {% endif %}{{ result_word('ok') }} em {{ t.get('ok',0) }}{% if t.get('na',0) + t.get('nt',0) %} · {{ t.get('na',0) + t.get('nt',0) }} sem resultado (não se aplica ou ainda não testado){% endif %}</dd></div>
+  </dl>
+  {% if t.get('falha',0) or t.get('aviso',0) %}{{ fixbox(c.id, 'falha' if t.get('falha',0) else 'aviso') }}{% endif %}
+</section>
+{% else %}
+
+{# ---------- 1. resumo em palavras ---------- #}
+<section class="card" aria-labelledby="h-resumo">
+  <h2 id="h-resumo">Como estão os servidores{% if visto %} <small>última verificação {{ visto|ago }}</small>{% endif %}</h2>
+  {% if not resumo.total %}
+  <p class="muted">Ainda não há servidores verificados. <a href="/jobs">Executar agora</a>.</p>
+  {% else %}
+  <div class="tx-sum">
+    <a class="tx-tile tx-t-ok" href="/testes?estado=ok#servidores"><b>{{ resumo.ok }}</b><span>{{ result_word('ok') }}</span><small>Todos os testes passaram.</small></a>
+    <a class="tx-tile tx-t-aviso" href="/testes?estado=aviso#servidores"><b>{{ resumo.aviso }}</b><span>{{ result_word('aviso') }}</span><small>Funcionam, mas há algo a melhorar ou a confirmar.</small></a>
+    <a class="tx-tile tx-t-falha" href="/testes?estado=falha#servidores"><b>{{ resumo.falha }}</b><span>{{ result_word('falha') }}</span><small>Há um problema que afeta a segurança ou o acesso.</small></a>
+    <a class="tx-tile tx-t-nt" href="/testes?estado=nt#servidores"><b>{{ resumo.nt }}</b><span>{{ result_word('nt') }}</span><small>Ainda sem resultado.</small></a>
   </div>
+  <p class="small muted">O resultado de um servidor é o do seu pior teste. {{ resumo.total }} {{ 'servidor' if resumo.total == 1 else 'servidores' }} no total.</p>
+  {% endif %}
 </section>
 
+{# ---------- 2. o que fazer primeiro ---------- #}
+{% if resumo.total %}
+<section class="card" aria-labelledby="h-acao">
+  <h2 id="h-acao">O que precisa de ação <small>os mais graves primeiro</small></h2>
+  {% if acao %}
+  <ul class="tx-todo">
+    {% for a in acao %}{% set c = a.check %}
+    <li class="{{ 'is-falha' if a.falha else 'is-aviso' }}">
+      <div class="tx-todo-head">
+        <a class="tx-todo-title" href="/testes?teste={{ c.id }}">{{ c.title }}</a>
+        <span class="tx-todo-n">{% if a.falha %}{{ result_word('falha') }} em {{ a.falha }}{% endif %}{% if a.falha and a.aviso %} · {% endif %}{% if a.aviso %}{{ result_word('aviso') }} em {{ a.aviso }}{% endif %}</span>
+      </div>
+      <p class="tx-why">{{ c.why }}</p>
+      <a class="small" href="/testes?teste={{ c.id }}">Ver {{ 'o servidor' if a.falha + a.aviso == 1 else 'os ' ~ (a.falha + a.aviso) ~ ' servidores' }} e como corrigir</a>
+    </li>
+    {% endfor %}
+  </ul>
+  {% else %}<p class="note ok" role="status">Nada a corrigir: todos os testes passaram em todos os servidores verificados.</p>{% endif %}
+</section>
+
+{# ---------- 3. todos os testes, pela ordem em que correm ---------- #}
+<section class="card" aria-labelledby="h-etapas">
+  <h2 id="h-etapas">Os {{ CHECKS|length }} testes, pela ordem em que correm</h2>
+  <p class="small muted">Os testes seguem em etapas. Se uma etapa falha (por exemplo, o servidor não responde), as seguintes não podem correr e ficam como "não testado".</p>
+  <ol class="tx-steps">
+  {% for lid, ltitle, lq in LAYERS %}
+    <li>
+      <h3>{{ ltitle }} <small>{{ lq }}</small></h3>
+      {% for c in CHECKS if c.layer == lid %}{% set t = totals[c.id] %}
+      <div class="check-row">
+        <div><a href="/testes?teste={{ c.id }}">{{ c.title }}</a><div class="small muted tx-row-why">{{ c.why }}</div></div>
+        {{ stackbar([('falha', t.get('falha',0), 'Falhou'), ('aviso', t.get('aviso',0), 'Atenção'), ('ok', t.get('ok',0), 'Passou'),
+                     ('na', t.get('na',0) + t.get('nt',0), 'Sem resultado')], t.get('falha',0) + t.get('aviso',0) + t.get('ok',0) + t.get('na',0) + t.get('nt',0)) }}
+        <span class="counts">{% if t.get('falha',0) %}<b>{{ t.get('falha',0) }} falharam</b>{% endif %}{% if t.get('aviso',0) %}{{ ' · ' if t.get('falha',0) }}<em>{{ t.get('aviso',0) }} atenção</em>{% endif %}{% if not t.get('falha',0) and not t.get('aviso',0) %}{% if t.get('ok',0) %}{{ t.get('ok',0) }} passaram{% else %}sem resultado{% endif %}{% endif %}</span>
+      </div>
+      {% endfor %}
+    </li>
+  {% endfor %}
+  </ol>
+  <div class="legend">
+    <span><i class="lg lg-falha"></i>Falhou</span><span><i class="lg lg-aviso"></i>Atenção</span>
+    <span><i class="lg lg-ok"></i>Passou</span><span><i class="lg lg-na"></i>Sem resultado (não se aplica ou ainda não testado)</span>
+  </div>
+</section>
+{% endif %}
+
 {% if ext or ssllabs_on %}
-<section class="card">
-  <h2>Avaliação externa (SSL Labs) <small>{{ ext|length }} nomes externos</small></h2>
+<section class="card" aria-labelledby="h-ssllabs">
+  <h2 id="h-ssllabs">Avaliação externa (SSL Labs) <small>{{ ext|length }} nomes externos</small></h2>
   <p class="small muted">Nota de A+ a F dada pelo Qualys SSL Labs a partir da internet: protocolos, cifras, cadeia e vulnerabilidades conhecidas. Complementa os testes acima, que correm a partir da rede interna. T = certificado não confiável, M = nome não corresponde.</p>
   {% if ext %}
   <div class="grades">
@@ -41,23 +104,17 @@
   {% else %}<p class="muted">Ainda sem resultados: a primeira avaliação corre na próxima execução completa.</p>{% endif %}
 </section>
 {% endif %}
-
-{% if teste %}
-<section class="card">
-  {% set c = CHECK_BY_ID[teste] %}
-  <h2>{{ c.title }} <small>{{ n_rows }} servidor(es) {{ 'com problemas' if not estado else 'com estado ' + STATUS_LABELS.get(estado, estado) }}</small></h2>
-  <p>{{ c.question }} <span class="muted">{{ c.how }}</span></p>
-  {{ fixbox(c.id, 'falha') }}
-  <p class="small"><a href="/testes">← voltar à matriz completa</a></p>
-</section>
 {% endif %}
 
-<form class="filters" method="get">
+{# ---------- servidores ---------- #}
+<h2 class="tx-h" id="servidores">{% if teste %}Servidores neste teste{% else %}Servidor a servidor{% endif %} <small>{{ n_rows }}{% if teste and not estado %} com falha ou atenção{% endif %}</small></h2>
+<form class="filters" method="get" action="/testes#servidores">
   {% if teste %}<input type="hidden" name="teste" value="{{ teste }}">{% endif %}
-  <input type="search" id="t-q" name="q" value="{{ q }}" placeholder="servidor ou nome" aria-label="Pesquisar">
+  {% if tecnica %}<input type="hidden" name="vista" value="tecnica">{% endif %}
+  <input type="search" id="t-q" name="q" value="{{ q }}" placeholder="servidor ou nome" aria-label="Pesquisar servidor">
   <select id="t-estado" name="estado" aria-label="Resultado">
     <option value="">{{ 'Falhas e avisos' if teste else 'Qualquer resultado' }}</option>
-    {% for k in ('falha', 'aviso', 'ok', 'nt') %}<option value="{{ k }}" {{ 'selected' if estado == k }}>{{ 'Pior resultado: ' if not teste }}{{ STATUS_LABELS[k] }}</option>{% endfor %}
+    {% for k in ('falha', 'aviso', 'ok', 'nt') %}<option value="{{ k }}" {{ 'selected' if estado == k }}>{{ STATUS_LABELS[k] }}</option>{% endfor %}
   </select>
   <select id="t-tipo" name="tipo" aria-label="Tipo">
     <option value="">Qualquer tipo</option>
@@ -68,11 +125,46 @@
     {% for k, l in SCOPE_LABELS.items() %}<option value="{{ k }}" {{ 'selected' if ambito == k }}>{{ l }}</option>{% endfor %}
   </select>
   <button>Filtrar</button>
-  {% if q or estado or tipo or ambito or teste %}<a href="/testes">limpar</a>{% endif %}
+  {% if q or estado or tipo or ambito %}<a href="/testes{{ '?teste=' ~ teste if teste }}#servidores">limpar</a>{% endif %}
 </form>
 
+{% if not tecnica %}
+<div class="card scroll">
+  <table class="tx-table">
+    <caption class="sr">{% if teste %}Servidores e o que se viu neste teste{% else %}Servidores, resultado e testes que pedem ação{% endif %}</caption>
+    <thead><tr><th scope="col">Servidor</th><th scope="col" class="opt">Tipo</th><th scope="col">Resultado</th>
+      <th scope="col">{% if teste %}O que se viu{% else %}O que precisa de ação{% endif %}</th></tr></thead>
+    <tbody>
+    {% for r in rows %}
+      <tr>
+        <td><a href="/certificados/detalhe?cn={{ r.ep.expected_cn_norm|urlencode }}" class="mono">{{ r.ep.host }}{% if r.ep.port != 443 %}:{{ r.ep.port }}{% endif %}</a>
+          {% if r.ep.expected_cn_norm != r.ep.host %}<div class="small muted">espera {{ r.ep.expected_cn_norm }}</div>{% endif %}</td>
+        <td class="opt">{{ type_chip(r.type) }} {{ scope_chip(r.scope) }}</td>
+        {% if teste %}{% set res = r.results.get(teste) %}
+        <td>{{ result_word(res.status if res else 'nt') }}</td>
+        <td class="tx-detail">{{ res.detail if res and res.detail else '—' }}</td>
+        {% else %}
+        <td>{{ result_word(r.worst) }}</td>
+        <td>{% set ns = namespace(n=0) %}
+          <ul class="tx-issues">{% for c in CHECKS %}{% set res = r.results.get(c.id) %}{% if res and res.status in ('falha', 'aviso') %}{% set ns.n = ns.n + 1 %}
+            <li class="tx-{{ res.status }}"><span aria-hidden="true">{{ '✕' if res.status == 'falha' else '!' }}</span> <span class="sr">{{ STATUS_LABELS[res.status] }}:</span> <a href="/testes?teste={{ c.id }}">{{ c.title }}</a>{% if res.detail %}<span class="muted"> · {{ res.detail|truncate(110, True, '…') }}</span>{% endif %}</li>{% endif %}{% endfor %}
+          </ul>
+          {% if not ns.n %}<span class="muted">{{ 'nada' if r.worst == 'ok' else 'ainda sem resultado' }}</span>{% endif %}</td>
+        {% endif %}
+      </tr>
+    {% else %}
+      <tr><td colspan="4" class="muted">Nenhum servidor corresponde aos filtros{% if not matrix %}. Ainda não houve verificações: <a href="/jobs">executar agora</a>{% endif %}.</td></tr>
+    {% endfor %}
+    </tbody>
+  </table>
+  {% if n_rows > rows|length %}<p class="muted small">A mostrar {{ rows|length }} de {{ n_rows }}. Use os filtros para reduzir.</p>{% endif %}
+</div>
+<p class="muted small">Abra um servidor para ver cada teste com a explicação e os passos de correção.
+  <a href="/testes?vista=tecnica{{ '&teste=' ~ teste if teste }}{{ '&estado=' ~ estado if estado }}{{ '&q=' ~ q|urlencode if q }}#servidores">Vista técnica: a grelha com os {{ CHECKS|length }} testes por servidor</a></p>
+{% else %}
 <div class="card scroll">
   <table class="matrix">
+    <caption class="sr">Grelha técnica: um quadrado por teste e por servidor</caption>
     <thead>
       <tr class="layer-head"><th colspan="3"></th>
         {% for lid, ltitle, lq in LAYERS %}<th colspan="{{ CHECKS|selectattr('layer','equalto',lid)|list|length }}">{{ ltitle }}</th>{% endfor %}
@@ -92,11 +184,13 @@
         {% for c in CHECKS %}<td class="c">{{ cell(r.results.get(c.id), c.id) }}</td>{% endfor %}
       </tr>
     {% else %}
-      <tr><td colspan="{{ 3 + CHECKS|length }}" class="muted">Nenhum servidor corresponde aos filtros{% if not matrix %}. Ainda não houve verificações: <a href="/jobs">executar agora</a>{% endif %}.</td></tr>
+      <tr><td colspan="{{ 3 + CHECKS|length }}" class="muted">Nenhum servidor corresponde aos filtros.</td></tr>
     {% endfor %}
     </tbody>
   </table>
   {% if n_rows > rows|length %}<p class="muted small">A mostrar {{ rows|length }} de {{ n_rows }}. Use os filtros para reduzir.</p>{% endif %}
 </div>
-<p class="muted small">Passe o rato sobre um quadrado para ver o detalhe. Abra o servidor para ver cada teste com a explicação e os passos de correção.</p>
+<p class="muted small">✓ passou · ! atenção · ✕ falhou · · sem resultado. Passe o rato sobre um quadrado para ver o detalhe.
+  <a href="/testes{{ '?teste=' ~ teste if teste }}#servidores">Voltar à vista simples</a></p>
+{% endif %}
 {% endblock %}

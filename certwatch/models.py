@@ -744,6 +744,18 @@ class LoginFailure(Base):
     at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, index=True)
 
 
+class PostureResult(Base):
+    """Último resultado de uma verificação de rede à volta do certificado (postura.py).
+    kind: revogacao (key = sha256 do certificado) | caa (key = nome) | hsts (key = id do servidor)."""
+    __tablename__ = "posture_results"
+
+    kind: Mapped[str] = mapped_column(String(16), primary_key=True)
+    key: Mapped[str] = mapped_column(String(255), primary_key=True)
+    checked_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, index=True)
+    status: Mapped[str] = mapped_column(String(24), default="")
+    data: Mapped[dict] = mapped_column(JSON, default=dict)
+
+
 class UserPref(Base):
     """Preferências de cada pessoa (por exemplo, a disposição dos cartões do Painel)."""
     __tablename__ = "user_prefs"

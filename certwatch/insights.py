@@ -166,14 +166,16 @@ class EndpointChecks:
 
 def check_matrix(session: Session, settings: Settings, now: datetime, snap: Snapshot | None = None) -> list[EndpointChecks]:
     snap = snap or load_snapshot(session)
+    from . import postura
     api_hosts = {a.host for a in snap.apis if a.host}
+    posture = postura.load(session, settings, snap, now)
     out = []
     for ep in snap.endpoints:
         if not ep.enabled:
             continue
         sr = snap.scan_for(ep)
         leaf = snap.leaf_for(sr)
-        ev = evaluate_endpoint(ep, sr, leaf, snap.latest_for(ep, leaf), settings, now)
+        ev = evaluate_endpoint(ep, sr, leaf, snap.latest_for(ep, leaf), settings, now, posture.for_ep(ep, sr, leaf))
         recs = snap.by_cn.get(ep.expected_cn_norm, [])
         kind = recs[0].kind if recs else classify(ep.expected_cn_norm)
         issuer_norm = norm_issuer(leaf.issuer_cn) if leaf else ""

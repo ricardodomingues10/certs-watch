@@ -44,6 +44,13 @@ FINDING_TYPES = {
     "API_REGISTO_EXPIRADO": "Segredo de API expirado há mais de 30 dias ainda na lista",
     "SSLLABS_NOTA": "Nota baixa na avaliação externa do SSL Labs",
     "API_SEM_TLS": "API publicada sem TLS (http://)",
+    "REVOGADO": "Certificado revogado pela CA ainda em uso",
+    "REVOGACAO_NAO_VERIFICADA": "Não foi possível confirmar se o certificado foi revogado",
+    "CAA_VIOLADA": "Certificado emitido por uma CA que o domínio não autoriza (CAA)",
+    "CAA_AUSENTE": "Domínio sem registo CAA: qualquer CA pode emitir",
+    "HSTS_EM_FALTA": "Site sem HSTS, ou com HSTS fraco",
+    "CHAVE_PARTILHADA": "A mesma chave privada em certificados de serviços diferentes",
+    "CHAVE_REUTILIZADA": "Certificado renovado com a mesma chave privada",
 }
 
 # Teste da aba "Testes" a que cada tipo de finding corresponde (para mostrar como corrigir)
@@ -54,6 +61,9 @@ FINDING_CHECK = {
     "VALIDACAO_INCOMPLETA": "cadeia.confianca", "HOSTNAME_MISMATCH": "identidade.nome",
     "SELF_SIGNED": "cadeia.autoassinado", "CRIPTO_FRACA": "cripto.assinatura", "TLS_LEGADO": "tls.protocolo",
     "INALCANCAVEL": "rede.porta",
+    "REVOGADO": "cadeia.revogacao", "REVOGACAO_NAO_VERIFICADA": "cadeia.revogacao", "CAA_VIOLADA": "protecao.caa",
+    "CAA_AUSENTE": "protecao.caa", "HSTS_EM_FALTA": "protecao.hsts", "CHAVE_PARTILHADA": "cripto.chave_unica",
+    "CHAVE_REUTILIZADA": "cripto.chave_unica",
 }
 
 
@@ -158,8 +168,10 @@ class _Collector:
 
 
 def collect_findings(session: Session, settings: Settings, now: datetime) -> dict[str, dict]:
+    from . import postura
     c = _Collector()
     snap = load_snapshot(session)
+    posture = postura.load(session, settings, snap, now)
 
     served = snap.sites_by_cert_cn()
     live_dates = {(cn, as_utc(s["not_after"]).date()) for cn, sites in served.items() for s in sites if s["not_after"]}
@@ -179,9 +191,14 @@ def collect_findings(session: Session, settings: Settings, now: datetime) -> dic
             if sr is None:
                 continue
             leaf = snap.leaf_for(sr)
-            ev = evaluate_endpoint(ep, sr, leaf, latest or snap.latest_for(ep, leaf), settings, now)
+            ev = evaluate_endpoint(ep, sr, leaf, latest or snap.latest_for(ep, leaf), settings, now,
+                                   posture.for_ep(ep, sr, leaf))
             for ftype, sev, details in ev.findings:
                 c.add(ftype, sev, f"{ep.host}:{ep.port}", f"ep:{ep.id}", cn, ep.id, **details)
+            for ftype, sev, subject, key, details in ev.zone_findings:      # um alerta por domínio, não por servidor
+                fid = finding_id(ftype, key)
+                names = sorted(set(c.items.get(fid, {}).get("details", {}).get("nomes", [])) | {ep.host})
+                c.add(ftype, sev, subject, key, "", None, **details, nomes=names[:30], n_nomes=len(names))
             if ev.matched_issuer is not None:
                 matched.add(ev.matched_issuer)
 

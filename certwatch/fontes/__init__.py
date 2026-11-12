@@ -17,7 +17,7 @@ from __future__ import annotations
 
 from importlib import import_module
 
-ORDER = ("ucmdb", "smax", "avi", "ca", "azure", "ct", "servidores", "dns", "rdap", "ssllabs", "email", "teams", "acme")
+ORDER = ("ucmdb", "smax", "avi", "ca", "azure", "ct", "servidores", "revogacao", "hsts", "dns", "rdap", "ssllabs", "email", "teams", "acme")
 
 
 def all_sources(settings) -> list[dict]:

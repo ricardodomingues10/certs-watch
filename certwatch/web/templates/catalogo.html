@@ -24,6 +24,7 @@
     <div>
       <div class="t-title">{{ c.title }}</div>
       <div>{{ c.question }}</div>
+      <div class="t-detail"><b>Porque importa:</b> {{ c.why }}</div>
       <div class="t-detail"><b>Como é testado:</b> {{ c.how }}</div>
       <div class="t-detail"><b>Se falhar:</b> {{ c.meaning }}</div>
       <details><summary>Como corrigir</summary><ol>{% for s in c.fix %}<li>{{ s }}</li>{% endfor %}</ol></details>

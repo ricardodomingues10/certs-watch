@@ -22,7 +22,7 @@ from .trust import build_bundle
 log = logging.getLogger(__name__)
 
 JOBS = ("pipeline", "ingest_cmdb", "ingest_apis", "ingest_smax", "ingest_ct", "scan", "ssllabs", "evaluate", "sites",
-        "dominios")
+        "dominios", "postura")
 SCAN_RETENTION_DAYS = 90
 
 
@@ -395,6 +395,11 @@ def _run(job: str, settings: Settings) -> dict:
         from .domains import run as run_domains
         with session_scope() as s:
             return {"dominios": run_domains(s, settings)}
+    if job == "postura":
+        from .postura import run as run_posture
+        with session_scope() as s:
+            out = {"postura": run_posture(s, settings)}
+        return _reevaluate(out, settings)
     if job == "pipeline":
         summary: dict = {}
         try:
@@ -437,6 +442,14 @@ def _run(job: str, settings: Settings) -> dict:
             except Exception as exc:
                 log.exception("SSL Labs falhou")
                 summary["ssllabs"] = {"erro": str(exc)}
+        if settings.revocation or settings.caa or settings.hsts:
+            from .postura import run as run_posture
+            try:
+                with session_scope() as s:
+                    summary["postura"] = run_posture(s, settings)
+            except Exception as exc:                     # a rede das CAs em baixo não pára o resto
+                log.exception("Revogação, CAA e HSTS falhou")
+                summary["postura"] = {"erro": str(exc)}
         with session_scope() as s:
             summary["evaluate"] = evaluate(s, settings)
         from .sites import run as run_sites

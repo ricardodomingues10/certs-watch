@@ -28,7 +28,7 @@ from cryptography.x509.oid import NameOID
 # ------------------------------------------------------------------ o que esta fonte faz e que chamadas faz
 FONTE = {
     "id": "servidores", "nome": "Servidores (ligação TLS direta)", "tipo": "TLS", "estado": "em uso",
-    "para": "Ligar a cada servidor e porta, ler o certificado e a cadeia que apresenta e correr os 13 testes.",
+    "para": "Ligar a cada servidor e porta, ler o certificado e a cadeia que apresenta, para os 17 testes.",
     "config": ["CERTWATCH_SCAN_ALLOWED_PORTS", "CERTWATCH_SCAN_TIMEOUT", "trust/ (raízes internas)"],
     "chamadas": [
         {"metodo": "DNS", "endereco": "resolução do nome (getaddrinfo)", "para": "o servidor existe? que endereço tem?", "acesso": "leitura", "estado": "em uso", "onde": "fontes/servidores.py · scan_endpoint"},

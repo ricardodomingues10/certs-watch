@@ -725,6 +725,13 @@ Menu **Sistema → Automatizações**. Cada automatização é **o quê** (uma a
 | `TLS_LEGADO` | média | Negociado TLS 1.0/1.1 ou SSLv3 |
 | `INALCANCAVEL` | baixa | Sem resposta TLS em ≥ `CERTWATCH_UNREACHABLE_AFTER` verificações seguidas |
 | `WILDCARD_SEM_ENDPOINT` | info | Wildcard sem hosts conhecidos para verificar |
+| `REVOGADO` | crítica | A CA revogou o certificado (OCSP ou CRL) e o servidor continua a servi-lo |
+| `REVOGACAO_NAO_VERIFICADA` | baixa | A CA não respondeu, ou a resposta não pôde ser aceite (assinatura, prazo) |
+| `CAA_VIOLADA` | média | O certificado servido é de uma CA que o registo CAA do domínio não autoriza |
+| `CAA_AUSENTE` | baixa (um por domínio) | O domínio de um nome externo não tem CAA, ou tem mas não limita quem emite |
+| `HSTS_EM_FALTA` | baixa (externo) · info (interno) | O site não envia Strict-Transport-Security, envia-o inválido, com `max-age=0` ou abaixo do mínimo |
+| `CHAVE_PARTILHADA` | média | A mesma chave privada em certificados de serviços diferentes, ambos em uso |
+| `CHAVE_REUTILIZADA` | baixa | O certificado foi renovado com a chave do anterior |
 
 **Ciclo de vida:** o ID de cada finding é estável (tipo + alvo), por isso não há duplicados. Um finding que deixa de se verificar passa a *resolvido* sozinho. Uma aceitação expirada volta a *aberto*.
 

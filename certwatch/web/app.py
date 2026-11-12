@@ -4,6 +4,7 @@ from __future__ import annotations
 import csv
 import json
 import logging
+from collections import Counter
 from html import escape as html_escape
 import io
 import re
@@ -63,7 +64,8 @@ JOB_LABELS = {"pipeline": "Executar tudo", "ingest_cmdb": "Importar certificados
               "ingest_smax": "Ler pedidos do SMAX",
               "ingest_ct": "Procurar na internet (CT)", "scan": "Verificar servidores",
               "ssllabs": "Avaliação externa (SSL Labs)", "evaluate": "Reavaliar regras",
-              "sites": "Verificar os sites públicos", "dominios": "Ler o registo dos domínios (RDAP)"}
+              "sites": "Verificar os sites públicos", "dominios": "Ler o registo dos domínios (RDAP)",
+              "postura": "Revogação, CAA e HSTS"}
 JOB_HELP = {"pipeline": "Faz todos os passos pela ordem: CMDB, APIs, SMAX, internet, servidores, SSL Labs, regras, sites públicos e domínios.",
             "ingest_cmdb": "Lê os certificados da UCMDB (nome, validade e emissor).",
             "ingest_apis": "Lê a lista de APIs da UCMDB.",
@@ -73,7 +75,9 @@ JOB_HELP = {"pipeline": "Faz todos os passos pela ordem: CMDB, APIs, SMAX, inter
             "ssllabs": "Pede ao Qualys SSL Labs a nota dos nomes externos (demora 1 a 2 minutos por nome).",
             "evaluate": "Volta a aplicar as regras e atualiza os alertas, sem novas ligações.",
             "sites": "Liga-se a cada IP de cada nome externo, visto de dentro e de fora, e compara com a CMDB e os pedidos.",
-            "dominios": "Lê no RDAP a validade do registo, o registrar, os nameservers e os estados de cada domínio."}
+            "dominios": "Lê no RDAP a validade do registo, o registrar, os nameservers e os estados de cada domínio.",
+            "postura": "Pergunta às CAs se os certificados servidos foram revogados (OCSP/CRL), lê os registos CAA dos "
+                       "nomes externos e o cabeçalho HSTS dos sites web. Só lê."}
 
 
 @asynccontextmanager
@@ -1361,11 +1365,13 @@ def certificado_detalhe(request: Request, cn: str, user: str = Depends(current_u
         if not recs and not eps and not inactive:
             raise HTTPException(404, "Certificado não encontrado")
         latest = snap.latest_by_issuer(cn)
+        from .. import postura
+        posture = postura.load(s, settings, snap, now)
         ep_data = []
         for ep in eps:
             sr = snap.scan_for(ep)
             leaf = snap.leaf_for(sr)
-            ev = evaluate_endpoint(ep, sr, leaf, latest or snap.latest_for(ep, leaf), settings, now)
+            ev = evaluate_endpoint(ep, sr, leaf, latest or snap.latest_for(ep, leaf), settings, now, posture.for_ep(ep, sr, leaf))
             history = list(s.scalars(select(ScanResult).where(ScanResult.endpoint_id == ep.id)
                                      .order_by(ScanResult.id.desc()).limit(10)))
             chain_up = ancestry(s, settings, leaf.sha256)[0] if leaf else []
@@ -1733,8 +1739,17 @@ def testes(request: Request, teste: str = "", estado: str = "", tipo: str = "", 
     with session_scope() as s:
         ext = sorted(s.scalars(select(SslLabsResult)), key=lambda r: (
             -(GRADE_ORDER.index(r.grade) if r.grade in GRADE_ORDER else -1), r.host))
+    # Resumo para quem não é da área: quantos servidores estão bem, e que testes pedem ação (os piores primeiro)
+    worst = Counter(r.worst for r in matrix)
+    resumo = {"total": len(matrix), "ok": worst.get("ok", 0), "aviso": worst.get("aviso", 0), "falha": worst.get("falha", 0),
+              "nt": worst.get("nt", 0) + worst.get("na", 0)}
+    acao = sorted(({"check": c, "falha": totals[c.id].get("falha", 0), "aviso": totals[c.id].get("aviso", 0)}
+                   for c in CHECKS if totals[c.id].get("falha", 0) or totals[c.id].get("aviso", 0)),
+                  key=lambda a: (-a["falha"], -a["aviso"], a["check"].title))
+    seen = [as_utc(r.scan.scanned_at) for r in matrix if r.scan is not None]
     return render(request, "testes.html", user, matrix=matrix, rows=rows[:500], n_rows=len(rows), totals=totals,
-                  teste=teste, estado=estado, tipo=tipo, ambito=ambito, q=q, ext=ext,
+                  teste=teste, estado=estado, tipo=tipo, ambito=ambito, q=q, ext=ext, resumo=resumo, acao=acao,
+                  visto=max(seen) if seen else None, tecnica=request.query_params.get("vista") == "tecnica",
                   ssllabs_on=bool(get_settings().ssllabs_email), GOOD_GRADES=GOOD_GRADES)
 
 

@@ -27,7 +27,7 @@ DAYS_PL = ["segundas", "terças", "quartas", "quintas", "sextas", "sábados", "d
 SCHEDULES = {"diario": "Todos os dias", "uteis": "Dias úteis (segunda a sexta)", "semanal": "Em certos dias da semana",
              "mensal": "Uma vez por mês", "horas": "De N em N horas", "manual": "Só quando eu carregar em «Executar agora»"}
 STEPS = {"ingest_cmdb": "Ler a CMDB", "ingest_apis": "Ler a lista de APIs", "ingest_smax": "Ler os pedidos do SMAX",
-         "ingest_ct": "Procurar na internet (CT)", "scan": "Testar os servidores", "ssllabs": "Avaliação externa (SSL Labs)",
+         "ingest_ct": "Procurar na internet (CT)", "scan": "Testar os servidores", "postura": "Revogação, CAA e HSTS", "ssllabs": "Avaliação externa (SSL Labs)",
          "sites": "Verificar os sites públicos", "dominios": "Ler o registo dos domínios (RDAP)", "evaluate": "Reavaliar os alertas"}
 REPORT_PARTS = {"alertas": "Alertas", "reconciliacao": "Reconciliação (com Excel)", "internet": "Certificados novos na internet (com Excel)",
                 "sites": "Sites públicos e domínios (com Excel)"}

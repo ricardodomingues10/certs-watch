@@ -260,6 +260,15 @@ class Settings:
     # Proxies de confiança (IPs ou redes): só deles se aceita o X-Forwarded-For para saber de onde vem cada pedido.
     # Vazio (o túnel SSH): o cabeçalho é ignorado, porque quem liga diretamente podia escrever lá o que quisesse.
     trusted_proxies: tuple[str, ...] = ()
+    # Proteções à volta do certificado (postura.py)
+    revocation: bool = True                        # perguntar às CAs se os certificados foram revogados (OCSP/CRL)
+    caa: bool = True                               # ler os registos CAA dos nomes externos
+    hsts: bool = True                              # ler o cabeçalho Strict-Transport-Security dos sites web
+    hsts_min_age: int = 15552000                   # max-age mínimo aceite: 180 dias
+    hsts_ports: tuple[int, ...] = (443, 4443, 8443, 9443)
+    crl_max_mb: int = 20
+    posture_max_age_days: int = 7                  # um resultado mais antigo deixa de contar
+    caa_issuers: tuple = ()                        # CAs extra: ((texto no emissor, (identificadores CAA,)), …)
     # Chave própria para cifrar o que fica na base de dados (credenciais dos conectores, chaves dos dois passos).
     # data_key_old só existe durante a troca de chave.
     data_key: str | None = None
@@ -443,6 +452,14 @@ class Settings:
             status_token=_secret("status_token", "CERTWATCH_STATUS_TOKEN"),
             cookie_secure=_env("CERTWATCH_COOKIE_SECURE", "false").lower() == "true",
             public_url=_env("CERTWATCH_PUBLIC_URL", "").rstrip("/"),
+            revocation=_env("CERTWATCH_REVOCATION", "true").lower() == "true",
+            caa=_env("CERTWATCH_CAA", "true").lower() == "true",
+            hsts=_env("CERTWATCH_HSTS", "true").lower() == "true",
+            hsts_min_age=int(_env("CERTWATCH_HSTS_MIN_AGE", "15552000")),
+            hsts_ports=tuple(int(p) for p in _env("CERTWATCH_HSTS_PORTS", "443,4443,8443,9443").split(",") if p.strip()),
+            crl_max_mb=int(_env("CERTWATCH_CRL_MAX_MB", "20")),
+            posture_max_age_days=int(_env("CERTWATCH_POSTURE_MAX_AGE_DAYS", "7")),
+            caa_issuers=_caa_issuers(_env("CERTWATCH_CAA_ISSUERS", "")),
             data_key=_secret("data_key", "CERTWATCH_DATA_KEY"),
             data_key_old=_secret("data_key_old", "CERTWATCH_DATA_KEY_OLD"),
             mfa_required=_env("CERTWATCH_MFA_REQUIRED", "false").lower() == "true",
@@ -486,6 +503,17 @@ class Settings:
             final_columns_file=_env("CERTWATCH_FINAL_COLUMNS_FILE", "cmdb-colunas").lower(),
             final_keep_runs=int(_env("CERTWATCH_FINAL_KEEP_RUNS", "20")),
         )
+
+
+def _caa_issuers(value: str) -> tuple:
+    """"texto no emissor=dominio1|dominio2; outro texto=dominio" → ((texto, (dominios,)), …)"""
+    out = []
+    for part in value.split(";"):
+        needle, _, ids = part.partition("=")
+        ids = tuple(i.strip().lower() for i in ids.split("|") if i.strip())
+        if needle.strip() and ids:
+            out.append((needle.strip().lower(), ids))
+    return tuple(out)
 
 
 def _networks(value: str) -> tuple[str, ...]:

@@ -7,6 +7,7 @@
   python -m certwatch.cli ct-test DOMINIO             (testa as fontes de Certificate Transparency)
   python -m certwatch.cli ssllabs-register --nome N --apelido A --email E --organizacao O
   python -m certwatch.cli ssllabs-test HOST           (avaliação SSL Labs de um nome, 1-2 minutos)
+  python -m certwatch.cli postura <host[:porta]>      (revogação, CAA e HSTS de um site real, sem gravar nada)
   python -m certwatch.cli smax-test                   (login no SMAX e primeiros pedidos, sem mostrar segredos)
 """
 from __future__ import annotations
@@ -41,6 +42,52 @@ def _trust_fetch(target: str) -> int:
     return 0
 
 
+def _posture_smoke(target: str) -> int:
+    """Teste de fumo contra um site real: liga-se, e mostra o que as verificações novas veem. Não grava nada.
+    Útil para confirmar, no servidor, que há saída para as CAs (OCSP/CRL) e para o DNS público."""
+    from cryptography import x509
+    from cryptography.hazmat.primitives import serialization
+    from .fontes import dns as fdns
+    from .fontes import hsts as fhsts
+    from .fontes import revogacao as frev
+    from .fontes.servidores import scan_endpoint, summarize
+    from .postura import caa_ids, matched_by_wildcard
+    from .trust import build_bundle
+    st = get_settings()
+    host, _, port = target.partition(":")
+    port = int(port or 443)
+    out = scan_endpoint(host, port, build_bundle(st), st.scan_timeout)
+    print(f"{host}:{port}  ligação: {out.status}  cadeia confiável: {out.verify_ok}  {out.tls_version}")
+    if not out.chain_der:
+        print("  sem certificado: nada mais a verificar.", out.error)
+        return 1
+    pem = [x509.load_der_x509_certificate(d).public_bytes(serialization.Encoding.PEM).decode() for d in out.chain_der]
+    leaf = summarize(out.chain_der[0])
+    print(f"  certificado: {leaf['subject_cn']}  emissor: {leaf['issuer_cn']}  até {leaf['not_after']:%d-%m-%Y}")
+    if not out.verify_ok:
+        print("  revogação: não se pergunta (a cadeia não é confiável, os endereços não merecem crédito)")
+    else:
+        with frev.new_client(st.scan_timeout + 4) as c:
+            r = frev.check(pem[0], pem[1] if len(pem) > 1 else "", c, max_crl_bytes=st.crl_max_mb * 1024 * 1024)
+        print(f"  revogação: {r.status.upper()}  via {r.metodo or '—'}  {r.detalhe}  {r.url}")
+        if r.status == "revogado":
+            print(f"             revogado em {r.revogado_em}  motivo: {r.motivo or '—'}")
+    caa = fdns.caa_lookup(host, list(st.public_dns_urls))
+    if caa.erro:
+        print(f"  CAA: não foi possível ler ({caa.erro})")
+    elif not caa.registos:
+        print("  CAA: o domínio não tem registos (qualquer CA pode emitir)")
+    else:
+        ids = caa_ids(leaf["issuer_dn"], st.caa_issuers)
+        wild = matched_by_wildcard(host, type("L", (), {"sans_dns": leaf["sans_dns"], "subject_cn": leaf["subject_cn"]})())
+        verdict, phrase = fdns.caa_evaluate(caa.registos, ids, wild)
+        print(f"  CAA em {caa.zona}: " + "; ".join(f"{t} {v}" for _, t, v in caa.registos))
+        print(f"       {verdict.upper()}: {phrase}  (identificadores desta CA: {', '.join(sorted(ids)) or 'desconhecidos'})")
+    h = fhsts.fetch(host, port, timeout=st.scan_timeout)
+    print(f"  HSTS: {h.status.upper()}  {h.cabecalho or h.erro}" + (f"  (HTTP {h.http_status})" if h.http_status else ""))
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
     p = argparse.ArgumentParser(prog="certwatch")
@@ -62,7 +109,12 @@ def main(argv: list[str] | None = None) -> int:
     sl = sub.add_parser("ssllabs-test")
     sl.add_argument("host")
     sub.add_parser("smax-test")
+    po = sub.add_parser("postura")
+    po.add_argument("alvo")
     a = p.parse_args(argv)
+
+    if a.cmd == "postura":
+        return _posture_smoke(a.alvo)
 
     if a.cmd == "smax-test":
         from .fontes import smax

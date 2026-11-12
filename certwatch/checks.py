@@ -32,6 +32,7 @@ LAYERS = [
     ("identidade", "Identidade", "O certificado pertence a este servidor?"),
     ("validade", "Validade", "O certificado está dentro do prazo?"),
     ("cripto", "Criptografia", "A assinatura e a chave são fortes?"),
+    ("protecao", "Proteções adicionais", "As defesas à volta do certificado estão ligadas?"),
     ("inventario", "Inventário", "O que está instalado coincide com a CMDB?"),
 ]
 
@@ -45,6 +46,11 @@ class CheckDef:
     how: str
     meaning: str
     fix: tuple[str, ...]
+
+    @property
+    def why(self) -> str:
+        """Porque importa, numa frase para quem não é da área."""
+        return WHY.get(self.id, "")
 
 
 CHECKS: tuple[CheckDef, ...] = (
@@ -104,6 +110,19 @@ CHECKS: tuple[CheckDef, ...] = (
          "Instalar o novo certificado com a cadeia completa e retirar o autoassinado."),
     ),
     CheckDef(
+        "cadeia.revogacao", "cadeia", "Não foi revogado",
+        "A autoridade que emitiu o certificado anulou-o antes do fim do prazo?",
+        "Pergunta à CA pelo endereço escrito no certificado (OCSP) ou procura-o na lista de revogados da CA (CRL). "
+        "Só aceita respostas assinadas pela CA e dentro do prazo, e só pergunta para cadeias confiáveis.",
+        "A CA anulou este certificado (chave roubada, substituído, serviço terminado) mas o servidor continua a usá-lo. "
+        "Os browsers que verificam a revogação recusam a ligação. Se o resultado é \"atenção\", não foi possível "
+        "confirmar: a CA não respondeu ou a resposta não pôde ser aceite.",
+        ("Revogado: confirmar com quem gere o certificado porque foi revogado. Se foi por chave comprometida, tratar como incidente de segurança.",
+         "Pedir um certificado novo com uma chave nova (nunca a anterior) e instalá-lo em todos os servidores.",
+         "Atualizar a CMDB e fechar o pedido de renovação.",
+         "Atenção sem revogação: ver se o servidor do Atalaia Cert chega por http ao endereço da CA (firewall de saída); na execução seguinte volta a tentar."),
+    ),
+    CheckDef(
         "identidade.nome", "identidade", "Nome corresponde ao servidor",
         "O nome do servidor está no certificado (CN/SAN)?",
         "Compara o nome do endpoint com os nomes do certificado; um wildcard só cobre um nível.",
@@ -139,6 +158,44 @@ CHECKS: tuple[CheckDef, ...] = (
          "Nunca reutilizar a chave antiga no pedido novo."),
     ),
     CheckDef(
+        "cripto.chave_unica", "cripto", "Chave só deste certificado",
+        "A chave privada deste certificado é usada só por ele?",
+        "Compara a chave pública de cada certificado servido com a de todos os certificados já vistos. O mesmo "
+        "certificado instalado em vários servidores não conta.",
+        "A mesma chave privada está noutro certificado. Se é de outro serviço, quem a obtiver num servidor consegue "
+        "fazer-se passar pelo outro. Se é do certificado anterior, a renovação não gerou chave nova, e uma cópia "
+        "antiga da chave (uma cópia de segurança, um servidor abatido) continua a servir.",
+        ("Na próxima renovação, gerar um par de chaves novo para este certificado (é o comportamento normal do ACME e do openssl req -newkey).",
+         "Serviços diferentes: emitir um certificado com chave própria para cada um, começando pelo mais exposto.",
+         "IIS e AVI: escolher \"criar pedido novo\" em vez de \"renovar\" com a mesma chave.",
+         "Se a chave antiga pode ter saído do controlo (cópias, servidores abatidos), renovar já e pedir a revogação do anterior."),
+    ),
+    CheckDef(
+        "protecao.caa", "protecao", "Domínio diz que CAs podem emitir (CAA)",
+        "O domínio tem um registo no DNS a dizer que autoridades podem emitir certificados para ele?",
+        "Lê os registos CAA do nome no DNS público e, se não houver, dos domínios acima. Compara as CAs autorizadas "
+        "com a que emitiu o certificado servido. Só se aplica a nomes públicos e a CAs públicas.",
+        "Sem registo CAA, qualquer autoridade do mundo pode emitir um certificado para este domínio a pedido de quem "
+        "conseguir enganar a validação. Se o resultado é \"falhou\", o certificado em uso foi emitido por uma CA que o "
+        "domínio não autoriza: ou a regra é mais recente do que o certificado, ou alguém o pediu fora do processo.",
+        ("Sem registo: criar no DNS do domínio um registo CAA por cada CA que se usa, por exemplo  exemplo.pt. CAA 0 issue \"letsencrypt.org\".",
+         "Juntar  CAA 0 iodef \"mailto:seguranca@exemplo.pt\"  para a CA avisar de pedidos recusados.",
+         "CA não autorizada: confirmar com o dono quem pediu este certificado. Se é legítimo, acrescentar essa CA ao registo ou trocar o certificado por um de uma CA autorizada.",
+         "Se ninguém o reconhece, tratar como incidente: ver a página Na internet para outros certificados inesperados."),
+    ),
+    CheckDef(
+        "protecao.hsts", "protecao", "Site obriga a usar HTTPS (HSTS)",
+        "O site diz ao browser para nunca o abrir sem cifra?",
+        "Faz um pedido à página inicial por HTTPS e lê o cabeçalho Strict-Transport-Security. Só se aplica a sites web.",
+        "Sem este cabeçalho, quem escreve o endereço sem https faz o primeiro pedido em claro, e alguém na mesma rede "
+        "(um wifi público) pode intercetá-lo e manter a pessoa numa cópia sem cifra do site. Com um prazo curto, a "
+        "proteção desaparece entre visitas.",
+        ("Juntar à resposta do site o cabeçalho  Strict-Transport-Security: max-age=31536000; includeSubDomains",
+         "Apache: Header always set Strict-Transport-Security \"max-age=31536000; includeSubDomains\" · nginx: add_header Strict-Transport-Security \"max-age=31536000; includeSubDomains\" always;",
+         "IIS: Site → HSTS (Enable, Max-Age 31536000) · AVI: perfil de aplicação HTTP → HSTS.",
+         "Antes de ligar includeSubDomains, confirmar que todos os subdomínios têm HTTPS. Começar com um max-age curto (300) para testar e subir depois."),
+    ),
+    CheckDef(
         "inventario.registo", "inventario", "Registado na CMDB",
         "Este certificado em uso está na CMDB?",
         "Procura o nome do endpoint nos certificados ativos da CMDB.",
@@ -164,6 +221,27 @@ CHECKS: tuple[CheckDef, ...] = (
 )
 CHECK_BY_ID = {c.id: c for c in CHECKS}
 
+# Porque importa cada teste, numa frase para quem não é da área (página Testes)
+WHY = {
+    "rede.dns": "Sem nome no DNS, ninguém consegue chegar ao serviço.",
+    "rede.porta": "Se o servidor não atende, o serviço está em baixo ou fora do nosso alcance.",
+    "tls.handshake": "Sem ligação cifrada, tudo o que passa pode ser lido por quem estiver pelo caminho.",
+    "tls.protocolo": "As versões antigas da cifra têm falhas conhecidas que permitem ler a comunicação.",
+    "cadeia.confianca": "É a cadeia que prova ao browser que o certificado é verdadeiro; com um elo em falta, aparece um aviso.",
+    "cadeia.autoassinado": "Um certificado que ninguém confirma habitua as pessoas a ignorar avisos de segurança.",
+    "cadeia.revogacao": "Um certificado anulado pela autoridade é como um cartão cancelado: parece válido, mas já não devia ser aceite.",
+    "identidade.nome": "Se o nome não bate certo, o browser avisa que o site pode ser falso.",
+    "validade.prazo": "Depois da data de fim, o serviço deixa de abrir para toda a gente.",
+    "cripto.assinatura": "Uma assinatura fraca permite falsificar o certificado.",
+    "cripto.chave": "Uma chave pequena pode ser descoberta por tentativa.",
+    "cripto.chave_unica": "Uma chave usada em vários sítios é como a mesma chave para várias portas: perdida uma vez, abre todas.",
+    "protecao.caa": "É uma lista, no próprio domínio, de quem pode passar certificados em nosso nome.",
+    "protecao.hsts": "Garante que o browser nunca abre o site sem cifra, mesmo que a pessoa se esqueça do https.",
+    "inventario.registo": "O que não está registado não tem dono nem aviso de expiração.",
+    "inventario.emissor": "Um emissor diferente do registado pode ser um certificado que ninguém autorizou.",
+    "inventario.data": "Datas diferentes mostram uma renovação a meio: feita mas não instalada, ou instalada mas não registada.",
+}
+
 
 @dataclass
 class CheckResult:
@@ -176,6 +254,8 @@ class CheckResult:
 class Evaluation:
     results: dict[str, CheckResult] = field(default_factory=dict)
     findings: list[tuple[str, str, dict]] = field(default_factory=list)  # (tipo, severidade, detalhes)
+    # alertas que são do domínio e não do servidor: (tipo, severidade, assunto, chave, detalhes); um por domínio
+    zone_findings: list[tuple[str, str, str, str, dict]] = field(default_factory=list)
     matched_issuer: str | None = None
 
     def set(self, check: str, status: str, detail: str = "") -> None:
@@ -224,7 +304,150 @@ def _iso(dt: datetime | None) -> str | None:
     return as_utc(dt).isoformat() if dt else None
 
 
-def evaluate_endpoint(ep, sr, leaf, latest_by_issuer: dict, settings: Settings, now: datetime) -> Evaluation:
+def _when(d: dict | None) -> str:
+    return f" · visto em {d['em'].strftime('%d-%m')}" if d and d.get("em") else ""
+
+
+def _days(seconds: int) -> str:
+    d = seconds // 86400
+    return f"{d} dias" if d >= 2 else (f"{seconds // 3600} horas" if seconds >= 7200 else f"{seconds} segundos")
+
+
+def registered_domain(host: str) -> str:
+    """Os dois últimos níveis do nome (aproximação suficiente para agrupar alertas por domínio)."""
+    parts = host.lower().rstrip(".").split(".")
+    return ".".join(parts[-2:]) if len(parts) >= 2 else host.lower()
+
+
+def _posture_checks(ev: "Evaluation", ep, leaf, p: dict | None, settings: Settings) -> None:
+    """Revogação, chave reutilizada, CAA e HSTS, a partir do que postura.py recolheu. Regra de ouro: o que não se
+    conseguiu verificar nunca fica como "passou" e nunca abre um alerta grave."""
+    if p is None:
+        for cid in ("cadeia.revogacao", "cripto.chave_unica", "protecao.caa", "protecao.hsts"):
+            ev.set(cid, NT, "ainda não verificado")
+        return
+    pending = "ainda não verificado" if not p.get("ran") else "sem resultado recente"
+
+    # --- Revogação
+    r = p.get("revogacao")
+    if not p.get("revogacao_on", True):
+        ev.set("cadeia.revogacao", NA, "verificação desligada nesta instalação")
+    elif leaf.self_issued:
+        ev.set("cadeia.revogacao", NA, "autoassinado: não há autoridade a quem perguntar")
+    elif r is None:
+        ev.set("cadeia.revogacao", NT, pending)
+    else:
+        via = {"ocsp": "OCSP", "crl": "lista de revogados (CRL)"}.get(r.get("metodo", ""), "")
+        st = r["status"]
+        if st == "bom":
+            ev.set("cadeia.revogacao", OK, f"não revogado · confirmado por {via}{_when(r)}")
+        elif st == "revogado":
+            day = (r.get("revogado_em") or "")[:10]
+            day = "-".join(reversed(day.split("-"))) if day else ""
+            why = f" ({r['motivo']})" if r.get("motivo") else ""
+            ev.set("cadeia.revogacao", FALHA, f"revogado pela CA{' em ' + day if day else ''}{why} · {via}")
+            ev.findings.append(("REVOGADO", "critica", {
+                "revogado_em": r.get("revogado_em"), "motivo": r.get("motivo") or None, "metodo": r.get("metodo"),
+                "emissor": leaf.issuer_cn, "serial": leaf.serial_hex, "sha256": leaf.sha256}))
+        elif st in ("erro", "desconhecido"):
+            ev.set("cadeia.revogacao", AVISO, "não foi possível confirmar: " + (r.get("detalhe") or "sem resposta da CA"))
+            ev.findings.append(("REVOGACAO_NAO_VERIFICADA", "baixa", {"motivo": r.get("detalhe"), "emissor": leaf.issuer_cn}))
+        elif st == "sem_info":
+            ev.set("cadeia.revogacao", NA, r.get("detalhe") or "o certificado não indica onde confirmar")
+        elif st == "nao_confiavel":
+            ev.set("cadeia.revogacao", NA, "cadeia não confiável: resolver primeiro o teste da cadeia")
+        elif st == "expirado":
+            ev.set("cadeia.revogacao", NA, "já expirou (ver Validade)")
+        else:
+            ev.set("cadeia.revogacao", NA, "autoassinado" if st == "autoassinado" else st)
+
+    # --- Chave reutilizada (não precisa de rede)
+    k = p.get("chave")
+    if k is None:
+        ev.set("cripto.chave_unica", NT, pending)
+    elif k.get("partilhada"):
+        others = k["partilhada"]
+        where = "; ".join(f"{o['cn']} ({', '.join(o['onde'][:2])})" for o in others[:3])
+        ev.set("cripto.chave_unica", AVISO, ("mesma chave que o certificado de outro serviço: " if len(others) == 1
+                                              else f"mesma chave que {len(others)} certificados de outros serviços: ") + where)
+        ev.findings.append(("CHAVE_PARTILHADA", "media", {"outros": [{"cn": o["cn"], "onde": o["onde"]} for o in others[:10]],
+                                                         "chave_sha256": leaf.spki_sha256}))
+    elif k.get("anterior"):
+        a = k["anterior"]
+        ev.set("cripto.chave_unica", AVISO, f"renovado com a mesma chave do certificado anterior ({a['de']} a {a['ate']})")
+        ev.findings.append(("CHAVE_REUTILIZADA", "baixa", {"certificado_anterior": a["sha256"], "anterior_de": a["de"],
+                                                          "anterior_ate": a["ate"], "chave_sha256": leaf.spki_sha256}))
+    else:
+        ev.set("cripto.chave_unica", OK, "chave usada só por este certificado")
+
+    # --- CAA
+    c = p.get("caa")
+    if not p.get("caa_on", True):
+        ev.set("protecao.caa", NA, "verificação desligada nesta instalação")
+    elif not p.get("externo"):
+        ev.set("protecao.caa", NA, "nome interno: o CAA é para nomes públicos")
+    elif c is None:
+        ev.set("protecao.caa", NT, pending)
+    elif c["status"] == "erro":
+        ev.set("protecao.caa", AVISO, "não foi possível ler o DNS público: " + (c.get("erro") or "sem resposta"))
+    else:
+        from .fontes.dns import caa_evaluate
+        zone = c.get("zona") or registered_domain(ep.host)
+        missing = ("CAA_AUSENTE", "baixa", zone, f"caa:{zone}", {"dominio": zone})
+        if c["status"] == "sem_registos":
+            ev.set("protecao.caa", AVISO, f"{zone} não tem registo CAA: qualquer CA pode emitir")
+            ev.zone_findings.append(missing)
+        elif p.get("ca_interna"):
+            ev.set("protecao.caa", NA, f"{zone} tem CAA; este certificado é de uma CA interna, que o CAA não obriga")
+        else:
+            verdict, phrase = caa_evaluate([tuple(x) for x in c.get("registos") or []], set(p.get("caa_ids") or ()),
+                                           bool(p.get("wildcard")))
+            if verdict == "autorizada":
+                ev.set("protecao.caa", OK, f"{zone}: {phrase}")
+            elif verdict == "sem_restricao":
+                ev.set("protecao.caa", AVISO, f"{zone}: {phrase}")
+                ev.zone_findings.append(missing)
+            elif verdict == "ca_desconhecida":
+                ev.set("protecao.caa", NA, f"{zone}: {phrase} ({leaf.issuer_cn}); confirmar à mão")
+            else:
+                ev.set("protecao.caa", FALHA, f"{zone}: {phrase}; este certificado é de {leaf.issuer_cn}")
+                ev.findings.append(("CAA_VIOLADA", "media", {"dominio": zone, "emissor": leaf.issuer_cn, "regra": phrase,
+                                                            "emitido_em": _iso(leaf.not_before)}))
+
+    # --- HSTS
+    h = p.get("hsts")
+    if not p.get("hsts_on", True):
+        ev.set("protecao.hsts", NA, "verificação desligada nesta instalação")
+    elif not p.get("web"):
+        ev.set("protecao.hsts", NA, f"porta {ep.port}: não é um site web")
+    elif h is None:
+        ev.set("protecao.hsts", NT, pending)
+    elif h["status"] == "nao_http":
+        ev.set("protecao.hsts", NA, "responde por TLS mas não é um site web")
+    elif h["status"] == "erro":
+        ev.set("protecao.hsts", AVISO, "não foi possível pedir a página: " + (h.get("erro") or "sem resposta"))
+    else:
+        sev = "baixa" if p.get("externo") else "info"
+        age = h.get("max_age")
+        problem = ""
+        if h["status"] == "ausente":
+            problem = "o site não envia o cabeçalho"
+        elif h["status"] == "invalido":
+            problem = f"cabeçalho inválido ({h.get('erro') or 'ilegível'}): o browser ignora-o"
+        elif age == 0:
+            problem = "desligado pelo próprio site (max-age=0)"
+        elif age is not None and age < settings.hsts_min_age:
+            problem = f"prazo curto: {_days(age)} (mínimo recomendado {_days(settings.hsts_min_age)})"
+        if problem:
+            ev.set("protecao.hsts", AVISO, problem)
+            ev.findings.append(("HSTS_EM_FALTA", sev, {"problema": problem, "cabecalho": h.get("cabecalho") or None}))
+        else:
+            extra = (", inclui subdomínios" if h.get("include_subdomains") else "") + (", preload" if h.get("preload") else "")
+            ev.set("protecao.hsts", OK, f"ativo por {_days(age)}{extra}")
+
+
+def evaluate_endpoint(ep, sr, leaf, latest_by_issuer: dict, settings: Settings, now: datetime,
+                      posture: dict | None = None) -> Evaluation:
     """Corre todos os testes para um endpoint. Não acede à base de dados."""
     ev = Evaluation()
     if sr is None:
@@ -338,6 +561,8 @@ def evaluate_endpoint(ep, sr, leaf, latest_by_issuer: dict, settings: Settings, 
         ev.set("cripto.chave", OK, f"{leaf.key_type} {leaf.key_bits} bits")
     if weak:
         ev.findings.append(("CRIPTO_FRACA", "alta" if leaf_weak else "media", {"problemas": weak}))
+
+    _posture_checks(ev, ep, leaf, posture, settings)
 
     # Inventário
     if not latest_by_issuer:
