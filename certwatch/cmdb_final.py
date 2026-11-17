@@ -108,7 +108,10 @@ DROP_LABELS = {
     "NAO_EMITIDO": "Pedido não emitido (Revoked/Denied/Pending)",
     "EXPIRADO": "Certificado já expirado",
     "NAO_E_DOMINIO": "Nome sem domínio (não é domínio, wildcard nem IP)",
+    "SEM_VIRTUAL_SERVICE": "Sem virtual service no AVI (não está em uso)",
 }
+# Na coluna VirtualServices do AVI, o marcador de "nenhum virtual service usa este certificado"
+NO_VS_RE = re.compile(r"^\[?\s*sem\s+virtual\s*services?\s*\]?$", re.I)
 DATE_WARN = {
     "ANO_SUSPEITO": "Ano fora do intervalo esperado (2000-2100)",
     "VAZIO": "Data vazia",
@@ -501,6 +504,7 @@ class SourceItem:
     note: str = ""
     triage: str = ""         # só na fonte INTERNET: triagem feita na página "Na internet"
     auth: str = ""           # só na fonte RENOVACAO: "servidor" ou "ficheiro" = dados do próprio certificado
+    uso: str = ""            # só no AVI: os virtual services que usam o certificado
 
 
 def read_source(source: str, filename: str, data: bytes, today: date) -> tuple[list[SourceItem], dict]:
@@ -535,6 +539,7 @@ def read_source(source: str, filename: str, data: bytes, today: date) -> tuple[l
             disposition=disp, ref=_clean_text(cell(row, "req_id") or (cell(row, idx=fallback) if fallback is not None else "") or "").strip(),
             requester=_clean_text(cell(row, "requester") or "").strip(),
             date_status=p.status, raw_date="" if raw is None else str(raw), note=p.note,
+            uso=_clean_text(cell(row, "uso") or "").strip(),
         )
         if not cn:
             it.keep, it.drop = False, "SEM_COMMONNAME"
@@ -542,6 +547,15 @@ def read_source(source: str, filename: str, data: bytes, today: date) -> tuple[l
             it.keep, it.drop = False, f"DATA_{p.status}"
         elif has_disp and disp and not re.search(r"issued|emitid", disp, re.I):
             it.keep, it.drop = False, "NAO_EMITIDO"
+        if it.uso and not NO_VS_RE.match(it.uso):                     # aparece na justificação de cada alteração
+            vs = [v.strip() for v in re.split(r"[;,|]", it.uso) if v.strip()]
+            used = ", ".join(vs[:3]) + (f" e mais {len(vs) - 3}" if len(vs) > 3 else "")
+            it.ref = f"{it.ref}; em uso em {used}" if it.ref else f"em uso em {used}"
+        if not it.keep:
+            pass
+        elif it.uso and NO_VS_RE.match(it.uso):
+            # nenhum virtual service o usa: já não está em uso, não conta para a CMDB (coluna vazia = não se sabe)
+            it.keep, it.drop = False, "SEM_VIRTUAL_SERVICE"
         elif p.day and p.day < today:
             it.keep, it.drop = False, "EXPIRADO"
         elif cn.upper() == "EMPTY" or identifier_type(cn) == "OUTRO":
@@ -1507,7 +1521,8 @@ def _rows_by_name(headers: list[str], rows: list[list]) -> dict[str, dict]:
         name = get(r, "nome") or get(r, "subjectcommonname")
         if name:
             out[name] = {"cn": get(r, "subjectcommonname"), "fim": get(r, "validitynotafter"),
-                         "serial": get(r, "serialnumber").lower(), "emissor": get(r, "issuercommonname")}
+                         "serial": get(r, "serialnumber").lower(), "emissor": get(r, "issuercommonname"),
+                         "uso": get(r, "virtualservices")}
     return out
 
 
@@ -1526,6 +1541,9 @@ def avi_compare(file_name: str, file_data: bytes, api_csv: bytes) -> dict:
             what.append(f"série: ficheiro {x['serial'] or '(vazia)'}, API {y['serial'] or '(vazia)'}")
         if x["cn"].lower() != y["cn"].lower():
             what.append(f"CommonName: ficheiro {x['cn']}, API {y['cn']}")
+        vs = lambda v: sorted(p.strip().lower() for p in re.split(r"[;,|]", v) if p.strip())  # noqa: E731
+        if x["uso"] and y["uso"] and vs(x["uso"]) != vs(y["uso"]):
+            what.append(f"virtual services: ficheiro {x['uso']}, API {y['uso']}")
         if what:
             diffs.append({"nome": name, "cn": y["cn"], "diferencas": what})
     only_f = [{"nome": n, **f[n]} for n in sorted(set(f) - set(a))]

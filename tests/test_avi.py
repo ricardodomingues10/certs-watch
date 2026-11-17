@@ -40,8 +40,11 @@ CAS = [{"name": "Corp-Intermedia", "type": "SSL_CERTIFICATE_TYPE_CA", "key": KEY
 class FakeAvi:
     """Controlador AVI simulado: login com cookies, páginas de 2, cabeçalho X-Avi-Tenant obrigatório."""
 
-    def __init__(self, vs=VS, cas=CAS, password="pw"):
+    def __init__(self, vs=VS, cas=CAS, password="pw", services=None, vs_status=200):
         self.vs, self.cas, self.password = vs, cas, password
+        # virtual services: (nome, [nomes dos certificados que usa]); por omissão cada certificado tem o seu
+        self.services = services if services is not None else [(f"vs-{x['name']}", [x["name"]]) for x in vs]
+        self.vs_status = vs_status
         self.calls = []
 
     def handler(self, request: httpx.Request):
@@ -59,9 +62,21 @@ class FakeAvi:
             return httpx.Response(401)
         if request.headers.get("X-Avi-Tenant") != "admin":
             return httpx.Response(403)
+        if p == "/api/virtualservice":
+            if self.vs_status != 200:
+                return httpx.Response(self.vs_status)
+            uuid = {x["name"]: f"sslkeyandcertificate-{i}" for i, x in enumerate(self.vs)}
+            data = [{"name": n, "ssl_key_and_certificate_refs": [f"https://avi.test/api/sslkeyandcertificate/{uuid[c]}#{c}" for c in cs]}
+                    for n, cs in self.services]
+            q = dict(request.url.params)
+            page, size = int(q.get("page", 1)), 2
+            nxt = f"https://avi.test{p}?page={page + 1}" if page * size < len(data) else None
+            return httpx.Response(200, json={"count": len(data), "results": data[(page - 1) * size: page * size],
+                                             **({"next": nxt} if nxt else {})})
         if p == "/api/sslkeyandcertificate":
             q = dict(request.url.params)
-            data = self.cas if q.get("type") == "SSL_CERTIFICATE_TYPE_CA" else self.vs
+            data = self.cas if q.get("type") == "SSL_CERTIFICATE_TYPE_CA" else \
+                [{**x, "uuid": f"sslkeyandcertificate-{i}"} for i, x in enumerate(self.vs)]
             page, size = int(q.get("page", 1)), 2
             chunk = data[(page - 1) * size: page * size]
             nxt = f"https://avi.test{p}?page={page + 1}" if page * size < len(data) else None
@@ -98,7 +113,8 @@ def test_fetch_like_the_script(st):
     assert res.vs[2]["SubjectAlternativeName"] == "[sem SAN]"
     # só leitura, pede só os campos precisos, tenant em todos os pedidos, sessão fechada no fim
     gets = [c for c in fake.calls if c[0] == "GET"]
-    assert all("fields=name%2Ccertificate%2Ctype" in u and h.get("x-avi-tenant") == "admin" for _, u, h in gets)
+    assert all(("fields=name%2Ccertificate%2Ctype%2Cuuid" in u or "fields=name%2Cssl_key_and_certificate_refs" in u)
+               and h.get("x-avi-tenant") == "admin" for _, u, h in gets)
     assert not [c for c in fake.calls if c[0] in ("PUT", "PATCH", "DELETE")]
     assert fake.calls[-1][0] == "POST" and fake.calls[-1][1].endswith("/logout") and fake.calls[-1][2].get("x-csrftoken") == "c1"
     # a chave privada nunca sai do coletor
@@ -263,3 +279,73 @@ def test_avi_ignores_internet_proxy(st, monkeypatch):
         assert not s.client._mounts or all(t is None for t in s.client._mounts.values())
     finally:
         s.client.close()
+
+
+
+# ------------------------------------------------------------------ coluna VirtualServices: certificados sem uso
+def script_file_vs(rows) -> bytes:
+    """A exportação nova, com a coluna VirtualServices no fim."""
+    head = ('"Nome","Subject_CommonName","Validity_NotBefore","Validity_NotAfter","SerialNumber","Issuer_CommonName",'
+            '"SubjectAlternativeName","VirtualServices"')
+    lines = [head] + [",".join(f'"{v}"' for v in r) for r in rows]
+    return ("\r\n".join(lines) + "\r\n").encode("utf-16")
+
+
+def test_file_without_virtual_service_is_set_aside():
+    data = script_file_vs([
+        ("cert-portal", "portal.exemplo.pt", "2026-01-01", "2027-05-01 12:00:00", "ff", "DigiCert", "portal.exemplo.pt", "vs-portal; vs-portal-80"),
+        ("cert-antigo", "antigo.exemplo.pt", "2026-01-01", "2027-05-01 12:00:00", "aa", "DigiCert", "[sem SAN]", "[sem Virtual Service]"),
+        ("cert-maiusc", "outro.exemplo.pt", "2026-01-01", "2027-05-01 12:00:00", "ab", "DigiCert", "[sem SAN]", "[Sem Virtual Services]"),
+        ("cert-vazio", "nao-se-sabe.exemplo.pt", "2026-01-01", "2027-05-01 12:00:00", "ac", "DigiCert", "[sem SAN]", ""),
+        ("cert-velho", "velho.exemplo.pt", "2020-01-01", "2021-05-01 12:00:00", "ad", "DigiCert", "[sem SAN]", "vs-velho"),
+        ("cert-sem-data", "sem-data.exemplo.pt", "2026-01-01", "[sem Validade]", "ae", "DigiCert", "[sem SAN]", "[sem Virtual Service]"),
+        ("cert-muitos", "muitos.exemplo.pt", "2026-01-01", "2027-05-01 12:00:00", "af", "DigiCert", "[sem SAN]", "a; b; c; d; e")])
+    items, info = cf.read_source("AVI", "avi.csv", data, TODAY)
+    by = {i.ref.split(";")[0]: i for i in items}
+    assert info["colunas"]["uso"] == "VirtualServices"
+    assert [k for k, i in by.items() if i.keep] == ["cert-portal", "cert-vazio", "cert-muitos"]
+    assert by["cert-antigo"].drop == by["cert-maiusc"].drop == "SEM_VIRTUAL_SERVICE"
+    # coluna vazia = não se sabe: fica (nunca se descarta sem a marca explícita do script)
+    assert by["cert-vazio"].keep and by["cert-vazio"].uso == ""
+    # as razões anteriores (data ilegível) continuam a ter prioridade; um expirado em uso continua "expirado"
+    assert by["cert-velho"].drop == "EXPIRADO" and by["cert-sem-data"].drop == "DATA_NAO_RECONHECIDO"
+    assert info["descartadas"] == {"SEM_VIRTUAL_SERVICE": 2, "EXPIRADO": 1, "DATA_NAO_RECONHECIDO": 1}
+    assert cf.DROP_LABELS["SEM_VIRTUAL_SERVICE"] == "Sem virtual service no AVI (não está em uso)"
+    # os virtual services aparecem na justificação de cada alteração
+    assert by["cert-portal"].ref == "cert-portal; em uso em vs-portal, vs-portal-80"
+    assert by["cert-muitos"].ref == "cert-muitos; em uso em a, b, c e mais 2"
+
+
+def test_old_export_without_the_column_is_unchanged():
+    items, info = cf.read_source("AVI", "avi.csv", script_file([
+        ("cert-a", "a.exemplo.pt", "2026-01-01", "2027-05-01 12:00:00", "ff", "DigiCert", "a.exemplo.pt")]), TODAY)
+    assert info["validas"] == 1 and "uso" not in info["colunas"] and items[0].ref == "cert-a"
+
+
+def test_api_fills_virtual_services_like_the_script(st):
+    fake = FakeAvi(services=[("vs-portal-443", ["vs-portal"]), ("vs-portal-8443", ["vs-portal"]), ("vs-novo", ["vs-novo"])])
+    res = avi.fetch(st, fake.client())
+    use = {r["Nome"]: r["VirtualServices"] for r in res.vs}
+    assert use == {"vs-portal": "vs-portal-443; vs-portal-8443", "vs-novo": "vs-novo", "vs-api": "[sem Virtual Service]"}
+    assert avi.AVI_COLUMNS[-1] == "VirtualServices" and not res.avisos
+    items, info = cf.read_source("AVI", "avi-api.csv", avi.to_csv(res.vs), TODAY)
+    assert info["validas"] == 2 and info["descartadas"] == {"SEM_VIRTUAL_SERVICE": 1}
+    assert not [c for c in fake.calls if c[0] in ("PUT", "PATCH", "DELETE")]
+    assert avi.uuid_from_ref("https://c/api/sslkeyandcertificate/sslkeyandcertificate-9#nome") == "sslkeyandcertificate-9"
+
+
+def test_api_without_permission_on_virtual_services_drops_nothing(st):
+    res = avi.fetch(st, FakeAvi(vs_status=403).client())
+    assert all(r["VirtualServices"] == "" for r in res.vs) and "Virtual services não lidos" in res.avisos[0]
+    items, info = cf.read_source("AVI", "avi-api.csv", avi.to_csv(res.vs), TODAY)
+    assert info["validas"] == 3 and info["descartadas"] == {}
+
+
+def test_compare_shows_virtual_service_differences(st):
+    res = avi.fetch(st, FakeAvi(services=[("vs-novo", ["vs-novo"])]).client())
+    file = script_file_vs([
+        ("vs-portal", "portal.exemplo.pt", "2026-01-01 00:00:00", "2027-05-01 12:00:00", "ff", "DigiCert Global G2", "x", "vs-portal-443"),
+        ("vs-novo", "novo-avi.exemplo.pt", "2026-01-01 00:00:00", "2028-04-10 12:00:00", "1234", "DigiCert Global G2", "x", "vs-novo")])
+    cmp = cf.avi_compare("avi.csv", file, avi.to_csv(res.vs))
+    assert [d["nome"] for d in cmp["diferentes"]] == ["vs-portal"]
+    assert cmp["diferentes"][0]["diferencas"] == ["virtual services: ficheiro vs-portal-443, API [sem Virtual Service]"]

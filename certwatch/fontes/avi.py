@@ -27,8 +27,10 @@ log = logging.getLogger(__name__)
 
 # As colunas do CSV do script de exportação (a mesma ordem e os mesmos nomes)
 AVI_COLUMNS = ["Nome", "Subject_CommonName", "Validity_NotBefore", "Validity_NotAfter", "SerialNumber",
-               "Issuer_CommonName", "SubjectAlternativeName"]
-FIELDS = "name,certificate,type"
+               "Issuer_CommonName", "SubjectAlternativeName", "VirtualServices"]
+FIELDS = "name,certificate,type,uuid"
+VS_FIELDS = "name,ssl_key_and_certificate_refs"
+NO_VS = "[sem Virtual Service]"          # o mesmo marcador do script: o certificado não está em uso
 MAX_PAGES = 500
 
 
@@ -42,6 +44,7 @@ FONTE = {
         {"metodo": "POST", "endereco": "/login", "para": "abrir a sessão (cookie e token CSRF)", "acesso": "leitura", "estado": "em uso", "onde": "fontes/avi.py · AviSession"},
         {"metodo": "GET", "endereco": "/api/sslkeyandcertificate?type=SSL_CERTIFICATE_TYPE_VIRTUALSERVICE", "para": "certificados dos virtual services (paginado)", "acesso": "leitura", "estado": "em uso", "onde": "fontes/avi.py · fetch"},
         {"metodo": "GET", "endereco": "/api/sslkeyandcertificate?type=SSL_CERTIFICATE_TYPE_CA", "para": "certificados das CAs", "acesso": "leitura", "estado": "em uso", "onde": "fontes/avi.py · fetch"},
+        {"metodo": "GET", "endereco": "/api/virtualservice?fields=name,ssl_key_and_certificate_refs", "para": "que virtual services usam cada certificado (sem nenhum = não está em uso)", "acesso": "leitura", "estado": "em uso", "onde": "fontes/avi.py · fetch"},
         {"metodo": "POST", "endereco": "/logout", "para": "fechar a sessão", "acesso": "leitura", "estado": "em uso", "onde": "fontes/avi.py · AviSession"},
         {"metodo": "TLS", "endereco": "controlador:443", "para": "diagnosticar a ligação (DNS, porta, certificado do controlador)", "acesso": "leitura", "estado": "só no diagnóstico", "onde": "fontes/avi.py · diagnose"},
         {"metodo": "PUT", "endereco": "/api/sslkeyandcertificate/{uuid}", "para": "instalar o certificado renovado (renovação automática)", "acesso": "escrita", "estado": "planeado", "onde": "—"},
@@ -94,8 +97,9 @@ def serial_hex(value) -> str:
     return h.lower() if re.fullmatch(r"[0-9a-fA-F]+", h) else s
 
 
-def to_row(item: dict) -> dict:
-    """Um objeto sslkeyandcertificate -> uma linha com as colunas do script (só campos públicos do certificado)."""
+def to_row(item: dict, used_by: dict[str, list[str]] | None = None) -> dict:
+    """Um objeto sslkeyandcertificate -> uma linha com as colunas do script (só campos públicos do certificado).
+    used_by: uuid do certificado -> nomes dos virtual services que o usam. None = não se sabe (coluna vazia)."""
     cert = item.get("certificate") or {}
     subject = cert.get("subject") or {}
     issuer = cert.get("issuer") or {}
@@ -108,7 +112,13 @@ def to_row(item: dict) -> dict:
         "SerialNumber": serial_hex(cert.get("serial_number")) if cert.get("serial_number") else "[Sem Serial Number]",
         "Issuer_CommonName": issuer.get("common_name", "") if issuer else "[Sem Issuer]",
         "SubjectAlternativeName": "; ".join(str(x) for x in sans) if sans else "[sem SAN]",
+        "VirtualServices": "" if used_by is None else ("; ".join(sorted(used_by.get(item.get("uuid") or "", []))) or NO_VS),
     }
+
+
+def uuid_from_ref(ref: str) -> str:
+    """https://controlador/api/sslkeyandcertificate/sslkeyandcertificate-1234#nome -> sslkeyandcertificate-1234"""
+    return str(ref or "").split("#", 1)[0].rstrip("/").rsplit("/", 1)[-1]
 
 
 def to_csv(rows: list[dict]) -> bytes:
@@ -186,12 +196,13 @@ class AviSession:
         finally:
             self.client.close()
 
-    def collection(self, endpoint: str) -> list[dict]:
-        """Todas as páginas de uma coleção (ex.: /api/sslkeyandcertificate?type=...), como o script."""
+    def collection(self, endpoint: str, fields: str = FIELDS, keep=None) -> list[dict]:
+        """Todas as páginas de uma coleção (ex.: /api/sslkeyandcertificate?type=...), como o script.
+        keep: o que guardar de cada objeto (por omissão, só o nome e o certificado público)."""
         parts = urlsplit(endpoint)
         base_params = dict(parse_qsl(parts.query, keep_blank_values=True))
         base_params.setdefault("page_size", str(self.settings.avi_page_size))
-        base_params.setdefault("fields", FIELDS)
+        base_params.setdefault("fields", fields)
         out: list[dict] = []
         for page in range(1, MAX_PAGES + 1):
             params = {**base_params, "page": str(page)}
@@ -210,8 +221,11 @@ class AviSession:
                 raise AviError(f"{parts.path}: HTTP {r.status_code}.")
             data = r.json() or {}
             for item in data.get("results") or []:
+                if keep is not None:
+                    out.append(keep(item))
+                    continue
                 # só o nome e o certificado (público): tudo o resto, incluindo a chave, é descartado aqui
-                out.append({"name": item.get("name"), "type": item.get("type"),
+                out.append({"name": item.get("name"), "type": item.get("type"), "uuid": item.get("uuid"),
                             "certificate": {k: v for k, v in (item.get("certificate") or {}).items()
                                             if k in ("subject", "issuer", "not_before", "not_after", "serial_number",
                                                      "subject_alt_names")}})
@@ -224,7 +238,20 @@ def fetch(settings: Settings, client: httpx.Client | None = None, with_ca: bool 
     t0 = time.monotonic()
     res = AviResult()
     with AviSession(settings, client) as s:
-        res.vs = [to_row(x) for x in s.collection(settings.avi_endpoint)]
+        certs = s.collection(settings.avi_endpoint)
+        # Que virtual services usam cada certificado. Se não se conseguir ler, a coluna fica vazia (não se sabe)
+        # e nenhum certificado é posto de parte por isso.
+        used_by: dict[str, list[str]] | None = {}
+        try:
+            for v in s.collection("/api/virtualservice", VS_FIELDS,
+                                  keep=lambda x: {"name": x.get("name"), "refs": x.get("ssl_key_and_certificate_refs") or []}):
+                for ref in v["refs"]:
+                    used_by.setdefault(uuid_from_ref(ref), []).append(str(v["name"] or "?"))
+        except AviError as exc:
+            used_by = None
+            res.avisos.append(f"Virtual services não lidos ({exc}): a coluna VirtualServices fica vazia e nenhum "
+                              "certificado é descartado por não estar em uso.")
+        res.vs = [to_row(x, used_by) for x in certs]
         if with_ca and settings.avi_endpoint_ca:
             try:
                 res.ca = [to_row(x) for x in s.collection(settings.avi_endpoint_ca)]

@@ -770,3 +770,27 @@ def test_sources_page_per_source_and_bulk_upload(settings, monkeypatch):
         assert "vista=novos&amp;fonte=CA1" in page or "vista=alterados&amp;fonte=CA1" in page
         assert 'aria-current="true"' in page and "fonte=CA1#fontes" in page
         assert c.get("/cmdb-final?fonte=XPTO", auth=AUTH).status_code == 200            # fonte desconhecida: todas
+
+
+def test_avi_certificate_without_virtual_service_does_not_reach_the_cmdb(settings):
+    """Exportação nova do AVI (coluna VirtualServices): um certificado que nenhum virtual service usa não cria
+    linha nova na CMDB nem altera uma existente; aparece no relatório como descartado, com a razão."""
+    import copy
+    avi_vs = (
+        "Nome,Subject_CommonName,Validity_NotAfter,SerialNumber,Issuer_CommonName,SubjectAlternativeName,VirtualServices\n"
+        "cert-novo,novo-avi.exemplo.pt,2028-04-10 12:00:00,N4,DigiCert Global G2,novo-avi.exemplo.pt,vs-novo-443\n"
+        "cert-parado,parado.exemplo.pt,2028-04-10 12:00:00,N6,DigiCert Global G2,parado.exemplo.pt,[sem Virtual Service]\n"
+        "cert-renovado,renovado.exemplo.pt,2029-01-01 12:00:00,N7,DigiCert Global G2,,[sem Virtual Service]\n"
+    ).encode("utf-8")
+    table = cf.build_cmdb_table(copy.deepcopy(CIS), settings)
+    res = cf.reconcile_final(table, {"CA1": [], "CA2": [], "AVI": cf.read_source("AVI", "avi.csv", avi_vs, TODAY)[0]},
+                             settings, live, TODAY)
+    H = res.table.h
+    new = {res.table.rows[i][H("CommonName")] for i in res.new_rows}
+    assert "novo-avi.exemplo.pt" in new and "parado.exemplo.pt" not in new
+    (i, r), = by_cn(res, "renovado.exemplo.pt")                 # a data de 2029 sem uso não muda a CMDB
+    assert "2029" not in r[H("ValidTo")]
+    errs = {(p["fonte"], p["cn"]): p["erro"] for p in res.problems}
+    assert errs[("AVI", "parado.exemplo.pt")] == errs[("AVI", "renovado.exemplo.pt")] == "Sem virtual service no AVI (não está em uso)"
+    why = next(c for c in res.changes if c.get("cn") == "novo-avi.exemplo.pt")["motivo"]
+    assert "(cert-novo; em uso em vs-novo-443)" in why

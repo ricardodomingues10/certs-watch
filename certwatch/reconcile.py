@@ -38,6 +38,7 @@ COLUMNS = {
     "disposition": ["requestdisposition", "disposition"],
     "req_id": ["reqid", "requestid"],
     "requester": ["requestername"],
+    "uso": ["virtualservices", "virtualservice"],
 }
 
 # ------------------------------------------------------------------ leitura de ficheiros
